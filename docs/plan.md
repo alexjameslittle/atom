@@ -135,15 +135,13 @@ Planned module setup, based on Forge:
 - Rust toolchains registered through the `rules_rust` extension
 - `crate_universe` fed by direct `crate.spec(...)` entries in `MODULE.bazel`
 
-Additional Bazel dependencies will likely be needed during implementation:
+Additional Bazel dependencies (pinned in SPEC.md Section 3):
 
-- `rules_apple`
-- `rules_swift`
-- `apple_support`
-- Android rules compatible with Bazel `8.4.2`
-
-I do not want to pin those yet in the plan because the compatibility matrix should be validated
-against the exact local Xcode and Android SDK setup when we implement.
+- `rules_apple = 3.16.1`
+- `rules_swift = 2.1.1`
+- `apple_support = 1.24.2`
+- `rules_kotlin = 1.9.0`
+- `rules_java = 8.14.0`
 
 ### Rust dependency model
 
@@ -312,15 +310,31 @@ Deliverables:
 
 - Generated iOS host with Swift bootstrap
 - Generated Android host with Kotlin bootstrap
-- Rust staticlib or cdylib integration
+- Rust staticlib and cdylib integration
 - One sample module: `device_info`
 
 Exit criteria:
 
-- Example app launches on iOS simulator and Android emulator
-- Rust app lifecycle callbacks execute on both platforms
+- Generated host trees build on host machine
+- Rust app lifecycle callbacks execute via generated Swift and Kotlin glue
 
-### Phase 3: Core runtime
+### Phase 3: Runnable mobile hosts
+
+Deliverables:
+
+- iOS `BUILD.bazel` uses `ios_application` from `rules_apple` (replaces `swift_binary`)
+- Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
+- `atom run ios` builds, installs, and launches on iOS simulator via `xcrun simctl`
+- `atom run android` builds, installs, and launches on Android emulator via `adb`
+- Ad-hoc code signing for simulator builds
+
+Exit criteria:
+
+- `atom run ios` launches the example app on an iOS simulator
+- `atom run android` launches the example app on an Android emulator
+- No Xcode project or Gradle project is required
+
+### Phase 4: Core runtime
 
 Deliverables:
 
@@ -334,7 +348,7 @@ Exit criteria:
 
 - Example app performs real state changes and module calls on both platforms
 
-### Phase 4: Developer workflow
+### Phase 5: Developer workflow
 
 Deliverables:
 
@@ -347,7 +361,7 @@ Exit criteria:
 
 - A new app can be created, prebuilt, and run with one documented workflow
 
-### Phase 5: Optional renderer
+### Phase 6: Optional renderer
 
 Deliverables:
 

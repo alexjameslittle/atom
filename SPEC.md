@@ -106,6 +106,11 @@ Required pinned Bazel modules for the initial implementation:
 - `platforms = 1.0.0`
 - `rules_rust = 0.68.1`
 - `flatbuffers = 25.9.23`
+- `rules_apple = 3.16.1`
+- `rules_swift = 2.1.1`
+- `apple_support = 1.24.2`
+- `rules_kotlin = 1.9.0`
+- `rules_java = 8.14.0`
 
 Required Rust toolchain defaults:
 
@@ -808,6 +813,111 @@ Failure behavior in watch mode:
 - the failing iteration MUST report an error
 - the watch process MUST continue running
 
+### 9.8 Platform Build Rules
+
+The generated `BUILD.bazel` files MUST produce targets that can be built, installed, and launched on
+iOS simulators and Android emulators via Bazel. No Xcode project or Gradle project is required.
+
+#### 9.8.1 iOS Build Target
+
+The generated iOS `BUILD.bazel` MUST use `rules_apple` and `rules_swift` to produce a deployable
+`.app` bundle:
+
+```starlark
+load("@build_bazel_rules_apple//apple:ios.bzl", "ios_application")
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "generated_swift",
+    srcs = ["AtomAppDelegate.swift", "AtomBindings.swift"],
+    module_name = "atom_{slug}_support",
+    deps = ["//crates/atom-runtime:atom-runtime-swift-bridge"],
+)
+
+ios_application(
+    name = "app",
+    bundle_id = "{bundle_id}",
+    families = ["iphone", "ipad"],
+    infoplists = ["Info.generated.plist"],
+    minimum_os_version = "{deployment_target}",
+    deps = [":generated_swift"],
+)
+```
+
+Rules:
+
+- The `:app` target MUST be an `ios_application`, not a `swift_binary`.
+- The Rust runtime MUST be linked as a static library (`rust_static_library`) through the Swift
+  bridge dependency.
+- `minimum_os_version` MUST match `ios.deployment_target` from the app manifest.
+- `bundle_id` MUST match `ios.bundle_id` from the app manifest.
+- Code signing MUST use ad-hoc signing for simulator builds. No Apple Developer account is required
+  for simulator-only workflows.
+
+#### 9.8.2 Android Build Target
+
+The generated Android `BUILD.bazel` MUST use `rules_kotlin` and native Android rules to produce a
+deployable APK:
+
+```starlark
+load("@rules_kotlin//kotlin:jvm.bzl", "kt_jvm_library")
+
+rust_shared_library(
+    name = "atom_runtime_jni",
+    srcs = ["//templates/atom_runtime_jni:lib.rs"],
+    crate_name = "atom_runtime_jni",
+    deps = ["//crates/atom-ffi", "//crates/atom-runtime", "{entry_crate}"],
+)
+
+kt_jvm_library(
+    name = "generated_kotlin",
+    srcs = ["AtomApplication.kt", "AtomBindings.kt", "MainActivity.kt"],
+)
+
+android_binary(
+    name = "app",
+    manifest = "AndroidManifest.generated.xml",
+    custom_package = "{application_id}",
+    deps = [":generated_kotlin"],
+    data = [":atom_runtime_jni"],
+)
+```
+
+Rules:
+
+- The `:app` target MUST be an `android_binary`, not a `java_binary`.
+- The Rust runtime MUST be linked as a shared library (`rust_shared_library`) loaded via
+  `System.loadLibrary()` in JNI.
+- `custom_package` MUST match `android.application_id` from the app manifest.
+- `minSdkVersion` in the generated manifest MUST match `android.min_sdk`.
+- `targetSdkVersion` in the generated manifest MUST match `android.target_sdk`.
+
+#### 9.8.3 Run and Deploy
+
+`atom run ios` and `atom run android` MUST handle the full build-install-launch cycle, not just
+invoke `bazel run`.
+
+iOS deployment sequence:
+
+1. `bazel build //generated/ios/<slug>:app` to produce the `.app` bundle.
+2. Boot the default iOS simulator if none is running, or use the currently booted simulator.
+3. `xcrun simctl install <device> <path-to-.app>` to install.
+4. `xcrun simctl launch <device> <bundle_id>` to launch.
+
+Android deployment sequence:
+
+1. `bazel build //generated/android/<slug>:app` to produce the APK.
+2. `adb install -r <path-to-.apk>` to install on the running emulator or connected device.
+3. `adb shell am start -n <application_id>/.MainActivity` to launch.
+
+Rules:
+
+- Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`xcrun`,
+  `adb`) are not available.
+- Both commands MUST stream build output to stderr.
+- `atom run ios --device <udid>` and `atom run android --device <serial>` MAY be supported to target
+  a specific simulator or device.
+
 ## 10. CLI Specification
 
 ### 10.1 Commands
@@ -851,11 +961,11 @@ consumes Atom via `bzlmod`.
 
 `atom run ios`:
 
-- MUST invoke `bazel run //generated/ios/<slug>:app`
+- MUST follow the iOS deployment sequence defined in Section 9.8.3
 
 `atom run android`:
 
-- MUST invoke `bazel run //generated/android/<slug>:app`
+- MUST follow the Android deployment sequence defined in Section 9.8.3
 
 `atom test`:
 
@@ -916,7 +1026,24 @@ Conformance example:
 - Input: canonical `hello-atom` app
 - Expected output: file tree from Section 9.5 plus successful `atom run ios` and `atom run android`
 
-### 11.4 Phase 3: Core Runtime
+### 11.4 Phase 3: Runnable Mobile Hosts
+
+Required behavior:
+
+- generated iOS `BUILD.bazel` uses `ios_application` from `rules_apple` per Section 9.8.1
+- generated Android `BUILD.bazel` uses `android_binary` per Section 9.8.2
+- `atom run ios` builds, installs, and launches on an iOS simulator per Section 9.8.3
+- `atom run android` builds, installs, and launches on an Android emulator per Section 9.8.3
+- no Xcode project or Gradle project is required
+
+Conformance example:
+
+- Input: canonical `hello-atom` app
+- Expected output: `atom run ios` launches the app on the booted iOS simulator with Rust lifecycle
+  callbacks executing. `atom run android` launches the app on an Android emulator with Rust
+  lifecycle callbacks executing via JNI.
+
+### 11.5 Phase 4: Core Runtime
 
 Required behavior:
 
@@ -930,7 +1057,7 @@ Conformance example:
 - Expected state sequence:
   `Created -> Initializing -> Running -> Backgrounded -> Running -> Terminating -> Terminated`
 
-### 11.5 Phase 4: Developer Workflow
+### 11.6 Phase 5: Developer Workflow
 
 Required behavior:
 
@@ -943,16 +1070,78 @@ Conformance example:
 - Input: `atom test`
 - Expected output: wrapper around `bazel test //...` with matching exit code
 
-### 11.6 Phase 5: Optional Renderer
+### 11.7 Phase 6: Optional Renderer
 
 Renderer behavior is intentionally outside the minimum Atom conformance profile and SHOULD be
 specified in a separate renderer spec if and when that work begins.
 
 ## 12. Open Questions
 
-- Should Xcode projects be emitted directly, or derived from Bazel later?
-- Should the runtime artifact be `staticlib`, `cdylib`, or both?
-- Should Android-on-Linux be first-class in the first host-capable milestone or follow macOS-first
-  bring-up?
 - Should app-level override sections be added to resolve plist and manifest merge conflicts?
 - Should renderer work live in this spec or a dedicated additive spec?
+
+## 13. Resolved Questions
+
+- **Should Xcode projects be emitted directly, or derived from Bazel later?** Neither for the
+  minimum conformance profile. The generated `ios_application` target is built and deployed via
+  Bazel and `xcrun simctl`. Xcode project generation via `rules_xcodeproj` MAY be added as a
+  convenience in a later phase.
+- **Should the runtime artifact be `staticlib`, `cdylib`, or both?** Both. iOS uses `staticlib`
+  linked into the Swift binary. Android uses `cdylib` (shared library) loaded via JNI
+  `System.loadLibrary()`. See Section 9.8.
+- **Should Android-on-Linux be first-class in the first host-capable milestone or follow macOS-first
+  bring-up?** CI MUST test on both Linux and macOS. Android builds (APK generation) MUST work on
+  Linux. iOS builds require macOS and MUST only run in macOS CI. See Section 14.
+
+## 14. CI Specification
+
+### 14.1 Job Structure
+
+CI MUST run three job categories:
+
+- **lint**: clippy, format check, shellcheck, actionlint. Runs on Linux.
+- **test (linux)**: `bazel test //...` and prebuild dry-run. Runs on Linux.
+- **test (macos)**: `bazel test //...` and prebuild dry-run. Runs on macOS.
+
+All three MUST pass before merge to `main`.
+
+### 14.2 Path-Based Filtering
+
+CI jobs MUST only run when changes affect files relevant to that job. This avoids wasting compute on
+documentation-only or CI-config-only changes.
+
+Jobs MUST run when any file outside the following documentation-only set is changed:
+
+- `docs/**`
+- `*.md` (root-level markdown)
+- `LICENSE`
+
+The **lint** job MUST additionally run when any of these are changed:
+
+- `.github/workflows/**`
+- `scripts/**`
+- `.githooks/**`
+
+The **test** jobs MUST additionally run when any of these are changed:
+
+- `crates/**`
+- `bzl/**`
+- `templates/**`
+- `examples/**`
+- `MODULE.bazel`
+- `.bazelversion`
+- `mise.toml`
+- `BUILD.bazel`
+
+When a PR contains only documentation changes, CI SHOULD be skipped via `paths-ignore` on the
+workflow trigger.
+
+### 14.3 Platform-Specific Tests
+
+When iOS build targets are introduced (Phase 3), iOS-specific Bazel tests MUST only run in the macOS
+CI job. Android build targets MUST be testable on both Linux and macOS CI.
+
+### 14.4 Remote Caching
+
+All CI jobs SHOULD share a remote build cache (BuildBuddy) to avoid redundant compilation across
+jobs and platforms.
