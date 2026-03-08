@@ -8,8 +8,10 @@ if ! command -v mise >/dev/null 2>&1; then
   exit 69
 fi
 
-# Trust before cd-ing into the repo so mise's shell hook doesn't error
+# Trust this worktree and register the parent directory so future
+# worktrees are auto-trusted by mise's shell hook.
 mise trust -y "$repo_root/mise.toml" 2>/dev/null || true
+mise settings add trusted_config_paths "$repo_root" 2>/dev/null || true
 cd "$repo_root"
 
 mise install
