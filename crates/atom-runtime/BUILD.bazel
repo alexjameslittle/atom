@@ -1,4 +1,5 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@build_bazel_rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hint")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_static_library", "rust_test")
 
 rust_library(
     name = "atom-runtime",
@@ -9,6 +10,34 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//crates/atom-ffi",
+    ],
+)
+
+rust_static_library(
+    name = "atom-runtime-static",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_runtime",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/atom-ffi",
+    ],
+)
+
+swift_interop_hint(
+    name = "atom_runtime_swift_hint",
+    module_name = "AtomRuntimeBridge",
+)
+
+cc_library(
+    name = "atom-runtime-swift-bridge",
+    hdrs = ["include/atom_runtime.h"],
+    aspect_hints = [":atom_runtime_swift_hint"],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":atom-runtime-static",
     ],
 )
 
