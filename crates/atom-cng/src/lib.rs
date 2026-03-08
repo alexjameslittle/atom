@@ -1,9 +1,9 @@
 mod android;
 mod emit;
 mod ios;
+mod templates;
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, IosConfig, NormalizedManifest};
@@ -313,24 +313,24 @@ fn deep_merge_value(target: &mut Value, source: &Value, path: &str) -> AtomResul
     }
 }
 
-fn render_aggregate_schema(plan: &GenerationPlan) -> String {
-    let mut contents = String::new();
-    for schema_file in &plan.schema.modules {
-        let relative = schema_file
-            .strip_prefix(plan.build.generated_root.join("schema"))
-            .expect("schema file should live under generated schema root");
-        let _ = writeln!(contents, "include \"{}\";", relative.as_str());
-    }
-    if !contents.is_empty() {
-        contents.push('\n');
-    }
-    contents.push_str("namespace atom;\n\n");
-    contents.push_str("table AtomAppConfig {\n");
-    contents.push_str("  name: string;\n");
-    contents.push_str("  slug: string;\n");
-    contents.push_str("  entry_target: string;\n");
-    contents.push_str("}\n");
-    contents
+fn render_aggregate_schema(plan: &GenerationPlan) -> AtomResult<String> {
+    let schema_includes: Vec<&str> = plan
+        .schema
+        .modules
+        .iter()
+        .map(|schema_file| {
+            schema_file
+                .strip_prefix(plan.build.generated_root.join("schema"))
+                .expect("schema file should live under generated schema root")
+                .as_str()
+        })
+        .collect();
+    templates::render(
+        "schema/atom.fbs",
+        minijinja::context! {
+            schema_includes,
+        },
+    )
 }
 
 #[cfg(test)]

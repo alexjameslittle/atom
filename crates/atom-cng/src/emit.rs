@@ -29,7 +29,7 @@ use crate::ios::{
 pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<Vec<Utf8PathBuf>> {
     write_file(
         &repo_root.join(&plan.schema.aggregate),
-        &crate::render_aggregate_schema(plan),
+        &crate::render_aggregate_schema(plan)?,
     )?;
 
     for schema_file in &plan.schema_files {
@@ -45,26 +45,19 @@ pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult
     }
 
     if let Some(ios) = &plan.ios {
+        let ios_config = plan
+            .ios_config
+            .as_ref()
+            .expect("ios config should exist when ios output exists");
         write_file(
             &repo_root.join(&ios.generated_root).join("BUILD.bazel"),
-            &render_ios_build_file(
-                &plan.app,
-                &plan.modules,
-                plan.ios_config
-                    .as_ref()
-                    .expect("ios config should exist when ios output exists"),
-            )?,
+            &render_ios_build_file(&plan.app, &plan.modules, ios_config)?,
         )?;
         write_file(
             &repo_root
                 .join(&ios.generated_root)
                 .join("Info.generated.plist"),
-            &render_ios_plist(
-                &plan.app,
-                plan.ios_config
-                    .as_ref()
-                    .expect("ios config should exist when ios output exists"),
-            ),
+            &render_ios_plist(&plan.app, ios_config)?,
         )?;
         write_file(
             &repo_root
@@ -82,13 +75,13 @@ pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult
             &repo_root
                 .join(&ios.generated_root)
                 .join("SceneDelegate.swift"),
-            &render_swift_scene_delegate(&plan.app),
+            &render_swift_scene_delegate(&plan.app)?,
         )?;
         write_file(
             &repo_root
                 .join(&ios.generated_root)
                 .join("AtomBindings.swift"),
-            &render_swift_bindings(&plan.modules),
+            &render_swift_bindings(&plan.modules)?,
         )?;
         write_file(
             &repo_root.join(&ios.generated_root).join("main.swift"),
@@ -97,26 +90,19 @@ pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult
     }
 
     if let Some(android) = &plan.android {
+        let android_config = plan
+            .android_config
+            .as_ref()
+            .expect("android config should exist when android output exists");
         write_file(
             &repo_root.join(&android.generated_root).join("BUILD.bazel"),
-            &render_android_build_file(
-                &plan.app,
-                &plan.modules,
-                plan.android_config
-                    .as_ref()
-                    .expect("android config should exist when android output exists"),
-            )?,
+            &render_android_build_file(&plan.app, &plan.modules, android_config)?,
         )?;
         write_file(
             &repo_root
                 .join(&android.generated_root)
                 .join("AndroidManifest.generated.xml"),
-            &render_android_manifest_xml(
-                &plan.app,
-                plan.android_config
-                    .as_ref()
-                    .expect("android config should exist when android output exists"),
-            ),
+            &render_android_manifest_xml(&plan.app, android_config)?,
         )?;
         let package_dir = android.files[2]
             .parent()
@@ -124,31 +110,15 @@ pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult
             .to_owned();
         write_file(
             &repo_root.join(&package_dir).join("AtomApplication.kt"),
-            &render_kotlin_application(
-                &plan.app,
-                plan.android_config
-                    .as_ref()
-                    .expect("android config should exist when android output exists"),
-            ),
+            &render_kotlin_application(&plan.app, android_config)?,
         )?;
         write_file(
             &repo_root.join(&package_dir).join("AtomBindings.kt"),
-            &render_kotlin_bindings(
-                &plan.modules,
-                plan.android_config
-                    .as_ref()
-                    .expect("android config should exist when android output exists"),
-            ),
+            &render_kotlin_bindings(&plan.modules, android_config)?,
         )?;
         write_file(
             &repo_root.join(&package_dir).join("MainActivity.kt"),
-            &render_kotlin_main_activity(
-                &plan.app,
-                &android.generated_root,
-                plan.android_config
-                    .as_ref()
-                    .expect("android config should exist when android output exists"),
-            ),
+            &render_kotlin_main_activity(&plan.app, &android.generated_root, android_config)?,
         )?;
     }
 

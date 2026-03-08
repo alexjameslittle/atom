@@ -1,0 +1,49 @@
+package {{ package_name }}
+
+import java.nio.file.Files
+import java.nio.file.Paths
+
+class MainActivity {
+    fun run() {
+        val application = AtomApplication()
+        val handle = AtomRuntimeBridge.initRuntime()
+        check(handle != 0L) { "atom_app_init failed" }
+        try {
+            println("Booting {{ name }} ({{ slug }}) on Android")
+            println("Modules: ${AtomBindings.moduleSummary}")
+            check(AtomRuntimeBridge.handleLifecycle(handle, 2) == 0) { "background transition failed" }
+            check(AtomRuntimeBridge.handleLifecycle(handle, 3) == 0) { "suspend transition failed" }
+            check(AtomRuntimeBridge.handleLifecycle(handle, 4) == 0) { "resume transition failed" }
+            check(AtomRuntimeBridge.handleLifecycle(handle, 5) == 0) { "terminate transition failed" }
+            println("Started ${application.name} with slug ${application.slug}")
+        } finally {
+            AtomRuntimeBridge.shutdown(handle)
+        }
+    }
+}
+
+private object AtomRuntimeBridge {
+    init {
+        System.load(resolveLibraryPath())
+    }
+
+    external fun initRuntime(): Long
+    external fun handleLifecycle(handle: Long, event: Int): Int
+    external fun shutdown(handle: Long)
+
+    private fun resolveLibraryPath(): String {
+        val runfilesDir = System.getenv("JAVA_RUNFILES")
+            ?: System.getenv("RUNFILES_DIR")
+            ?: error("Bazel runfiles directory is not available")
+        val libraryName = System.mapLibraryName("atom_runtime_jni")
+        val candidates = listOf("_main", "atom").map { workspace ->
+            Paths.get(runfilesDir, workspace, "{{ generated_root }}", libraryName)
+        }
+        return candidates.firstOrNull(Files::exists)?.toString()
+            ?: error("Unable to locate atom_runtime_jni in Bazel runfiles")
+    }
+}
+
+fun main() {
+    MainActivity().run()
+}

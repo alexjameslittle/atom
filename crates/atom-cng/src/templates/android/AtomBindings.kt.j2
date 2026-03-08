@@ -1,0 +1,12 @@
+package {{ package_name }}
+
+object AtomBindings {
+    val modules = listOf(
+{% for module_id in module_ids %}
+        "{{ module_id }}",
+{% endfor %}
+    )
+
+    val moduleSummary: String
+        get() = modules.joinToString(separator = ", ")
+}
