@@ -42,14 +42,18 @@ struct PrebuildArgs {
 struct RunArgs {
     #[command(subcommand)]
     platform: RunPlatform,
+}
+
+#[derive(Debug, Args)]
+struct TargetArgs {
     #[arg(long)]
     target: String,
 }
 
 #[derive(Debug, Subcommand)]
 enum RunPlatform {
-    Ios,
-    Android,
+    Ios(TargetArgs),
+    Android(TargetArgs),
 }
 
 /// # Errors
@@ -126,10 +130,15 @@ fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOu
 
 fn execute_run(cwd: &Utf8Path, args: &RunArgs) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let manifest = load_manifest(&repo_root, &args.target)?;
-    let (platform, enabled) = match args.platform {
-        RunPlatform::Ios => ("ios", manifest.ios.enabled),
-        RunPlatform::Android => ("android", manifest.android.enabled),
+    let (platform, target) = match &args.platform {
+        RunPlatform::Ios(target) => ("ios", target),
+        RunPlatform::Android(target) => ("android", target),
+    };
+    let manifest = load_manifest(&repo_root, &target.target)?;
+    let enabled = match platform {
+        "ios" => manifest.ios.enabled,
+        "android" => manifest.android.enabled,
+        _ => unreachable!("run platform should be validated by clap"),
     };
     if !enabled {
         return Err(AtomError::with_path(
@@ -138,6 +147,15 @@ fn execute_run(cwd: &Utf8Path, args: &RunArgs) -> AtomResult<CommandOutput> {
             platform,
         ));
     }
+
+    let _ = execute_prebuild(
+        &repo_root,
+        &PrebuildArgs {
+            target: target.target.clone(),
+            dry_run: false,
+        },
+    )?;
+
     let target = format!(
         "//{}/{}/{}:app",
         manifest.build.generated_root.as_str(),
@@ -267,5 +285,26 @@ mod tests {
             .expect("workspace root");
 
         assert_eq!(repo_root, root);
+    }
+
+    #[test]
+    fn run_command_accepts_target_after_platform_subcommand() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        fs::write(root.join("MODULE.bazel"), "module(name = \"atom\")\n").expect("workspace");
+
+        let error = run_from_args(
+            [
+                "atom",
+                "run",
+                "ios",
+                "--target",
+                "//examples/hello-world/apps/hello_atom:hello_atom",
+            ],
+            &root,
+        )
+        .expect_err("missing manifest should fail after clap accepts the command");
+
+        assert_ne!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
     }
 }

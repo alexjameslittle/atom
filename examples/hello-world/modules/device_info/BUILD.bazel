@@ -2,6 +2,8 @@ load("@atom//bzl/atom:defs.bzl", "atom_module")
 
 atom_module(
     name = "device_info",
+    android_srcs = ["android/DeviceInfoModule.kt"],
+    ios_srcs = ["ios/DeviceInfoModule.swift"],
     methods = [
         {
             "name": "get",

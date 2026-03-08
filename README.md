@@ -8,7 +8,7 @@ repository conventions and the documentation map, start with
 [AGENTS.md](/Users/alexlittle/conductor/workspaces/atom/tehran/AGENTS.md) and
 [docs/README.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/README.md).
 
-This branch now bootstraps the Phase 0 and Phase 1 slice from the spec:
+This branch now bootstraps the Phase 0, Phase 1, and Phase 2 slice from the spec:
 
 - Bazel `bzlmod` toolchain wiring via `.bazelversion`, `MODULE.bazel`, and `mise.toml`
 - Bazel-native Rust dependency pinning through `crate_universe` `crate.spec(...)` entries in
@@ -21,6 +21,8 @@ This branch now bootstraps the Phase 0 and Phase 1 slice from the spec:
 - a canonical example consumer in
   [`examples/hello-world`](/Users/alexlittle/conductor/workspaces/atom/tehran/examples/hello-world)
 - local and CI verification harnesses driven by `mise`
+- generated Swift and Kotlin host bootstraps that start the Rust runtime through `atom run ios` and
+  `atom run android`
 
 Current decisions:
 
@@ -35,7 +37,7 @@ The first implementation slice, once planning is approved, is:
 
 1. Toolchain bootstrap with `mise.toml`, `.bazelversion`, `MODULE.bazel`, and `bzl/atom`.
 2. A Rust manifest and CNG graph with a dry-run `prebuild`.
-3. Thin generated iOS and Android host glue around a Rust app crate.
+3. Thin generated iOS and Android host glue that can boot the Rust runtime.
 
 ## Bootstrap
 
