@@ -1,5 +1,6 @@
 mod deploy;
 pub mod devices;
+pub mod progress;
 mod tools;
 
 pub use crate::deploy::{deploy_android, deploy_ios, generated_target};

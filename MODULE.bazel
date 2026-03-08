@@ -46,8 +46,16 @@ crate.spec(
     version = "=4.5.60",
 )
 crate.spec(
+    package = "console",
+    version = "=0.15.11",
+)
+crate.spec(
     package = "dialoguer",
     version = "=0.11.0",
+)
+crate.spec(
+    package = "indicatif",
+    version = "=0.17.11",
 )
 crate.spec(
     package = "flatbuffers",

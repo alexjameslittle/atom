@@ -37,10 +37,10 @@ pub struct ProcessRunner;
 
 impl ToolRunner for ProcessRunner {
     fn run(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()> {
-        let status = Command::new(tool)
+        let output = Command::new(tool)
             .args(args)
             .current_dir(repo_root)
-            .status()
+            .output()
             .map_err(|error| {
                 AtomError::new(
                     AtomErrorCode::ExternalToolFailed,
@@ -48,13 +48,24 @@ impl ToolRunner for ProcessRunner {
                 )
             })?;
 
-        if status.success() {
+        if output.status.success() {
             Ok(())
         } else {
-            Err(AtomError::new(
-                AtomErrorCode::ExternalToolFailed,
-                format!("{tool} {} exited with status {status}", args.join(" ")),
-            ))
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = if stderr.trim().is_empty() {
+                format!(
+                    "{tool} {} exited with status {}",
+                    args.join(" "),
+                    output.status
+                )
+            } else {
+                format!(
+                    "{tool} {} exited with status {}:\n{stderr}",
+                    args.join(" "),
+                    output.status
+                )
+            };
+            Err(AtomError::new(AtomErrorCode::ExternalToolFailed, detail))
         }
     }
 
@@ -96,12 +107,12 @@ impl ToolRunner for ProcessRunner {
         args: &[String],
     ) -> AtomResult<String> {
         let path = temp_json_output_path(tool);
-        let status = Command::new(tool)
+        let output = Command::new(tool)
             .args(args)
             .arg("--json-output")
             .arg(&path)
             .current_dir(repo_root)
-            .status()
+            .output()
             .map_err(|error| {
                 AtomError::new(
                     AtomErrorCode::ExternalToolFailed,
@@ -109,12 +120,23 @@ impl ToolRunner for ProcessRunner {
                 )
             })?;
 
-        if !status.success() {
+        if !output.status.success() {
             let _ = fs::remove_file(&path);
-            return Err(AtomError::new(
-                AtomErrorCode::ExternalToolFailed,
-                format!("{tool} {} exited with status {status}", args.join(" ")),
-            ));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = if stderr.trim().is_empty() {
+                format!(
+                    "{tool} {} exited with status {}",
+                    args.join(" "),
+                    output.status
+                )
+            } else {
+                format!(
+                    "{tool} {} exited with status {}:\n{stderr}",
+                    args.join(" "),
+                    output.status
+                )
+            };
+            return Err(AtomError::new(AtomErrorCode::ExternalToolFailed, detail));
         }
 
         let contents = fs::read_to_string(&path).map_err(|error| {

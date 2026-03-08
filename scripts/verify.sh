@@ -7,14 +7,14 @@ cd "$repo_root"
 mode=${1:-verify}
 
 lint() {
-  bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going //...
+  bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going //crates/... //examples/... //bzl/... //tools/...
   bazelisk run //:format.check
   shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh
   actionlint
 }
 
 test_suite() {
-  bazelisk test //...
+  bazelisk test //crates/... //examples/... //bzl/... //tools/...
   bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
 }
 

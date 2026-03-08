@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use atom_cng::{build_generation_plan, emit_host_tree, render_prebuild_plan};
 pub use atom_deploy::CommandOutput;
+use atom_deploy::progress::run_step;
 use atom_deploy::{ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::load_manifest;
@@ -149,9 +150,16 @@ fn execute_run(
         ));
     }
 
-    let modules = resolve_modules(&repo_root, &manifest.modules)?;
-    let plan = build_generation_plan(&manifest, &modules)?;
-    let _ = emit_host_tree(&repo_root, &plan)?;
+    run_step(
+        "Generating build files...",
+        "Build files generated",
+        "Code generation failed",
+        || {
+            let modules = resolve_modules(&repo_root, &manifest.modules)?;
+            let plan = build_generation_plan(&manifest, &modules)?;
+            emit_host_tree(&repo_root, &plan)
+        },
+    )?;
 
     match platform {
         "ios" => deploy_ios(&repo_root, &manifest, target.device.as_deref(), runner)?,
@@ -168,7 +176,9 @@ fn execute_run(
 
 fn execute_test(cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    run_bazel(runner, &repo_root, &["test", "//..."])?;
+    run_step("Running tests...", "Tests passed", "Tests failed", || {
+        run_bazel(runner, &repo_root, &["test", "//..."])
+    })?;
     Ok(CommandOutput {
         stdout: Vec::new(),
         stderr: Vec::new(),

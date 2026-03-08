@@ -11,7 +11,9 @@ rust_library(
         "//crates/atom-ffi",
         "//crates/atom-manifest",
         "@crates//:camino",
+        "@crates//:console",
         "@crates//:dialoguer",
+        "@crates//:indicatif",
         "@crates//:serde_json",
     ],
 )
