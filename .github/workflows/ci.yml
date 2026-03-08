@@ -20,7 +20,7 @@ env:
 jobs:
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -57,9 +57,9 @@ jobs:
       matrix:
         include:
           - os: linux
-            runner: ubuntu-latest
+            runner: namespace-profile-linux
           - os: macos
-            runner: macos-latest
+            runner: namespace-profile-macos
     steps:
       - name: Checkout
         uses: actions/checkout@v5
