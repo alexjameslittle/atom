@@ -75,6 +75,7 @@ crate.from_specs(
         "x86_64-apple-ios",
         "aarch64-linux-android",
         "x86_64-linux-android",
+        "x86_64-unknown-linux-gnu",
     ],
 )
 use_repo(crate, "crates")
