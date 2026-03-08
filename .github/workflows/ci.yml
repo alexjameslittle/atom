@@ -25,26 +25,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Cache mise installs
-        uses: actions/cache@v4
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
-          path: |
-            ~/.cache/mise
-            ~/.local/share/mise
-          key: ${{ runner.os }}-mise-${{ hashFiles('mise.toml', '.bazelversion') }}
-
-      - name: Install mise
-        run: |
-          curl https://mise.run | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Bootstrap toolchain
-        run: |
-          mise trust -y
-          mise install
-
-      - name: Setup BuildBuddy
-        run: scripts/setup-buildbuddy.sh "$BUILDBUDDY_API_KEY"
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Lint
         run: mise exec -- ./scripts/verify.sh lint
@@ -64,26 +48,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Cache mise installs
-        uses: actions/cache@v4
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
-          path: |
-            ~/.cache/mise
-            ~/.local/share/mise
-          key: ${{ runner.os }}-mise-${{ hashFiles('mise.toml', '.bazelversion') }}
-
-      - name: Install mise
-        run: |
-          curl https://mise.run | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Bootstrap toolchain
-        run: |
-          mise trust -y
-          mise install
-
-      - name: Setup BuildBuddy
-        run: scripts/setup-buildbuddy.sh "$BUILDBUDDY_API_KEY"
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Test
         run: mise exec -- ./scripts/verify.sh test
@@ -95,29 +63,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Cache mise installs
-        uses: actions/cache@v4
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
-          path: |
-            ~/.cache/mise
-            ~/.local/share/mise
-          key: ${{ runner.os }}-mise-build-${{ hashFiles('mise.toml', '.bazelversion') }}
-
-      - name: Install mise
-        run: |
-          curl https://mise.run | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Bootstrap toolchain
-        run: |
-          mise trust -y
-          mise install
-
-      - name: Set up Android SDK
-        run: mise exec -- ./scripts/setup-android-sdk.sh
-
-      - name: Setup BuildBuddy
-        run: scripts/setup-buildbuddy.sh "$BUILDBUDDY_API_KEY"
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Build apps
         run: mise exec -- ./scripts/verify.sh build
