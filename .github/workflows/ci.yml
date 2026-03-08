@@ -29,16 +29,6 @@ jobs:
             ~/.local/share/mise
           key: ${{ runner.os }}-mise-${{ hashFiles('mise.toml', '.bazelversion') }}
 
-      - name: Cache Bazel state
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/bazel
-            ~/.cache/bazelisk
-          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
       - name: Install mise
         run: |
           curl https://mise.run | sh
