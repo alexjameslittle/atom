@@ -1,0 +1,62 @@
+import SwiftUI
+import UIKit
+
+final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        guard let windowScene = scene as? UIWindowScene else {
+            return
+        }
+        let window = UIWindow(windowScene: windowScene)
+        window.frame = windowScene.coordinateSpace.bounds
+        window.backgroundColor = .systemBackground
+        window.rootViewController = UIHostingController(rootView: AtomRootView())
+        self.window = window
+        window.makeKeyAndVisible()
+        runtimeDelegate?.initializeRuntime()
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        runtimeDelegate?.sendLifecycle(2, action: "background")
+    }
+
+    func sceneWillEnterForeground(_ scene: UIScene) {
+        runtimeDelegate?.sendLifecycle(1, action: "foreground")
+    }
+
+    func sceneDidDisconnect(_ scene: UIScene) {
+        runtimeDelegate?.sendLifecycle(5, action: "terminate")
+        runtimeDelegate?.shutdownRuntime()
+    }
+
+    private var runtimeDelegate: AtomAppDelegate? {
+        UIApplication.shared.delegate as? AtomAppDelegate
+    }
+}
+
+private struct AtomRootView: View {
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+            VStack(spacing: 12) {
+                Text("{{ name }}")
+                    .font(.title2.weight(.semibold))
+                Text("{{ slug }}")
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.secondary)
+                Text(AtomBindings.moduleSummary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}

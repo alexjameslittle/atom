@@ -1,29 +1,27 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
-    name = "atom-cng",
+    name = "atom-deploy",
     srcs = glob(["src/**/*.rs"]),
-    compile_data = glob(["src/templates/**"]),
-    crate_name = "atom_cng",
+    crate_name = "atom_deploy",
     crate_root = "src/lib.rs",
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
         "//crates/atom-ffi",
         "//crates/atom-manifest",
-        "//crates/atom-modules",
         "@crates//:camino",
-        "@crates//:flatbuffers",
-        "@crates//:minijinja",
+        "@crates//:console",
+        "@crates//:dialoguer",
+        "@crates//:indicatif",
         "@crates//:serde_json",
     ],
 )
 
 rust_test(
-    name = "atom-cng-test",
-    crate = ":atom-cng",
+    name = "atom-deploy-test",
+    crate = ":atom-deploy",
     deps = [
-        "@crates//:pretty_assertions",
         "@crates//:tempfile",
     ],
 )

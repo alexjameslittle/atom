@@ -1,0 +1,13 @@
+import Foundation
+
+public enum AtomBindings {
+    public static let modules = [
+{% for module_id in module_ids %}
+        "{{ module_id }}",
+{% endfor %}
+    ]
+
+    public static var moduleSummary: String {
+        modules.joined(separator: ", ")
+    }
+}

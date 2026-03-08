@@ -1,0 +1,39 @@
+name: Setup toolchain
+description: Install mise, bootstrap tools, set up Android SDK, and configure BuildBuddy
+
+inputs:
+  buildbuddy-api-key:
+    description: BuildBuddy API key for remote cache
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Cache mise installs
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/mise
+          ~/.local/share/mise
+        key: ${{ runner.os }}-mise-${{ hashFiles('mise.toml', '.bazelversion') }}
+
+    - name: Install mise
+      shell: bash
+      run: |
+        curl https://mise.run | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Bootstrap toolchain
+      shell: bash
+      run: |
+        mise trust -y
+        mise install
+
+    - name: Set up Android SDK
+      shell: bash
+      run: mise exec -- ./scripts/setup-android-sdk.sh
+
+    - name: Setup BuildBuddy
+      if: inputs.buildbuddy-api-key != ''
+      shell: bash
+      run: scripts/setup-buildbuddy.sh "${{ inputs.buildbuddy-api-key }}"

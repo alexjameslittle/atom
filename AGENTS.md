@@ -26,7 +26,7 @@ Local and CI verification must stay aligned. If you add a new required check, ad
 
 The intended dependency flow is:
 
-`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-cng` -> `atom-cli`
+`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-cng` -> `atom-deploy` -> `atom-cli`
 
 `atom-runtime` stays separate from CLI/CNG orchestration code.
 
@@ -36,7 +36,8 @@ Crate responsibilities:
 - `atom-manifest`: app metadata loading and validation from Bazel-generated JSON.
 - `atom-modules`: module metadata loading, validation, and dependency ordering.
 - `atom-cng`: deterministic generation planning and emitted host tree writes.
-- `atom-cli`: thin Bazel-facing command wrapper.
+- `atom-deploy`: device discovery, platform deployment, and external tool orchestration.
+- `atom-cli`: thin CLI command dispatch and workspace resolution.
 - `atom-runtime`: runtime primitives and host-facing execution logic.
 
 Do not add reverse dependencies across these layers without documenting the change in
