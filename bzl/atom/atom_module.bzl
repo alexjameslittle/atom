@@ -30,6 +30,7 @@ def _repo_relative_paths(paths):
 
 def emit_module_metadata(
         name,
+        kind,
         module_id,
         schema_files,
         depends_on,
@@ -44,7 +45,7 @@ def emit_module_metadata(
         android_srcs,
         visibility):
     metadata = {
-        "kind": "atom_module",
+        "kind": kind,
         "target_label": _target_label(name),
         "id": module_id,
         "depends_on": [_absolute_label(label) for label in depends_on],
@@ -126,6 +127,7 @@ def atom_module(
 
     emit_module_metadata(
         name = name,
+        kind = "atom_module",
         module_id = module_id if module_id != None else name,
         schema_files = schema_files,
         depends_on = depends_on,
