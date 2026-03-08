@@ -33,9 +33,14 @@ The target developer experience is:
 3. Add `atom_module(...)` and `atom_native_module(...)` targets to the app.
 4. Run `atom prebuild` to generate iOS and Android host code.
 5. Build and run with Bazel-driven commands.
+6. Capture evidence and automate the running app through framework-owned CLI tools.
 
 The app author should not need to write Swift, Kotlin, Gradle, or Xcode project files directly.
 Native code will still exist, but it should be generated, minimal, and framework-owned.
+
+The same principle should apply to debugging and proof. Screenshots, screen recordings, destination
+selection, and basic UI automation should be exposed through Atom itself instead of relying on a
+pile of ad hoc local scripts.
 
 ## Non-Goals For V1
 
@@ -165,6 +170,44 @@ Local validation in this environment shows `mise` has registry entries for:
 - `rust`
 
 That means the toolchain plan is viable without inventing custom plugin wiring.
+
+## Device Automation Strategy
+
+The framework needs two distinct but related debugging capabilities once runnable hosts exist:
+
+1. Evidence capture so agents and humans can prove what actually rendered.
+2. Live interaction so an agent can tap, type, scroll, and validate flows without hand-driving the
+   simulator or device.
+
+The right abstraction is not "screen scraping only." It should be a framework-owned automation layer
+with semantic UI access where the platform allows it.
+
+Planned command surface:
+
+- `atom devices <ios|android> [--json]`
+- `atom evidence screenshot <ios|android> --device <id> --output <path>`
+- `atom evidence video <ios|android> --device <id> --output <path>`
+- `atom inspect ui <ios|android> --device <id> [--output <path>]`
+- `atom interact <ios|android> ...` for tap, long-press, swipe, drag, and text entry
+
+Backend direction:
+
+- iOS should use a framework-owned XCUITest-based backend, or a framework-owned
+  WebDriverAgent-compatible wrapper around XCTest. This is the only credible path to semantic
+  interaction on iOS. `simctl` is good for lifecycle, screenshots, and recordings, but not as the
+  primary UI interaction backend.
+- Android should use a framework-owned UI Automator-based backend for semantic hierarchy and
+  gestures. `adb shell input` remains useful as a fallback, not as the primary contract.
+- Both platforms should still expose raw screenshots and video capture through native CLIs because
+  they are cheap, reliable, and excellent proof artifacts.
+
+Output expectations:
+
+- Every evidence command writes caller-selected artifacts that can be attached to reviews or agent
+  transcripts.
+- UI inspection should emit machine-readable data with bounds, labels or text, and stable target
+  identifiers when the backend can provide them.
+- The commands should be usable against simulators, emulators, and attached physical devices.
 
 ## Planned Repository Layout
 
@@ -348,7 +391,7 @@ Exit criteria:
 
 - Example app performs real state changes and module calls on both platforms
 
-### Phase 5: Developer workflow
+### Phase 5: Developer workflow and agent automation
 
 Deliverables:
 
@@ -356,10 +399,20 @@ Deliverables:
 - `atom run android`
 - `atom test`
 - Config plugin story for native customization
+- `atom devices ios|android --json`
+- `atom evidence screenshot`
+- `atom evidence video`
+- `atom inspect ui`
+- `atom interact` for tap, long-press, swipe, drag, and text entry
+- Framework-owned iOS automation backend based on XCTest semantics
+- Framework-owned Android automation backend based on UI Automator semantics
 
 Exit criteria:
 
 - A new app can be created, prebuilt, and run with one documented workflow
+- An agent can launch the example app, capture a screenshot, record a short video, inspect the UI,
+  and drive at least one interaction end-to-end on simulator or emulator without manual clicking
+- The same workflow supports attached physical devices when platform tooling allows it
 
 ### Phase 6: Optional renderer
 
@@ -381,6 +434,8 @@ Exit criteria:
 - Do we support Android on Linux from the start, or only macOS first while iOS is being brought up?
 - How much of app configuration lives in `atom_app(...)` versus Rust APIs?
 - What is the minimum ABI surface needed to keep the bridge stable as modules evolve?
+- Do we expose the iOS automation backend as a direct XCTest runner, or as a WDA-compatible service
+  layered over the same primitives?
 
 ## Recommended First Implementation Slice
 
