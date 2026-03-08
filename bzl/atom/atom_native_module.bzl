@@ -25,6 +25,7 @@ def atom_native_module(
 
     emit_module_metadata(
         name = name,
+        kind = "atom_native_module",
         module_id = module_id if module_id != None else name,
         schema_files = schema_files,
         depends_on = depends_on,
