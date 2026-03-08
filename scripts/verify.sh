@@ -42,6 +42,19 @@ test_suite() {
   bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
 }
 
+EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
+
+build_apps() {
+  # Generate BUILD files for the example app (non-dry-run).
+  bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+
+  # Build iOS app (simulator architecture).
+  bazelisk build //generated/ios/hello-atom:app --ios_multi_cpus=sim_arm64
+
+  # TODO: Build Android app once rules_android android_binary is fixed.
+  # bazelisk build //generated/android/hello-atom:app
+}
+
 case "$mode" in
   lint)
     lint
@@ -49,9 +62,13 @@ case "$mode" in
   test)
     test_suite
     ;;
+  build)
+    build_apps
+    ;;
   verify)
     lint
     test_suite
+    build_apps
     ;;
   *)
     echo "unknown verify mode: $mode" >&2
