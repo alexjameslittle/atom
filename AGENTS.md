@@ -36,7 +36,7 @@ Crate responsibilities:
 - `atom-manifest`: app metadata loading and validation from Bazel-generated JSON.
 - `atom-modules`: module metadata loading, validation, and dependency ordering.
 - `atom-cng`: deterministic generation planning and emitted host tree writes.
-- `atom-cli`: thin Bazel-facing command wrapper.
+- `atom-cli`: CLI command dispatch, device discovery, and deployment orchestration.
 - `atom-runtime`: runtime primitives and host-facing execution logic.
 
 Do not add reverse dependencies across these layers without documenting the change in
