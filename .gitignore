@@ -4,3 +4,4 @@
 /target/
 /third-party/rust/target/
 .DS_Store
+user.bazelrc

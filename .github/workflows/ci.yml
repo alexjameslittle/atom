@@ -21,6 +21,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Cache mise installs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/mise
+            ~/.local/share/mise
+          key: ${{ runner.os }}-mise-${{ hashFiles('mise.toml', '.bazelversion') }}
+
+      - name: Cache Bazel state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazelisk
+          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-
+
       - name: Install mise
         run: |
           curl https://mise.run | sh
@@ -30,6 +48,11 @@ jobs:
         run: |
           mise trust -y
           mise install
+
+      - name: Setup BuildBuddy
+        run: scripts/setup-buildbuddy.sh "$BUILDBUDDY_API_KEY"
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Verify
         run: mise run ci
