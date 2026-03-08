@@ -3,6 +3,7 @@
 Planning repository for a Rust-first mobile application framework.
 
 The current focus is architecture and tooling, not scaffolding. The formal specification is in [SPEC.md](SPEC.md), and the implementation roadmap is in [docs/plan.md](docs/plan.md).
+For repository conventions and the documentation map, start with [AGENTS.md](/Users/alexlittle/conductor/workspaces/atom/tehran/AGENTS.md) and [docs/README.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/README.md).
 
 This branch now bootstraps the Phase 0 and Phase 1 slice from the spec:
 
