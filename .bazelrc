@@ -1,3 +1,5 @@
+build --java_runtime_version=remotejdk_21
+
 build --@rules_rust//rust/settings:clippy.toml=//:clippy.toml
 build --@rules_rust//rust/settings:rustfmt.toml=//:rustfmt.toml
 

@@ -20,11 +20,10 @@ This expects `mise` to already be installed, then installs the pinned toolchain 
 
 The verification harness runs:
 
-- `bazelisk build --config=rustfmt-check //...`
 - `bazelisk build --config=clippy //...`
+- `bazelisk run //:format.check` (rustfmt, ktfmt, swiftformat, buildifier via `aspect_rules_lint`)
 - `bazelisk test //...`
 - `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
-- `buildifier`
 - `shellcheck`
 - `actionlint`
 

@@ -8,8 +8,7 @@ mode=${1:-verify}
 
 lint() {
   bazelisk build --config=clippy //...
-  find . -type f \( -name BUILD.bazel -o -name MODULE.bazel -o -name '*.bzl' \) -print0 | \
-    xargs -0 buildifier -mode=check
+  bazelisk run //:format.check
   shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh
   actionlint
 }
@@ -27,7 +26,6 @@ case "$mode" in
     test_suite
     ;;
   verify)
-    bazelisk build --config=rustfmt-check //...
     lint
     test_suite
     ;;

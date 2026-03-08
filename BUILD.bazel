@@ -1,7 +1,32 @@
+load("@aspect_rules_lint//format:defs.bzl", "format_multirun")
+load("@rules_java//java:defs.bzl", "java_binary")
+
 exports_files([
     "clippy.toml",
     "rustfmt.toml",
 ])
+
+alias(
+    name = "swiftformat",
+    actual = select({
+        "@bazel_tools//src/conditions:linux": "@swiftformat",
+        "@bazel_tools//src/conditions:darwin": "@swiftformat_mac",
+    }),
+)
+
+java_binary(
+    name = "ktfmt",
+    main_class = "com.facebook.ktfmt.cli.Main",
+    runtime_deps = ["@ktfmt//jar"],
+)
+
+format_multirun(
+    name = "format",
+    kotlin = ":ktfmt",
+    rust = "@rules_rust//tools/upstream_wrapper:rustfmt",
+    starlark = "@buildifier_prebuilt//:buildifier",
+    swift = ":swiftformat",
+)
 
 alias(
     name = "atom",
