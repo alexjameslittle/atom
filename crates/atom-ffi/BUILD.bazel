@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "atom-ffi",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_ffi",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:flatbuffers",
+    ],
+)
+
+rust_test(
+    name = "atom-ffi-test",
+    crate = ":atom-ffi",
+)

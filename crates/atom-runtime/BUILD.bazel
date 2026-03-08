@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "atom-runtime",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_runtime",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/atom-ffi",
+    ],
+)
+
+rust_test(
+    name = "atom-runtime-test",
+    crate = ":atom-runtime",
+)

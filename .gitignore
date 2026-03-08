@@ -1,0 +1,8 @@
+/bazel-*
+/generated/
+/examples/hello-world/generated/
+/target/
+/third-party/rust/target/
+.DS_Store
+node_modules/
+user.bazelrc

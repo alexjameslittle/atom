@@ -1,0 +1,15 @@
+load("@atom//bzl/atom:defs.bzl", "atom_native_module")
+
+atom_native_module(
+    name = "native_echo",
+    android_srcs = ["android/NativeEchoModule.kt"],
+    ios_srcs = ["ios/NativeEchoModule.swift"],
+    methods = [
+        {
+            "name": "echo",
+            "request_table": "atom.native_echo.EchoRequest",
+            "response_table": "atom.native_echo.EchoResponse",
+        },
+    ],
+    schema_files = ["schema/native_echo.fbs"],
+)

@@ -1,0 +1,8 @@
+namespace atom.device_info;
+
+table GetDeviceInfoRequest {}
+
+table GetDeviceInfoResponse {
+  model: string;
+  os: string;
+}

@@ -1,0 +1,81 @@
+module(
+    name = "atom",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "apple_support", version = "1.24.2", repo_name = "build_bazel_apple_support")
+bazel_dep(name = "aspect_rules_js", version = "2.0.0")
+bazel_dep(name = "aspect_rules_lint", version = "2.2.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.2")
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_java", version = "8.14.0")
+bazel_dep(name = "rules_kotlin", version = "1.9.0")
+bazel_dep(name = "rules_rust", version = "0.68.1")
+bazel_dep(name = "rules_swift", version = "2.1.1", repo_name = "build_bazel_rules_swift")
+bazel_dep(name = "flatbuffers", version = "25.9.23")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-apple-ios",
+        "aarch64-apple-ios-sim",
+        "x86_64-apple-ios",
+        "aarch64-linux-android",
+        "x86_64-linux-android",
+    ],
+    versions = ["1.92.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.spec(
+    package = "camino",
+    version = "=1.2.2",
+)
+crate.spec(
+    features = ["derive"],
+    package = "clap",
+    version = "=4.5.60",
+)
+crate.spec(
+    package = "flatbuffers",
+    version = "=25.9.23",
+)
+crate.spec(
+    package = "pretty_assertions",
+    version = "=1.4.1",
+)
+crate.spec(
+    features = ["derive"],
+    package = "serde",
+    version = "=1.0.228",
+)
+crate.spec(
+    package = "serde_json",
+    version = "=1.0.149",
+)
+crate.spec(
+    package = "tempfile",
+    version = "=3.26.0",
+)
+crate.from_specs()
+use_repo(crate, "crates")
+
+format_tools = use_extension("@aspect_rules_lint//format:extensions.bzl", "tools")
+format_tools.ktfmt()
+format_tools.swiftformat()
+use_repo(format_tools, "ktfmt", "swiftformat", "swiftformat_mac")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    npmrc = "//:.npmrc",
+    pnpm_lock = "//:pnpm-lock.yaml",
+)
+use_repo(npm, "npm")

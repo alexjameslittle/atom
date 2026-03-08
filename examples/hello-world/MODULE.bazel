@@ -1,0 +1,10 @@
+module(
+    name = "hello_atom",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "atom", version = "0.1.0")
+local_path_override(
+    module_name = "atom",
+    path = "../..",
+)

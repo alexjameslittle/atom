@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "atom-modules",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_modules",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/atom-ffi",
+        "//crates/atom-manifest",
+        "@crates//:camino",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "atom-modules-test",
+    crate = ":atom-modules",
+    deps = [
+        "@crates//:pretty_assertions",
+        "@crates//:tempfile",
+    ],
+)

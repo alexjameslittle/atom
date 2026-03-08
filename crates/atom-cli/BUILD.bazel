@@ -1,0 +1,51 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "atom-cli-lib",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_cli",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/atom-cng",
+        "//crates/atom-ffi",
+        "//crates/atom-manifest",
+        "//crates/atom-modules",
+        "@crates//:camino",
+        "@crates//:clap",
+    ],
+)
+
+rust_binary(
+    name = "atom",
+    srcs = ["src/main.rs"],
+    crate_name = "atom",
+    crate_root = "src/main.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":atom-cli-lib",
+    ],
+)
+
+rust_test(
+    name = "atom-cli-test",
+    crate = ":atom-cli-lib",
+    deps = [
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "atom-cli-integration-test",
+    srcs = ["tests/cli.rs"],
+    crate_name = "atom_cli_integration_test",
+    edition = "2024",
+    deps = [
+        ":atom-cli-lib",
+        "//crates/atom-ffi",
+        "@crates//:camino",
+        "@crates//:tempfile",
+    ],
+)

@@ -1,0 +1,16 @@
+load("@atom//bzl/atom:defs.bzl", "atom_app")
+
+atom_app(
+    name = "hello_atom",
+    android_application_id = "build.atom.hello",
+    android_min_sdk = 28,
+    android_target_sdk = 35,
+    app_name = "Hello Atom",
+    ios_bundle_id = "build.atom.hello",
+    ios_deployment_target = "17.0",
+    modules = [
+        "//examples/hello-world/modules/device_info:device_info",
+        "//examples/hello-world/modules/native_echo:native_echo",
+    ],
+    slug = "hello-atom",
+)
