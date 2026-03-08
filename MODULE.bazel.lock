@@ -1287,8 +1287,8 @@
     },
     "@@rules_apple+//apple:apple.bzl%provisioning_profile_repository_extension": {
       "general": {
-        "bzlTransitiveDigest": "CUIdbxeGZ+GPvVqbCkw9HQeJLsqeG3I1pJQ+oyZr/D4=",
-        "usagesDigest": "vsJl8Rw5NL+5Ag2wdUDoTeRF/5klkXO8545Iy7U1Q08=",
+        "bzlTransitiveDigest": "EN+rn82iaP7NXY/+RBR/tzOY8RLnuGl80XaMUhaq2S0=",
+        "usagesDigest": "F/gxG/JRV3Tt79LU2GgXtWXiv3wmKml97zj9nl/yuOk=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -1370,7 +1370,7 @@
     "@@rules_apple+//apple:extensions.bzl%non_module_deps": {
       "general": {
         "bzlTransitiveDigest": "hZq9NZQ3DfMM3SejWMrPlGSZAv38GRVt6iSG5FbwbhQ=",
-        "usagesDigest": "M3VqFpeTCo4qmrNKGZw0dxBHvTYDrfV3cscGzlSAhQ4=",
+        "usagesDigest": "dOKDLr8be0ViOuOHiKb6G8vHwyLgNjvez+2Y19QQJsQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
