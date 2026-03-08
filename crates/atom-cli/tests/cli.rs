@@ -1,5 +1,6 @@
 use atom_cli::run_from_args;
 use camino::Utf8PathBuf;
+use std::fs;
 use tempfile::tempdir;
 
 #[test]
@@ -19,4 +20,27 @@ fn run_requires_a_target_flag() {
     let error =
         run_from_args(["atom", "run", "ios"], &root).expect_err("missing target should fail");
     assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+}
+
+#[test]
+fn run_accepts_a_device_flag_after_platform_subcommand() {
+    let directory = tempdir().expect("tempdir");
+    let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+    fs::write(root.join("MODULE.bazel"), "module(name = \"atom\")\n").expect("workspace");
+
+    let error = run_from_args(
+        [
+            "atom",
+            "run",
+            "ios",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--device",
+            "SIM-123",
+        ],
+        &root,
+    )
+    .expect_err("missing workspace should fail after clap accepts the command");
+
+    assert_ne!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
 }
