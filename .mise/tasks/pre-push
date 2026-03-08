@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+set -eu
+exec ./scripts/pre-push.sh
+

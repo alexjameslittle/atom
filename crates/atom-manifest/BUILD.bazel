@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "atom-manifest",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_manifest",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/atom-ffi",
+        "@crates//:camino",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "atom-manifest-test",
+    crate = ":atom-manifest",
+    deps = [
+        "@crates//:pretty_assertions",
+        "@crates//:tempfile",
+    ],
+)

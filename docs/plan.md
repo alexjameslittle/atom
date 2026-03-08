@@ -16,18 +16,18 @@ This is intentionally "headless first." The foundation should not depend on a re
 - Use `bzlmod` only. Do not introduce `WORKSPACE`.
 - Pin `.bazelversion` to `8.4.2`.
 - Manage developer tooling through `mise.toml`.
-- Mirror the Forge Rust setup:
+- Use a Bazel-native Rust setup:
   - `rules_rust` via `MODULE.bazel`
   - `rust.toolchain(edition = "2024", versions = ["1.92.0"])`
-  - One `third-party/rust/Cargo.toml` and `Cargo.lock`
+  - pinned `crate.spec(...)` entries in `MODULE.bazel`
   - `crate_universe` as the Bazel entrypoint for Rust dependencies
 
 ## Product Shape
 
 The target developer experience is:
 1. Write an app crate in Rust.
-2. Declare app config in `Atom.toml`.
-3. Add Rust native-module crates to the app.
+2. Declare app config in `atom_app(...)`.
+3. Add `atom_module(...)` and `atom_native_module(...)` targets to the app.
 4. Run `atom prebuild` to generate iOS and Android host code.
 5. Build and run with Bazel-driven commands.
 
@@ -68,10 +68,10 @@ This should be platform-agnostic Rust with no iOS/Android logic mixed into it.
 A native module is a Rust crate that exposes:
 - A stable module identifier.
 - A typed Rust API used by the app.
-- A manifest that declares permissions, platform requirements, config fragments, and generated bridge needs.
+- Bazel metadata that declares permissions, platform requirements, config fragments, and generated bridge needs.
 - Optional platform-specific implementation crates when a module truly needs them.
 
-The framework should aggregate module manifests during CNG and use them to shape the generated native host.
+The framework should aggregate module metadata during CNG and use it to shape the generated native host.
 
 ### 4. Bridge layer
 
@@ -87,9 +87,9 @@ This favors a custom C ABI over `uniffi` for the core framework boundary because
 ### 5. CNG engine
 
 CNG should take:
-- `Atom.toml`
+- `atom_app(...)` metadata
 - App crate metadata
-- Module manifests
+- `atom_module(...)` / `atom_native_module(...)` metadata
 - Build profile / environment data
 
 And deterministically generate:
@@ -116,7 +116,7 @@ Planned module setup, based on Forge:
 - `platforms`
 - `rules_rust`
 - Rust toolchains registered through the `rules_rust` extension
-- `crate_universe` fed by `third-party/rust/Cargo.toml` and `Cargo.lock`
+- `crate_universe` fed by direct `crate.spec(...)` entries in `MODULE.bazel`
 
 Additional Bazel dependencies will likely be needed during implementation:
 - `rules_apple`
@@ -128,16 +128,7 @@ I do not want to pin those yet in the plan because the compatibility matrix shou
 
 ### Rust dependency model
 
-Follow the Forge layout exactly in spirit:
-
-```text
-third-party/rust/
-  BUILD.bazel
-  Cargo.toml
-  Cargo.lock
-```
-
-That virtual Cargo package exists only to define dependencies imported by `crate_universe`. Application and framework crates then depend on Bazel-generated `@crates//...` targets rather than running Cargo directly in normal development.
+Use a Cargo-free model. Direct dependencies are pinned in `MODULE.bazel` with `crate.spec(...)`, and framework/application BUILD files depend on Bazel-generated `@crates//...` targets rather than on Cargo manifests.
 
 ### mise
 
@@ -161,13 +152,13 @@ That means the toolchain plan is viable without inventing custom plugin wiring.
 ├── .bazelversion
 ├── MODULE.bazel
 ├── mise.toml
+├── bzl/
+│   └── atom/
+│       ├── defs.bzl
+│       ├── atom_app.bzl
+│       └── atom_module.bzl
 ├── docs/
 │   └── plan.md
-├── third-party/
-│   └── rust/
-│       ├── BUILD.bazel
-│       ├── Cargo.toml
-│       └── Cargo.lock
 ├── crates/
 │   ├── atom-runtime/
 │   ├── atom-manifest/
@@ -183,7 +174,7 @@ That means the toolchain plan is viable without inventing custom plugin wiring.
 ```
 
 Notes:
-- `atom-manifest` owns `Atom.toml` parsing and validation.
+- `atom-manifest` owns Bazel-generated app metadata loading and validation.
 - `atom-cng` resolves the app + module graph into generated native output.
 - `atom-ffi` owns the stable host ABI.
 - `atom-cli` is a thin frontend over CNG and Bazel commands.
@@ -192,7 +183,7 @@ Notes:
 
 ### Inputs
 
-`Atom.toml` should describe:
+`atom_app(...)` should describe:
 - App identity and bundle identifiers.
 - iOS and Android deployment targets.
 - Assets and icons.
@@ -210,9 +201,9 @@ Each module should contribute:
 
 ### Pipeline
 
-1. Parse and validate `Atom.toml`.
+1. Parse and validate Bazel-generated app metadata.
 2. Resolve the Rust app crate and its module list.
-3. Load module manifests.
+3. Load module metadata.
 4. Merge platform requirements into one generation graph.
 5. Emit deterministic native host trees.
 6. Build those trees with Bazel.
@@ -256,8 +247,8 @@ The likely renderer direction is a Rust-authored declarative view tree that diff
 Deliverables:
 - `mise.toml`
 - `.bazelversion` pinned to `8.4.2`
-- `MODULE.bazel` using Forge-style `rules_rust` setup
-- `third-party/rust/{Cargo.toml,Cargo.lock,BUILD.bazel}`
+- `MODULE.bazel` using Bazel-native `rules_rust` direct dependencies
+- `bzl/atom/{defs.bzl,atom_app.bzl,atom_module.bzl}`
 - One trivial Rust target built by Bazel on the host machine
 
 Exit criteria:
@@ -267,7 +258,7 @@ Exit criteria:
 ### Phase 1: Manifest and dry-run CNG
 
 Deliverables:
-- `Atom.toml` schema
+- `atom_app(...)` and `atom_module(...)` metadata schema
 - `atom-manifest`
 - `atom-cng`
 - `atom-cli`
@@ -326,14 +317,14 @@ Exit criteria:
 - Do we want generated Xcode projects directly, or should Xcode be a derived artifact from Bazel later via `rules_xcodeproj`?
 - Should the core Rust output be a `staticlib`, `cdylib`, or both?
 - Do we support Android on Linux from the start, or only macOS first while iOS is being brought up?
-- How much of app configuration lives in `Atom.toml` versus Rust macros?
+- How much of app configuration lives in `atom_app(...)` versus Rust APIs?
 - What is the minimum ABI surface needed to keep the bridge stable as modules evolve?
 
 ## Recommended First Implementation Slice
 
 Once planning is approved, the first build work should be deliberately narrow:
-1. Toolchain files only: `mise.toml`, `.bazelversion`, `MODULE.bazel`, and `third-party/rust`.
-2. A tiny `atom-manifest` crate that parses `Atom.toml`.
+1. Toolchain files only: `mise.toml`, `.bazelversion`, `MODULE.bazel`, and `bzl/atom`.
+2. A tiny `atom-manifest` crate that loads Bazel-generated app metadata.
 3. A tiny `atom-cli` crate with `prebuild --dry-run`.
 
 That gives us a real Bazel + Rust base, validates the developer setup, and lets us prove the CNG graph before we touch iOS or Android host generation.

@@ -26,7 +26,7 @@ Atom is not:
 
 ### 2.1 Goals
 
-- Define a stable app manifest in `Atom.toml`.
+- Define a stable Bazel-native app metadata model through `atom_app(...)`.
 - Define a Rust module format that is consumable by both the runtime and CNG.
 - Define deterministic CNG behavior and concrete generated outputs.
 - Define a Bazel-first build contract using `bzlmod`.
@@ -50,13 +50,13 @@ The repository root MUST eventually contain:
 ├── .bazelversion
 ├── MODULE.bazel
 ├── mise.toml
+├── bzl/
+│   └── atom/
+│       ├── defs.bzl
+│       ├── atom_app.bzl
+│       └── atom_module.bzl
 ├── docs/
 │   └── plan.md
-├── third-party/
-│   └── rust/
-│       ├── BUILD.bazel
-│       ├── Cargo.toml
-│       └── Cargo.lock
 ├── crates/
 │   ├── atom-runtime/
 │   ├── atom-manifest/
@@ -85,7 +85,8 @@ Required build-system rules:
 - `.bazelversion` MUST be `8.4.2`.
 - `mise.toml` MUST pin `bazel`, `bazelisk`, and `rust`.
 - `MODULE.bazel` MUST use `bzlmod`.
-- The Rust dependency model MUST follow the Forge-style `third-party/rust` + `crate_universe` pattern.
+- The Rust dependency model MUST be Bazel-native. Dependencies MUST be declared in `MODULE.bazel` via pinned `crate.spec(...)` entries and resolved through `crate_universe`.
+- Repo-local `Cargo.toml` and `Cargo.lock` files MUST NOT be required for framework or consumer builds.
 - The build layer MUST include the FlatBuffers compiler and the Rust `flatbuffers` crate.
 
 Required pinned Bazel modules for the initial implementation:
@@ -119,8 +120,8 @@ Every user-facing failure MUST map to one of the following codes.
 
 | Domain | Code | Meaning | CLI Exit |
 | --- | --- | --- | --- |
-| Manifest | `MANIFEST_NOT_FOUND` | `Atom.toml` file could not be found | `65` |
-| Manifest | `MANIFEST_PARSE_ERROR` | `Atom.toml` could not be parsed as TOML | `65` |
+| Manifest | `MANIFEST_NOT_FOUND` | generated app metadata could not be found | `65` |
+| Manifest | `MANIFEST_PARSE_ERROR` | generated app metadata could not be parsed | `65` |
 | Manifest | `MANIFEST_MISSING_FIELD` | required field missing | `65` |
 | Manifest | `MANIFEST_INVALID_VALUE` | field type or value invalid | `65` |
 | Manifest | `MANIFEST_UNKNOWN_KEY` | unknown field encountered | `65` |
@@ -157,127 +158,106 @@ Rules:
 - `message` MUST be human-readable.
 - Machine-readable outputs MUST emit exactly one `atom.error.AtomError` FlatBuffer on failure.
 
-## 5. App Manifest Specification
+## 5. App Metadata Specification
 
 ### 5.1 File Discovery
 
-Manifest lookup order:
-1. explicit `--manifest <path>`
-2. `./Atom.toml`
+App lookup order:
+1. explicit `--target <label>`
+2. fail with `CLI_USAGE_ERROR`
 
-If no manifest is found, the command MUST fail with `MANIFEST_NOT_FOUND`.
+If the requested metadata target cannot be built or resolved, the command MUST fail with `MANIFEST_NOT_FOUND`.
 
 ### 5.2 Format
 
-`Atom.toml` MUST be the source of truth for app configuration.
+`atom_app(...)` MUST be the source of truth for app configuration.
 
-Allowed top-level sections:
-- `[app]`
-- `[ios]`
-- `[android]`
-- `[build]`
-- `[[modules]]`
+The Bazel rule MUST emit a single JSON metadata document with these top-level keys:
+- `kind`
+- `target_label`
+- `name`
+- `slug`
+- `entry_crate_label`
+- `generated_root`
+- `watch`
+- `ios`
+- `android`
+- `modules`
 
 Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
 
 ### 5.3 Field Cheat Sheet
 
-#### `[app]`
-
 | Key | Type | Required | Default | Validation |
 | --- | --- | --- | --- | --- |
 | `name` | string | yes | none | non-empty UTF-8 |
 | `slug` | string | yes | none | regex `^[a-z][a-z0-9-]{1,62}$` |
-| `entry_crate` | string | yes | none | relative path, MUST NOT be absolute |
-
-#### `[ios]`
-
-| Key | Type | Required | Default | Validation |
-| --- | --- | --- | --- | --- |
-| `enabled` | bool | no | `true` if section present | boolean |
+| `entry_crate_label` | string | yes | none | absolute Bazel label |
+| `generated_root` | string | no | `"generated"` | relative path, MUST NOT be absolute |
+| `watch` | bool | no | `false` | boolean |
+| `ios.enabled` | bool | no | `true` if section present | boolean |
 | `bundle_id` | string | yes when enabled | none | reverse-DNS identifier |
 | `deployment_target` | string | yes when enabled | none | regex `^[0-9]+\\.[0-9]+$` |
-
-#### `[android]`
-
-| Key | Type | Required | Default | Validation |
-| --- | --- | --- | --- | --- |
-| `enabled` | bool | no | `true` if section present | boolean |
+| `android.enabled` | bool | no | `true` if section present | boolean |
 | `application_id` | string | yes when enabled | none | reverse-DNS identifier |
 | `min_sdk` | integer | yes when enabled | none | `>= 24` |
 | `target_sdk` | integer | yes when enabled | none | `>= min_sdk` |
-
-#### `[build]`
-
-| Key | Type | Required | Default | Validation |
-| --- | --- | --- | --- | --- |
-| `generated_root` | string | no | `"generated"` | relative path, MUST NOT be absolute |
-| `watch` | bool | no | `false` | boolean |
-
-#### `[[modules]]`
-
-| Key | Type | Required | Default | Validation |
-| --- | --- | --- | --- | --- |
-| `id` | string | yes | none | regex `^[a-z][a-z0-9_]{1,62}$` |
-| `crate` | string | yes | none | relative path, MUST NOT be absolute |
-| `features` | array<string> | no | `[]` | unique values, stable order preserved |
-| `optional` | bool | no | `false` | boolean |
-| `config` | table | no | `{}` | TOML-compatible scalar and map values only |
+| `modules` | array<string> | no | `[]` | absolute Bazel labels, unique |
 
 ### 5.4 Validation Rules
 
 - At least one platform section MUST be enabled.
 - `app.slug` MUST be unique within generated output paths.
 - `android.target_sdk` MUST be greater than or equal to `android.min_sdk`.
-- Module IDs MUST be unique across `[[modules]]`.
-- Paths in `entry_crate`, `generated_root`, and module `crate` MUST be relative to the repo root.
+- Module target labels MUST be unique across `modules`.
+- `generated_root` MUST be relative to the repo root.
 
 ### 5.5 Canonical Example
 
-```toml
-[app]
-name = "Hello Atom"
-slug = "hello-atom"
-entry_crate = "apps/hello_atom"
-
-[ios]
-enabled = true
-bundle_id = "build.atom.hello"
-deployment_target = "17.0"
-
-[android]
-enabled = true
-application_id = "build.atom.hello"
-min_sdk = 28
-target_sdk = 35
-
-[build]
-generated_root = "generated"
-watch = false
-
-[[modules]]
-id = "device_info"
-crate = "modules/device_info"
-features = []
-optional = false
+```json
+{
+  "kind": "atom_app",
+  "target_label": "//apps/hello_atom:hello_atom",
+  "name": "Hello Atom",
+  "slug": "hello-atom",
+  "entry_crate_label": "//apps/hello_atom:hello_atom",
+  "generated_root": "generated",
+  "watch": false,
+  "ios": {
+    "enabled": true,
+    "bundle_id": "build.atom.hello",
+    "deployment_target": "17.0"
+  },
+  "android": {
+    "enabled": true,
+    "application_id": "build.atom.hello",
+    "min_sdk": 28,
+    "target_sdk": 35
+  },
+  "modules": [
+    "//modules/device_info:device_info"
+  ]
+}
 ```
 
-### 5.6 Reference Algorithm: Manifest Loading
+### 5.6 Reference Algorithm: Metadata Loading
 
 ```text
-function load_manifest(repo_root, explicit_path):
-    path = explicit_path if explicit_path else repo_root / "Atom.toml"
-    if path does not exist:
-        error MANIFEST_NOT_FOUND at "Atom.toml"
+function load_manifest(repo_root, app_target):
+    metadata_target = derive_metadata_target(app_target, "_atom_app_metadata")
+    metadata_path = bazel_build_and_locate(repo_root, metadata_target)
+    if metadata_path does not exist:
+        error MANIFEST_NOT_FOUND at metadata_target
 
-    raw = read_text(path) or error MANIFEST_PARSE_ERROR
-    parsed = parse_toml(raw) or error MANIFEST_PARSE_ERROR
+    raw = read_text(metadata_path) or error MANIFEST_PARSE_ERROR
+    parsed = parse_json(raw) or error MANIFEST_PARSE_ERROR
 
     reject_unknown_top_level_keys(parsed)
-    app = validate_app_section(parsed["app"])
+    validate parsed["kind"] == "atom_app"
+    app = validate_app_metadata(parsed)
     ios = validate_ios_section(parsed.get("ios"))
     android = validate_android_section(parsed.get("android"))
-    build = validate_build_section(parsed.get("build"))
+    build = validate_build_section(parsed.get("generated_root"), parsed.get("watch"))
     modules = validate_module_array(parsed.get("modules", []))
 
     if not ios.enabled and not android.enabled:
@@ -599,8 +579,8 @@ The initial bridge profile is synchronous only. Async module work MAY happen ins
 ### 9.1 Inputs
 
 CNG consumes:
-- normalized `Atom.toml`
-- resolved module manifests
+- normalized `atom_app(...)` metadata
+- resolved module metadata
 - module-owned FlatBuffers schema files
 - selected platform set
 - build profile
@@ -758,8 +738,8 @@ For the canonical `hello-atom` example, the `atom.cli.PrebuildPlan` payload MUST
 Watch mode is not required for Phase 1, but its behavior is defined now to avoid ambiguity later.
 
 If `atom prebuild --watch` is implemented, it MUST:
-- watch `Atom.toml`
-- watch configured module crate trees
+- watch the app metadata target inputs
+- watch configured module target inputs
 - watch generated templates
 - rerun manifest load, module resolution, and plan merge on each stable file event
 
@@ -834,7 +814,7 @@ Required artifacts:
 - `.bazelversion`
 - `MODULE.bazel`
 - `mise.toml`
-- `third-party/rust/{Cargo.toml,Cargo.lock,BUILD.bazel}`
+- `bzl/atom/{defs.bzl,atom_app.bzl,atom_module.bzl}`
 - at least one Rust target building under Bazel
 
 Conformance example:
@@ -844,8 +824,8 @@ Conformance example:
 ### 11.2 Phase 1: Manifest + Dry-Run CNG
 
 Required behavior:
-- `Atom.toml` parses and validates
-- module manifests resolve
+- `atom_app(...)` metadata parses and validates
+- module metadata resolves
 - `atom prebuild --dry-run` returns a canonical `atom.cli.PrebuildPlan` FlatBuffer
 
 Conformance example:

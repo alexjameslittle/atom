@@ -1,0 +1,13 @@
+load("@atom//bzl/atom:defs.bzl", "atom_module")
+
+atom_module(
+    name = "device_info",
+    methods = [
+        {
+            "name": "get",
+            "request_table": "atom.device_info.GetDeviceInfoRequest",
+            "response_table": "atom.device_info.GetDeviceInfoResponse",
+        },
+    ],
+    schema_files = ["schema/device_info.fbs"],
+)

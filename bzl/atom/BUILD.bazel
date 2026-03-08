@@ -1,0 +1,8 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "atom_app.bzl",
+    "atom_module.bzl",
+    "atom_native_module.bzl",
+    "defs.bzl",
+])

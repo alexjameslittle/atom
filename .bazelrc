@@ -1,0 +1,8 @@
+build --@rules_rust//rust/settings:clippy.toml=//:clippy.toml
+build --@rules_rust//rust/settings:rustfmt.toml=//:rustfmt.toml
+
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+
+build:rustfmt-check --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
+build:rustfmt-check --output_groups=+rustfmt_checks
