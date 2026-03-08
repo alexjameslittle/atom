@@ -32,8 +32,16 @@ The verification harness runs:
 
 ## GitHub Guardrails
 
-- [ci.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/workflows/ci.yml) runs the
-  same `mise run ci` harness on pushes and pull requests.
+CI runs three parallel jobs sharing a BuildBuddy remote cache:
+
+- **lint** (Linux): clippy, format check, shellcheck, actionlint
+- **test (linux)**: host tests, prebuild dry-run
+- **test (macos)**: host tests, prebuild dry-run
+
+All three must pass before merge.
+
+- [ci.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/workflows/ci.yml) defines the
+  CI matrix.
 - [dependabot.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/dependabot.yml) keeps
   workflow dependencies moving.
 - [settings.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/settings.yml) captures
