@@ -52,10 +52,15 @@ Dependency direction should move one way:
 - Keep user-facing error mapping in `atom-ffi`.
 - Keep validation close to the loader that owns the data.
 - Keep codegen deterministic. Two identical inputs should produce the same plan and output tree.
-- Keep examples representative. The hello-world example should exercise real repo conventions, not a toy path that bypasses them.
+- Keep examples representative. The hello-world example should exercise real repo conventions, not a
+  toy path that bypasses them.
 
 ## When Adding A New Layer
 
 - Document the responsibility here.
-- Document any new invariants in [core-beliefs.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/core-beliefs.md) or a design doc if the change is architectural.
-- Add verification coverage in [`scripts/verify.sh`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts/verify.sh) if the new layer changes repo-wide expectations.
+- Document any new invariants in
+  [core-beliefs.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/core-beliefs.md) or a
+  design doc if the change is architectural.
+- Add verification coverage in
+  [`scripts/verify.sh`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts/verify.sh) if the
+  new layer changes repo-wide expectations.

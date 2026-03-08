@@ -4,6 +4,7 @@ module(
 )
 
 bazel_dep(name = "apple_support", version = "1.24.2", repo_name = "build_bazel_apple_support")
+bazel_dep(name = "aspect_rules_js", version = "2.0.0")
 bazel_dep(name = "aspect_rules_lint", version = "2.2.0")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.2")
@@ -70,3 +71,11 @@ format_tools = use_extension("@aspect_rules_lint//format:extensions.bzl", "tools
 format_tools.ktfmt()
 format_tools.swiftformat()
 use_repo(format_tools, "ktfmt", "swiftformat", "swiftformat_mac")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    npmrc = "//:.npmrc",
+    pnpm_lock = "//:pnpm-lock.yaml",
+)
+use_repo(npm, "npm")

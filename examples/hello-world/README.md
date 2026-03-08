@@ -1,6 +1,8 @@
 # Hello World
 
-This is the canonical Phase 1 consumer fixture for Bazel-first `atom prebuild --dry-run`. It includes one Rust module and one native-only module so the metadata pipeline exercises both `atom_module(...)` and `atom_native_module(...)`.
+This is the canonical Phase 1 consumer fixture for Bazel-first `atom prebuild --dry-run`. It
+includes one Rust module and one native-only module so the metadata pipeline exercises both
+`atom_module(...)` and `atom_native_module(...)`.
 
 Run it from the repository root:
 

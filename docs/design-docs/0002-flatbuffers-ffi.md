@@ -4,7 +4,8 @@ Status: accepted
 
 ## Context
 
-Atom needs machine-readable payloads across CLI, runtime, and host boundaries. The transport should be deterministic, compact, and language-neutral.
+Atom needs machine-readable payloads across CLI, runtime, and host boundaries. The transport should
+be deterministic, compact, and language-neutral.
 
 ## Decision
 

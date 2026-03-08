@@ -1,6 +1,7 @@
 # AGENTS
 
-Start here, then read [docs/README.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/README.md).
+Start here, then read
+[docs/README.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/README.md).
 
 ## Operating Model
 
@@ -15,9 +16,11 @@ Start here, then read [docs/README.md](/Users/alexlittle/conductor/workspaces/at
 - Bootstrap: `./scripts/bootstrap.sh`
 - Format: `mise run fmt`
 - Verify: `mise run verify`
-- Smoke prebuild: `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
+- Smoke prebuild:
+  `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
 
-Local and CI verification must stay aligned. If you add a new required check, add it to [`scripts/verify.sh`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts/verify.sh).
+Local and CI verification must stay aligned. If you add a new required check, add it to
+[`scripts/verify.sh`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts/verify.sh).
 
 ## Architecture Boundaries
 
@@ -36,7 +39,8 @@ Crate responsibilities:
 - `atom-cli`: thin Bazel-facing command wrapper.
 - `atom-runtime`: runtime primitives and host-facing execution logic.
 
-Do not add reverse dependencies across these layers without documenting the change in [`docs/architecture.md`](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/architecture.md).
+Do not add reverse dependencies across these layers without documenting the change in
+[`docs/architecture.md`](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/architecture.md).
 
 ## Coding Conventions
 
@@ -44,20 +48,26 @@ Do not add reverse dependencies across these layers without documenting the chan
 - Keep `unsafe` code narrow, documented, and isolated to ABI boundaries.
 - Keep generated outputs deterministic and repo-relative.
 - When behavior changes, update docs, examples, and verification in the same change.
-- Prefer repository knowledge over tribal knowledge. If a convention matters, write it down under `docs/`.
+- Prefer repository knowledge over tribal knowledge. If a convention matters, write it down under
+  `docs/`.
 
 ## Native Modules
 
 - The framework generates bridge glue.
 - Module authors provide platform-specific code through `ios_srcs` and `android_srcs`.
-- The example consumer under [`examples/hello-world`](/Users/alexlittle/conductor/workspaces/atom/tehran/examples/hello-world) should continue to exercise both Rust-backed and native-only modules.
+- The example consumer under
+  [`examples/hello-world`](/Users/alexlittle/conductor/workspaces/atom/tehran/examples/hello-world)
+  should continue to exercise both Rust-backed and native-only modules.
 
 ## Where To Change What
 
 - Bazel rules and macros: [`bzl/atom`](/Users/alexlittle/conductor/workspaces/atom/tehran/bzl/atom)
-- Verification harness: [`scripts`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts), [`.githooks`](/Users/alexlittle/conductor/workspaces/atom/tehran/.githooks), [`.github/workflows`](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/workflows)
+- Verification harness: [`scripts`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts),
+  [`.githooks`](/Users/alexlittle/conductor/workspaces/atom/tehran/.githooks),
+  [`.github/workflows`](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/workflows)
 - Agent-facing docs: [`docs`](/Users/alexlittle/conductor/workspaces/atom/tehran/docs)
-- Example consumer: [`examples/hello-world`](/Users/alexlittle/conductor/workspaces/atom/tehran/examples/hello-world)
+- Example consumer:
+  [`examples/hello-world`](/Users/alexlittle/conductor/workspaces/atom/tehran/examples/hello-world)
 
 ## Avoid
 
