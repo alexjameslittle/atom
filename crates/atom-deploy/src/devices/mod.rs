@@ -1,12 +1,15 @@
-pub(crate) mod android;
-pub(crate) mod ios;
+pub mod android;
+pub mod ios;
 
 use std::io::{self, IsTerminal};
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use dialoguer::Select;
 
-pub(crate) fn choose_from_menu<T, F>(title: &str, options: &[T], render: F) -> AtomResult<T>
+/// # Errors
+///
+/// Returns an error if no choices are available or interactive selection fails.
+pub fn choose_from_menu<T, F>(title: &str, options: &[T], render: F) -> AtomResult<T>
 where
     T: Clone,
     F: Fn(&T) -> String,
@@ -38,6 +41,7 @@ where
     Ok(options[selection].clone())
 }
 
-pub(crate) fn should_prompt_interactively() -> bool {
+#[must_use]
+pub fn should_prompt_interactively() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }

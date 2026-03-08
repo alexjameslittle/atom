@@ -6,41 +6,44 @@ use crate::devices::{choose_from_menu, should_prompt_interactively};
 use crate::tools::{ToolRunner, capture_json_tool, capture_tool, run_tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IosSimulator {
-    pub(crate) runtime: String,
-    pub(crate) name: String,
-    pub(crate) udid: String,
-    pub(crate) state: String,
-    pub(crate) is_available: bool,
+pub struct IosSimulator {
+    pub runtime: String,
+    pub name: String,
+    pub udid: String,
+    pub state: String,
+    pub is_available: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum IosDestinationKind {
+pub enum IosDestinationKind {
     Simulator,
     Device,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IosDestination {
-    pub(crate) kind: IosDestinationKind,
-    pub(crate) id: String,
-    pub(crate) alternate_id: Option<String>,
-    pub(crate) name: String,
-    pub(crate) state: String,
-    pub(crate) runtime: Option<String>,
-    pub(crate) is_available: bool,
+pub struct IosDestination {
+    pub kind: IosDestinationKind,
+    pub id: String,
+    pub alternate_id: Option<String>,
+    pub name: String,
+    pub state: String,
+    pub runtime: Option<String>,
+    pub is_available: bool,
 }
 
 impl IosDestination {
-    pub(crate) fn matches_identifier(&self, value: &str) -> bool {
+    #[must_use]
+    pub fn matches_identifier(&self, value: &str) -> bool {
         self.id == value || self.alternate_id.as_deref() == Some(value) || self.name == value
     }
 
-    pub(crate) fn is_booted_simulator(&self) -> bool {
+    #[must_use]
+    pub fn is_booted_simulator(&self) -> bool {
         self.kind == IosDestinationKind::Simulator && self.state == "Booted"
     }
 
-    pub(crate) fn display_label(&self) -> String {
+    #[must_use]
+    pub fn display_label(&self) -> String {
         match self.kind {
             IosDestinationKind::Simulator => match &self.runtime {
                 Some(runtime) => format!("Simulator: {} [{}; {}]", self.name, runtime, self.state),
@@ -51,7 +54,10 @@ impl IosDestination {
     }
 }
 
-pub(crate) fn resolve_ios_destination(
+/// # Errors
+///
+/// Returns an error if no simulators or devices are available.
+pub fn resolve_ios_destination(
     repo_root: &Utf8Path,
     runner: &mut impl ToolRunner,
     requested_device: Option<&str>,
@@ -115,7 +121,10 @@ fn resolve_requested_ios_destination(
     })
 }
 
-pub(crate) fn list_ios_simulators(
+/// # Errors
+///
+/// Returns an error if `xcrun simctl` fails or returns invalid JSON.
+pub fn list_ios_simulators(
     repo_root: &Utf8Path,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<Vec<IosDestination>> {
@@ -151,18 +160,16 @@ fn list_ios_physical_devices(
     )?)
 }
 
-pub(crate) fn select_booted_ios_destination(
-    destinations: &[IosDestination],
-) -> Option<IosDestination> {
+#[must_use]
+pub fn select_booted_ios_destination(destinations: &[IosDestination]) -> Option<IosDestination> {
     destinations
         .iter()
         .find(|destination| destination.is_booted_simulator())
         .cloned()
 }
 
-pub(crate) fn select_default_ios_destination(
-    destinations: &[IosDestination],
-) -> Option<IosDestination> {
+#[must_use]
+pub fn select_default_ios_destination(destinations: &[IosDestination]) -> Option<IosDestination> {
     let mut simulators = destinations
         .iter()
         .filter(|destination| destination.kind == IosDestinationKind::Simulator)
@@ -198,7 +205,10 @@ fn sort_ios_destinations(destinations: &mut [IosDestination]) {
     });
 }
 
-pub(crate) fn prepare_ios_simulator(
+/// # Errors
+///
+/// Returns an error if the simulator cannot be booted.
+pub fn prepare_ios_simulator(
     repo_root: &Utf8Path,
     runner: &mut impl ToolRunner,
     destination: &IosDestination,
@@ -216,7 +226,10 @@ pub(crate) fn prepare_ios_simulator(
     Ok(simulator)
 }
 
-pub(crate) fn parse_ios_simulators(json: &str) -> AtomResult<Vec<IosSimulator>> {
+/// # Errors
+///
+/// Returns an error if the JSON is malformed or missing the devices map.
+pub fn parse_ios_simulators(json: &str) -> AtomResult<Vec<IosSimulator>> {
     let parsed: Value = serde_json::from_str(json).map_err(|error| {
         AtomError::new(
             AtomErrorCode::ExternalToolFailed,
@@ -264,7 +277,10 @@ pub(crate) fn parse_ios_simulators(json: &str) -> AtomResult<Vec<IosSimulator>> 
     Ok(simulators)
 }
 
-pub(crate) fn parse_ios_physical_devices(json: &str) -> AtomResult<Vec<IosDestination>> {
+/// # Errors
+///
+/// Returns an error if the JSON is malformed or missing the devices array.
+pub fn parse_ios_physical_devices(json: &str) -> AtomResult<Vec<IosDestination>> {
     let parsed: Value = serde_json::from_str(json).map_err(|error| {
         AtomError::new(
             AtomErrorCode::ExternalToolFailed,

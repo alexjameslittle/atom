@@ -10,7 +10,10 @@ use crate::tools::{
     ToolRunner, find_bazel_output, find_bazel_output_owned, run_bazel, run_bazel_owned, run_tool,
 };
 
-pub(crate) fn deploy_ios(
+/// # Errors
+///
+/// Returns an error if device resolution, building, or installation fails.
+pub fn deploy_ios(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
@@ -87,7 +90,10 @@ pub(crate) fn deploy_ios(
     Ok(())
 }
 
-pub(crate) fn deploy_android(
+/// # Errors
+///
+/// Returns an error if device resolution, building, or installation fails.
+pub fn deploy_android(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
@@ -131,7 +137,8 @@ pub(crate) fn deploy_android(
     Ok(())
 }
 
-pub(crate) fn generated_target(manifest: &NormalizedManifest, platform: &str) -> String {
+#[must_use]
+pub fn generated_target(manifest: &NormalizedManifest, platform: &str) -> String {
     format!(
         "//{}/{}/{}:app",
         manifest.build.generated_root.as_str(),

@@ -13,9 +13,18 @@ pub struct CommandOutput {
     pub exit_code: i32,
 }
 
-pub(crate) trait ToolRunner {
+pub trait ToolRunner {
+    /// # Errors
+    ///
+    /// Returns an error if the tool invocation fails.
     fn run(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
+    /// # Errors
+    ///
+    /// Returns an error if the tool invocation fails.
     fn capture(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<String>;
+    /// # Errors
+    ///
+    /// Returns an error if the tool invocation fails.
     fn capture_json_file(
         &mut self,
         repo_root: &Utf8Path,
@@ -24,7 +33,7 @@ pub(crate) trait ToolRunner {
     ) -> AtomResult<String>;
 }
 
-pub(crate) struct ProcessRunner;
+pub struct ProcessRunner;
 
 impl ToolRunner for ProcessRunner {
     fn run(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()> {
@@ -119,7 +128,10 @@ impl ToolRunner for ProcessRunner {
     }
 }
 
-pub(crate) fn run_tool(
+/// # Errors
+///
+/// Returns an error if the tool invocation fails.
+pub fn run_tool(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     tool: &str,
@@ -135,7 +147,10 @@ pub(crate) fn run_tool(
     )
 }
 
-pub(crate) fn capture_tool(
+/// # Errors
+///
+/// Returns an error if the tool invocation fails.
+pub fn capture_tool(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     tool: &str,
@@ -151,7 +166,10 @@ pub(crate) fn capture_tool(
     )
 }
 
-pub(crate) fn capture_json_tool(
+/// # Errors
+///
+/// Returns an error if the tool invocation fails.
+pub fn capture_json_tool(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     tool: &str,
@@ -167,7 +185,10 @@ pub(crate) fn capture_json_tool(
     )
 }
 
-pub(crate) fn run_bazel(
+/// # Errors
+///
+/// Returns an error if bazelisk fails.
+pub fn run_bazel(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     args: &[&str],
@@ -175,7 +196,10 @@ pub(crate) fn run_bazel(
     run_tool(runner, repo_root, "bazelisk", args)
 }
 
-pub(crate) fn run_bazel_owned(
+/// # Errors
+///
+/// Returns an error if bazelisk fails.
+pub fn run_bazel_owned(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     args: &[String],
@@ -183,7 +207,10 @@ pub(crate) fn run_bazel_owned(
     runner.run(repo_root, "bazelisk", args)
 }
 
-pub(crate) fn capture_bazel(
+/// # Errors
+///
+/// Returns an error if bazelisk fails.
+pub fn capture_bazel(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     args: &[&str],
@@ -191,7 +218,10 @@ pub(crate) fn capture_bazel(
     capture_tool(runner, repo_root, "bazelisk", args)
 }
 
-pub(crate) fn capture_bazel_owned(
+/// # Errors
+///
+/// Returns an error if bazelisk fails.
+pub fn capture_bazel_owned(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     args: &[String],
@@ -199,7 +229,10 @@ pub(crate) fn capture_bazel_owned(
     runner.capture(repo_root, "bazelisk", args)
 }
 
-pub(crate) fn find_bazel_output(
+/// # Errors
+///
+/// Returns an error if bazelisk cquery fails or no matching artifact is found.
+pub fn find_bazel_output(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     target: &str,
@@ -210,7 +243,10 @@ pub(crate) fn find_bazel_output(
     select_bazel_output_path(repo_root, &output, suffixes, artifact_name, target)
 }
 
-pub(crate) fn find_bazel_output_owned(
+/// # Errors
+///
+/// Returns an error if bazelisk cquery fails or no matching artifact is found.
+pub fn find_bazel_output_owned(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     build_args: &[String],

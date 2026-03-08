@@ -5,16 +5,17 @@ use crate::devices::{choose_from_menu, should_prompt_interactively};
 use crate::tools::{ToolRunner, capture_tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AndroidDestination {
-    pub(crate) serial: String,
-    pub(crate) state: String,
-    pub(crate) model: Option<String>,
-    pub(crate) device_name: Option<String>,
-    pub(crate) is_emulator: bool,
+pub struct AndroidDestination {
+    pub serial: String,
+    pub state: String,
+    pub model: Option<String>,
+    pub device_name: Option<String>,
+    pub is_emulator: bool,
 }
 
 impl AndroidDestination {
-    pub(crate) fn display_label(&self) -> String {
+    #[must_use]
+    pub fn display_label(&self) -> String {
         let kind = if self.is_emulator {
             "Emulator"
         } else {
@@ -28,7 +29,10 @@ impl AndroidDestination {
     }
 }
 
-pub(crate) fn resolve_android_device(
+/// # Errors
+///
+/// Returns an error if no devices are available when interactive selection is needed.
+pub fn resolve_android_device(
     repo_root: &Utf8Path,
     runner: &mut impl ToolRunner,
     requested_device: Option<&str>,
@@ -68,7 +72,8 @@ fn list_android_devices(
     )
 }
 
-pub(crate) fn parse_android_devices(output: &str) -> Vec<AndroidDestination> {
+#[must_use]
+pub fn parse_android_devices(output: &str) -> Vec<AndroidDestination> {
     output
         .lines()
         .map(str::trim)

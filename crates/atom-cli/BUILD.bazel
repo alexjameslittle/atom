@@ -9,13 +9,12 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//crates/atom-cng",
+        "//crates/atom-deploy",
         "//crates/atom-ffi",
         "//crates/atom-manifest",
         "//crates/atom-modules",
         "@crates//:camino",
         "@crates//:clap",
-        "@crates//:dialoguer",
-        "@crates//:serde_json",
     ],
 )
 
