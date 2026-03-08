@@ -30,6 +30,7 @@ pub enum AtomErrorCode {
 }
 
 impl AtomErrorCode {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ManifestNotFound => "MANIFEST_NOT_FOUND",
@@ -54,6 +55,7 @@ impl AtomErrorCode {
         }
     }
 
+    #[must_use]
     pub const fn exit_code(self) -> i32 {
         match self {
             Self::CliUsageError => 64,
@@ -85,6 +87,7 @@ pub struct AtomError {
 }
 
 impl AtomError {
+    #[must_use]
     pub fn new(code: AtomErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -93,6 +96,7 @@ impl AtomError {
         }
     }
 
+    #[must_use]
     pub fn with_path(
         code: AtomErrorCode,
         message: impl Into<String>,
@@ -105,10 +109,12 @@ impl AtomError {
         }
     }
 
+    #[must_use]
     pub fn exit_code(&self) -> i32 {
         self.code.exit_code()
     }
 
+    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut builder = FlatBufferBuilder::new();
         let code = builder.create_string(self.code.as_str());
@@ -158,6 +164,7 @@ pub struct AtomSlice {
 }
 
 impl AtomSlice {
+    #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             ptr: bytes.as_ptr(),
@@ -168,6 +175,7 @@ impl AtomSlice {
     /// # Safety
     ///
     /// The caller must guarantee that `ptr` and `len` describe a valid slice.
+    #[must_use]
     pub unsafe fn as_bytes<'a>(self) -> &'a [u8] {
         if self.ptr.is_null() || self.len == 0 {
             &[]
@@ -187,6 +195,7 @@ pub struct AtomOwnedBuffer {
 }
 
 impl AtomOwnedBuffer {
+    #[must_use]
     pub const fn empty() -> Self {
         Self {
             ptr: ptr::null_mut(),
@@ -195,6 +204,7 @@ impl AtomOwnedBuffer {
         }
     }
 
+    #[must_use]
     pub fn from_vec(mut data: Vec<u8>) -> Self {
         let buffer = Self {
             ptr: data.as_mut_ptr(),
@@ -208,6 +218,7 @@ impl AtomOwnedBuffer {
     /// # Safety
     ///
     /// The buffer must have been created by `AtomOwnedBuffer::from_vec`.
+    #[must_use]
     pub unsafe fn into_vec(self) -> Vec<u8> {
         if self.ptr.is_null() {
             Vec::new()

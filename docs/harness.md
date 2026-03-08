@@ -22,7 +22,8 @@ the tracked hooks in [.githooks](/Users/alexlittle/conductor/workspaces/atom/teh
 
 The verification harness runs:
 
-- `bazelisk build --config=clippy //...`
+- `bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation //...` (clippy via
+  `aspect_rules_lint`)
 - `bazelisk run //:format.check` (rustfmt, ktfmt, swiftformat, buildifier, prettier via
   `aspect_rules_lint`)
 - `bazelisk test //...`

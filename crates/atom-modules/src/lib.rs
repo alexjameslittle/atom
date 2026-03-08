@@ -102,6 +102,10 @@ struct RawModuleManifest {
 
 type LoadedModule = (ModuleRequest, Utf8PathBuf, ModuleManifest);
 
+/// # Errors
+///
+/// Returns an error if any module target is duplicated, metadata cannot be
+/// loaded, or the dependency graph contains a cycle.
 pub fn resolve_modules(
     repo_root: &Utf8Path,
     requests: &[ModuleRequest],
@@ -125,10 +129,10 @@ pub fn resolve_modules(
         loaded.push((request.clone(), metadata_path, manifest));
     }
 
-    resolve_loaded_modules(loaded)
+    resolve_loaded_modules(&loaded)
 }
 
-fn resolve_loaded_modules(loaded: Vec<LoadedModule>) -> AtomResult<Vec<ResolvedModule>> {
+fn resolve_loaded_modules(loaded: &[LoadedModule]) -> AtomResult<Vec<ResolvedModule>> {
     let mut by_id = HashMap::new();
     let mut by_target = HashMap::new();
 
@@ -523,7 +527,7 @@ mod tests {
 
     #[test]
     fn resolves_dependency_layers_by_target_label() {
-        let resolved = resolve_loaded_modules(vec![
+        let resolved = resolve_loaded_modules(&[
             (
                 ModuleRequest {
                     target_label: "//modules/a:a".to_owned(),

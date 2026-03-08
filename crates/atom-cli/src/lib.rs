@@ -52,10 +52,14 @@ enum RunPlatform {
     Android,
 }
 
+/// # Errors
+///
+/// Returns an error if the CLI command fails.
 pub fn run_from_env(cwd: &Utf8Path) -> AtomResult<CommandOutput> {
     run_from_args(std::env::args_os(), cwd)
 }
 
+#[must_use]
 pub fn run_process() -> CommandOutput {
     let cwd = std::env::current_dir()
         .ok()
@@ -72,6 +76,9 @@ pub fn run_process() -> CommandOutput {
     }
 }
 
+/// # Errors
+///
+/// Returns an error if the CLI command fails.
 pub fn run_from_args<I, T>(args: I, cwd: &Utf8Path) -> AtomResult<CommandOutput>
 where
     I: IntoIterator<Item = T>,
@@ -79,18 +86,18 @@ where
 {
     let cli = Cli::try_parse_from(args)
         .map_err(|error| AtomError::new(AtomErrorCode::CliUsageError, error.to_string()))?;
-    execute(cli, cwd)
+    execute(&cli, cwd)
 }
 
-fn execute(cli: Cli, cwd: &Utf8Path) -> AtomResult<CommandOutput> {
-    match cli.command {
+fn execute(cli: &Cli, cwd: &Utf8Path) -> AtomResult<CommandOutput> {
+    match &cli.command {
         Commands::Prebuild(args) => execute_prebuild(cwd, args),
         Commands::Run(args) => execute_run(cwd, args),
         Commands::Test => execute_test(cwd),
     }
 }
 
-fn execute_prebuild(cwd: &Utf8Path, args: PrebuildArgs) -> AtomResult<CommandOutput> {
+fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
     let manifest = load_manifest(&repo_root, &args.target)?;
     let modules = resolve_modules(&repo_root, &manifest.modules)?;
@@ -117,7 +124,7 @@ fn execute_prebuild(cwd: &Utf8Path, args: PrebuildArgs) -> AtomResult<CommandOut
     })
 }
 
-fn execute_run(cwd: &Utf8Path, args: RunArgs) -> AtomResult<CommandOutput> {
+fn execute_run(cwd: &Utf8Path, args: &RunArgs) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
     let manifest = load_manifest(&repo_root, &args.target)?;
     let (platform, enabled) = match args.platform {
@@ -180,9 +187,7 @@ fn workspace_directory() -> Option<Utf8PathBuf> {
 }
 
 fn resolve_command_root(cwd: &Utf8Path, workspace_directory: Option<&Utf8Path>) -> Utf8PathBuf {
-    workspace_directory
-        .map(Utf8PathBuf::from)
-        .unwrap_or_else(|| cwd.to_owned())
+    workspace_directory.map_or_else(|| cwd.to_owned(), Utf8PathBuf::from)
 }
 
 fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {

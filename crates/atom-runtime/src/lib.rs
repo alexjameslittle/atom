@@ -41,16 +41,13 @@ impl Runtime {
                 self.state = RuntimeState::Backgrounded;
                 Ok(())
             }
-            (RuntimeState::Backgrounded, AtomLifecycleEvent::Foreground) => {
+            (RuntimeState::Backgrounded, AtomLifecycleEvent::Foreground)
+            | (RuntimeState::Suspended, AtomLifecycleEvent::Resume) => {
                 self.state = RuntimeState::Running;
                 Ok(())
             }
             (RuntimeState::Backgrounded, AtomLifecycleEvent::Suspend) => {
                 self.state = RuntimeState::Suspended;
-                Ok(())
-            }
-            (RuntimeState::Suspended, AtomLifecycleEvent::Resume) => {
-                self.state = RuntimeState::Running;
                 Ok(())
             }
             (
@@ -61,7 +58,7 @@ impl Runtime {
                 self.state = RuntimeState::Terminated;
                 Ok(())
             }
-            (RuntimeState::Terminated, _) | (RuntimeState::Failed, _) => Err(AtomError::new(
+            (RuntimeState::Terminated | RuntimeState::Failed, _) => Err(AtomError::new(
                 AtomErrorCode::RuntimeTransitionInvalid,
                 "runtime cannot transition from a terminal state",
             )),
@@ -86,6 +83,9 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static RUNTIMES: LazyLock<Mutex<HashMap<AtomRuntimeHandle, Runtime>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// # Errors
+///
+/// Returns an error if the runtime registry mutex is poisoned.
 pub fn init_runtime() -> AtomResult<AtomRuntimeHandle> {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     let runtime = Runtime::start();
@@ -96,6 +96,10 @@ pub fn init_runtime() -> AtomResult<AtomRuntimeHandle> {
     Ok(handle)
 }
 
+/// # Errors
+///
+/// Returns an error if the handle is unknown, the registry is poisoned, or the
+/// state transition is invalid.
 pub fn handle_lifecycle(handle: AtomRuntimeHandle, event: AtomLifecycleEvent) -> AtomResult<()> {
     let mut runtimes = RUNTIMES
         .lock()

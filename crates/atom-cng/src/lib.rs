@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs;
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
@@ -50,6 +51,9 @@ pub struct GenerationPlan {
     pub warnings: Vec<String>,
 }
 
+/// # Errors
+///
+/// Returns an error if module metadata merging produces a conflict.
 pub fn build_generation_plan(
     manifest: &NormalizedManifest,
     modules: &[ResolvedModule],
@@ -141,6 +145,7 @@ pub fn build_generation_plan(
     })
 }
 
+#[must_use]
 pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
 
@@ -157,7 +162,7 @@ pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
         module_offsets.push(create_prebuild_module(
             &mut builder,
             id,
-            module.init_order as u32,
+            u32::try_from(module.init_order).unwrap_or(u32::MAX),
             target_label,
         ));
     }
@@ -216,6 +221,18 @@ pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
     builder.finished_data().to_vec()
 }
 
+/// # Errors
+///
+/// Returns an error if any generated file or directory cannot be written.
+///
+/// # Panics
+///
+/// Panics if platform configs are missing when the corresponding platform plan
+/// exists, or if schema files lack the expected generated prefix.
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential file-write orchestration that is clearest kept in one function"
+)]
 pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<Vec<Utf8PathBuf>> {
     write_file(
         &repo_root.join(&plan.schema.aggregate),
@@ -478,7 +495,7 @@ fn render_aggregate_schema(plan: &GenerationPlan) -> String {
         let relative = schema_file
             .strip_prefix(plan.build.generated_root.join("schema"))
             .expect("schema file should live under generated schema root");
-        contents.push_str(&format!("include \"{}\";\n", relative.as_str()));
+        let _ = writeln!(contents, "include \"{}\";", relative.as_str());
     }
     if !contents.is_empty() {
         contents.push('\n');
@@ -505,7 +522,7 @@ load(\"@build_bazel_rules_swift//swift:swift_library.bzl\", \"swift_library\")\n
     contents.push_str("        \"AtomBindings.swift\",\n");
     for module in modules {
         let label = metadata_target(&module.request.target_label, "_ios_srcs")?;
-        contents.push_str(&format!("        \"{label}\",\n"));
+        let _ = writeln!(contents, "        \"{label}\",");
     }
     contents.push_str("    ],\n");
     contents.push_str("    visibility = [\"//visibility:public\"],\n");
@@ -533,36 +550,37 @@ load(\"@rules_kotlin//kotlin:jvm.bzl\", \"kt_jvm_binary\", \"kt_jvm_library\")\n
     contents.push_str("kt_jvm_library(\n");
     contents.push_str("    name = \"generated_kotlin\",\n");
     contents.push_str("    srcs = [\n");
-    contents.push_str(&format!(
-        "        \"{}/AtomApplication.kt\",\n",
+    let _ = writeln!(
+        contents,
+        "        \"{}/AtomApplication.kt\",",
         source_root.as_str()
-    ));
-    contents.push_str(&format!(
-        "        \"{}/AtomBindings.kt\",\n",
+    );
+    let _ = writeln!(
+        contents,
+        "        \"{}/AtomBindings.kt\",",
         source_root.as_str()
-    ));
-    contents.push_str(&format!(
-        "        \"{}/MainActivity.kt\",\n",
+    );
+    let _ = writeln!(
+        contents,
+        "        \"{}/MainActivity.kt\",",
         source_root.as_str()
-    ));
+    );
     for module in modules {
         let label = metadata_target(&module.request.target_label, "_android_srcs")?;
-        contents.push_str(&format!("        \"{label}\",\n"));
+        let _ = writeln!(contents, "        \"{label}\",");
     }
     contents.push_str("    ],\n");
     contents.push_str("    visibility = [\"//visibility:public\"],\n");
     contents.push_str(")\n\n");
     contents.push_str("kt_jvm_binary(\n");
     contents.push_str("    name = \"app\",\n");
-    contents.push_str(&format!(
-        "    main_class = \"{}.AppEntryKt\",\n",
-        package_name
-    ));
+    let _ = writeln!(contents, "    main_class = \"{package_name}.AppEntryKt\",");
     contents.push_str("    srcs = [\n");
-    contents.push_str(&format!(
-        "        \"{}/AppEntry.kt\",\n",
+    let _ = writeln!(
+        contents,
+        "        \"{}/AppEntry.kt\",",
         source_root.as_str()
-    ));
+    );
     contents.push_str("    ],\n");
     contents.push_str("    deps = [\":generated_kotlin\"],\n");
     contents.push_str("    visibility = [\"//visibility:public\"],\n");
@@ -602,7 +620,7 @@ fn render_swift_bindings(modules: &[ResolvedModule]) -> String {
     let mut contents =
         String::from("import Foundation\n\nstruct AtomBindings {\n    static let modules = [\n");
     for module in modules {
-        contents.push_str(&format!("        \"{}\",\n", module.manifest.id));
+        let _ = writeln!(contents, "        \"{}\",", module.manifest.id);
     }
     contents.push_str("    ]\n}\n");
     contents
@@ -634,19 +652,17 @@ fn render_android_manifest_xml(app: &AppConfig, android: &AndroidConfig) -> Stri
 fn render_kotlin_application(app: &AppConfig, android: &AndroidConfig) -> String {
     let package_name = android.application_id.as_deref().unwrap_or_default();
     format!(
-        "package {}\n\nclass AtomApplication {{\n    val slug: String = \"{}\"\n}}\n",
-        package_name, app.slug
+        "package {package_name}\n\nclass AtomApplication {{\n    val slug: String = \"{}\"\n}}\n",
+        app.slug
     )
 }
 
 fn render_kotlin_bindings(modules: &[ResolvedModule], android: &AndroidConfig) -> String {
     let package_name = android.application_id.as_deref().unwrap_or_default();
-    let mut contents = format!(
-        "package {}\n\nobject AtomBindings {{\n    val modules = listOf(\n",
-        package_name
-    );
+    let mut contents =
+        format!("package {package_name}\n\nobject AtomBindings {{\n    val modules = listOf(\n");
     for module in modules {
-        contents.push_str(&format!("        \"{}\",\n", module.manifest.id));
+        let _ = writeln!(contents, "        \"{}\",", module.manifest.id);
     }
     contents.push_str("    )\n}\n");
     contents
@@ -655,16 +671,16 @@ fn render_kotlin_bindings(modules: &[ResolvedModule], android: &AndroidConfig) -
 fn render_kotlin_main_activity(app: &AppConfig, android: &AndroidConfig) -> String {
     let package_name = android.application_id.as_deref().unwrap_or_default();
     format!(
-        "package {}\n\nclass MainActivity {{\n    fun title(): String = \"{}\"\n}}\n",
-        package_name, app.name
+        "package {package_name}\n\nclass MainActivity {{\n    fun title(): String = \"{}\"\n}}\n",
+        app.name
     )
 }
 
 fn render_kotlin_app_entry(app: &AppConfig, android: &AndroidConfig) -> String {
     let package_name = android.application_id.as_deref().unwrap_or_default();
     format!(
-        "package {}\n\nfun main() {{\n    println(\"Booting {} ({})\")\n}}\n",
-        package_name, app.name, app.slug
+        "package {package_name}\n\nfun main() {{\n    println(\"Booting {} ({})\")\n}}\n",
+        app.name, app.slug
     )
 }
 

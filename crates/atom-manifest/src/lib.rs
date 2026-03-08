@@ -87,6 +87,9 @@ struct RawAndroid {
     target_sdk: Option<u32>,
 }
 
+/// # Errors
+///
+/// Returns an error if `label` is not a valid absolute Bazel label.
 pub fn metadata_target(label: &str, suffix: &str) -> AtomResult<String> {
     let (repository, rest) = if let Some(rest) = label.strip_prefix("//") {
         ("", rest)
@@ -106,12 +109,11 @@ pub fn metadata_target(label: &str, suffix: &str) -> AtomResult<String> {
         ));
     };
 
-    let (package, target) = match rest.split_once(':') {
-        Some((package, target)) => (package, target),
-        None => {
-            let inferred = rest.rsplit('/').next().unwrap_or(rest);
-            (rest, inferred)
-        }
+    let (package, target) = if let Some((package, target)) = rest.split_once(':') {
+        (package, target)
+    } else {
+        let inferred = rest.rsplit('/').next().unwrap_or(rest);
+        (rest, inferred)
     };
 
     if target.is_empty() {
@@ -128,6 +130,9 @@ pub fn metadata_target(label: &str, suffix: &str) -> AtomResult<String> {
     })
 }
 
+/// # Errors
+///
+/// Returns an error if bazel invocation fails or the output path is invalid.
 pub fn build_metadata_output(repo_root: &Utf8Path, target: &str) -> AtomResult<Utf8PathBuf> {
     invoke_bazel(repo_root, &["build", target])?;
     let output = capture_bazel(repo_root, &["cquery", target, "--output=files"])?;
@@ -150,6 +155,9 @@ pub fn build_metadata_output(repo_root: &Utf8Path, target: &str) -> AtomResult<U
     }
 }
 
+/// # Errors
+///
+/// Returns an error if the manifest cannot be loaded, parsed, or validated.
 pub fn load_manifest(repo_root: &Utf8Path, app_target: &str) -> AtomResult<NormalizedManifest> {
     let metadata_target = metadata_target(app_target, APP_METADATA_SUFFIX)?;
     let metadata_path = build_metadata_output(repo_root, &metadata_target)?;
@@ -414,7 +422,7 @@ fn validate_modules(labels: Vec<String>) -> AtomResult<Vec<ModuleRequest>> {
 }
 
 fn validate_absolute_label(value: &str, path: &str) -> AtomResult<()> {
-    if value.starts_with("//") || value.starts_with("@") {
+    if value.starts_with("//") || value.starts_with('@') {
         Ok(())
     } else {
         Err(AtomError::with_path(

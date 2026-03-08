@@ -7,7 +7,7 @@ cd "$repo_root"
 mode=${1:-verify}
 
 lint() {
-  bazelisk build --config=clippy //...
+  bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going //...
   bazelisk run //:format.check
   shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh
   actionlint
