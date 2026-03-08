@@ -13,6 +13,7 @@ mise trust -y "$repo_root/mise.toml" 2>/dev/null || true
 cd "$repo_root"
 
 mise install
+./scripts/setup-android-sdk.sh
 ./scripts/install-hooks.sh
 
 echo "bootstrap complete"
