@@ -22,10 +22,6 @@ use crate::ios::{
 ///
 /// Panics if platform configs are missing when the corresponding platform plan
 /// exists, or if schema files lack the expected generated prefix.
-#[expect(
-    clippy::too_many_lines,
-    reason = "sequential file-write orchestration that is clearest kept in one function"
-)]
 pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<Vec<Utf8PathBuf>> {
     write_file(
         &repo_root.join(&plan.schema.aggregate),
