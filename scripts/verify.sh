@@ -7,7 +7,7 @@ cd "$repo_root"
 mode=${1:-verify}
 
 lint() {
-  bazel build --config=clippy //...
+  bazelisk build --config=clippy //...
   find . -type f \( -name BUILD.bazel -o -name MODULE.bazel -o -name '*.bzl' \) -print0 | \
     xargs -0 buildifier -mode=check
   shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh
@@ -15,8 +15,8 @@ lint() {
 }
 
 test_suite() {
-  bazel test //...
-  bazel run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
+  bazelisk test //...
+  bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
 }
 
 case "$mode" in
@@ -27,7 +27,7 @@ case "$mode" in
     test_suite
     ;;
   verify)
-    bazel build --config=rustfmt-check //...
+    bazelisk build --config=rustfmt-check //...
     lint
     test_suite
     ;;

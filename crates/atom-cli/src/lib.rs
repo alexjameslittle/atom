@@ -195,14 +195,14 @@ fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
 }
 
 fn invoke_bazel(repo_root: &Utf8Path, args: &[&str]) -> AtomResult<()> {
-    let status = Command::new("bazel")
+    let status = Command::new("bazelisk")
         .args(args)
         .current_dir(repo_root)
         .status()
         .map_err(|error| {
             AtomError::new(
                 AtomErrorCode::ExternalToolFailed,
-                format!("failed to invoke bazel: {error}"),
+                format!("failed to invoke bazelisk: {error}"),
             )
         })?;
 
@@ -211,7 +211,7 @@ fn invoke_bazel(repo_root: &Utf8Path, args: &[&str]) -> AtomResult<()> {
     } else {
         Err(AtomError::new(
             AtomErrorCode::ExternalToolFailed,
-            format!("bazel {} exited with status {}", args.join(" "), status),
+            format!("bazelisk {} exited with status {}", args.join(" "), status),
         ))
     }
 }

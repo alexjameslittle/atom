@@ -20,10 +20,10 @@ This expects `mise` to already be installed, then installs the pinned toolchain 
 
 The verification harness runs:
 
-- `bazel build --config=rustfmt-check //...`
-- `bazel build --config=clippy //...`
-- `bazel test //...`
-- `bazel run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
+- `bazelisk build --config=rustfmt-check //...`
+- `bazelisk build --config=clippy //...`
+- `bazelisk test //...`
+- `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
 - `buildifier`
 - `shellcheck`
 - `actionlint`

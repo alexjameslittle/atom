@@ -5,5 +5,5 @@ This is the canonical Phase 1 consumer fixture for Bazel-first `atom prebuild --
 Run it from the repository root:
 
 ```sh
-bazel run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/tmp/hello-atom.plan
+bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/tmp/hello-atom.plan
 ```

@@ -15,7 +15,7 @@ Start here, then read [docs/README.md](/Users/alexlittle/conductor/workspaces/at
 - Bootstrap: `./scripts/bootstrap.sh`
 - Format: `mise run fmt`
 - Verify: `mise run verify`
-- Smoke prebuild: `bazel run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
+- Smoke prebuild: `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
 
 Local and CI verification must stay aligned. If you add a new required check, add it to [`scripts/verify.sh`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts/verify.sh).
 

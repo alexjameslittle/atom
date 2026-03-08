@@ -134,7 +134,7 @@ pub fn build_metadata_output(repo_root: &Utf8Path, target: &str) -> AtomResult<U
     let Some(first_line) = output.lines().find(|line| !line.trim().is_empty()) else {
         return Err(AtomError::new(
             AtomErrorCode::ManifestNotFound,
-            format!("bazel did not return an output path for {target}"),
+            format!("bazelisk did not return an output path for {target}"),
         ));
     };
 
@@ -142,7 +142,7 @@ pub fn build_metadata_output(repo_root: &Utf8Path, target: &str) -> AtomResult<U
         Utf8PathBuf::from_path_buf(first_line.into()).map_err(|_| {
             AtomError::new(
                 AtomErrorCode::ManifestParseError,
-                "bazel returned a non-UTF-8 metadata path",
+                "bazelisk returned a non-UTF-8 metadata path",
             )
         })
     } else {
@@ -426,14 +426,14 @@ fn validate_absolute_label(value: &str, path: &str) -> AtomResult<()> {
 }
 
 fn invoke_bazel(repo_root: &Utf8Path, args: &[&str]) -> AtomResult<()> {
-    let status = Command::new("bazel")
+    let status = Command::new("bazelisk")
         .args(args)
         .current_dir(repo_root)
         .status()
         .map_err(|error| {
             AtomError::new(
                 AtomErrorCode::ExternalToolFailed,
-                format!("failed to invoke bazel: {error}"),
+                format!("failed to invoke bazelisk: {error}"),
             )
         })?;
 
@@ -442,20 +442,20 @@ fn invoke_bazel(repo_root: &Utf8Path, args: &[&str]) -> AtomResult<()> {
     } else {
         Err(AtomError::new(
             AtomErrorCode::ExternalToolFailed,
-            format!("bazel {} exited with status {}", args.join(" "), status),
+            format!("bazelisk {} exited with status {}", args.join(" "), status),
         ))
     }
 }
 
 fn capture_bazel(repo_root: &Utf8Path, args: &[&str]) -> AtomResult<String> {
-    let output = Command::new("bazel")
+    let output = Command::new("bazelisk")
         .args(args)
         .current_dir(repo_root)
         .output()
         .map_err(|error| {
             AtomError::new(
                 AtomErrorCode::ExternalToolFailed,
-                format!("failed to invoke bazel: {error}"),
+                format!("failed to invoke bazelisk: {error}"),
             )
         })?;
 
@@ -463,7 +463,7 @@ fn capture_bazel(repo_root: &Utf8Path, args: &[&str]) -> AtomResult<String> {
         return Err(AtomError::new(
             AtomErrorCode::ExternalToolFailed,
             format!(
-                "bazel {} exited with status {}",
+                "bazelisk {} exited with status {}",
                 args.join(" "),
                 output.status
             ),
@@ -473,7 +473,7 @@ fn capture_bazel(repo_root: &Utf8Path, args: &[&str]) -> AtomResult<String> {
     String::from_utf8(output.stdout).map_err(|_| {
         AtomError::new(
             AtomErrorCode::ManifestParseError,
-            "bazel returned non-UTF-8 output",
+            "bazelisk returned non-UTF-8 output",
         )
     })
 }
