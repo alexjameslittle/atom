@@ -23,7 +23,7 @@ jobs:
     runs-on: namespace-profile-linux
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Cache mise installs
         uses: actions/cache@v4
@@ -62,7 +62,7 @@ jobs:
             runner: namespace-profile-macos
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Cache mise installs
         uses: actions/cache@v4
