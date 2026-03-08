@@ -51,8 +51,12 @@ build_apps() {
   # Build iOS app (simulator architecture).
   bazelisk build //generated/ios/hello-atom:app --ios_multi_cpus=sim_arm64
 
-  # TODO: Build Android app once rules_android android_binary is fixed.
-  # bazelisk build //generated/android/hello-atom:app
+  # Build Android app (requires ANDROID_HOME).
+  if [ -n "${ANDROID_HOME:-}" ]; then
+    bazelisk build //generated/android/hello-atom:app
+  else
+    echo "ANDROID_HOME not set, skipping Android build"
+  fi
 }
 
 case "$mode" in

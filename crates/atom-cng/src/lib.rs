@@ -519,8 +519,7 @@ mod tests {
         assert!(swift_scene_delegate.contains("Text(\"Hello Atom\")"));
         assert!(android_build.contains("rust_shared_library("));
         assert!(
-            android_build
-                .contains("load(\"@rules_android//android:rules.bzl\", \"android_binary\")")
+            android_build.contains("load(\"@rules_android//rules:rules.bzl\", \"android_binary\")")
         );
         assert!(android_build.contains("android_binary("));
         assert!(android_build.contains("manifest = \"AndroidManifest.generated.xml\""));
