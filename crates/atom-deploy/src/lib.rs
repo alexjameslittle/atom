@@ -328,7 +328,6 @@ mod tests {
                     vec![
                         "build".to_owned(),
                         "//generated/android/hello-atom:app".to_owned(),
-                        "--config=android".to_owned(),
                         "--android_platforms=//platforms:arm64-v8a".to_owned(),
                     ],
                 ),
@@ -337,7 +336,6 @@ mod tests {
                     vec![
                         "cquery".to_owned(),
                         "//generated/android/hello-atom:app".to_owned(),
-                        "--config=android".to_owned(),
                         "--android_platforms=//platforms:arm64-v8a".to_owned(),
                         "--output=files".to_owned(),
                     ],

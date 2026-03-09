@@ -1,9 +1,5 @@
 build --java_runtime_version=remotejdk_21
 
-# Android SDK/NDK toolchains — only added for Android builds so that
-# non-Android commands (lint, test) don't require the SDK to be installed.
-build:android --extra_toolchains=@androidsdk//:sdk-toolchain,@androidsdk//:all,@androidndk//:all
-
 build --@rules_rust//rust/settings:rustfmt.toml=//:rustfmt.toml
 
 # Linting via aspect_rules_lint

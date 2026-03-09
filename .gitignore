@@ -6,4 +6,5 @@
 .DS_Store
 node_modules/
 user.bazelrc
+.mise.local.toml
 /.android/

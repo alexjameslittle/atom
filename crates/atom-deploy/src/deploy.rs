@@ -163,7 +163,6 @@ pub fn deploy_android(
     let build_args = vec![
         "build".to_owned(),
         target.clone(),
-        "--config=android".to_owned(),
         "--android_platforms=//platforms:arm64-v8a".to_owned(),
     ];
 
