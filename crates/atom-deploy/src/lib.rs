@@ -313,6 +313,7 @@ mod tests {
             calls: Vec::new(),
             captures: VecDeque::from([
                 "bazel-bin/generated/android/hello-atom/app_unsigned.apk\nbazel-bin/generated/android/hello-atom/app.apk\n".to_owned(),
+                "4793\n".to_owned(),
             ]),
         };
 
@@ -326,7 +327,8 @@ mod tests {
                     "bazelisk".to_owned(),
                     vec![
                         "build".to_owned(),
-                        "//generated/android/hello-atom:app".to_owned()
+                        "//generated/android/hello-atom:app".to_owned(),
+                        "--android_platforms=//platforms:arm64-v8a".to_owned(),
                     ],
                 ),
                 (
@@ -334,6 +336,7 @@ mod tests {
                     vec![
                         "cquery".to_owned(),
                         "//generated/android/hello-atom:app".to_owned(),
+                        "--android_platforms=//platforms:arm64-v8a".to_owned(),
                         "--output=files".to_owned(),
                     ],
                 ),
@@ -354,6 +357,15 @@ mod tests {
                     vec![
                         "-s".to_owned(),
                         "emulator-5554".to_owned(),
+                        "logcat".to_owned(),
+                        "-c".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
                         "shell".to_owned(),
                         "am".to_owned(),
                         "start".to_owned(),
@@ -366,9 +378,19 @@ mod tests {
                     vec![
                         "-s".to_owned(),
                         "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "pidof".to_owned(),
+                        "build.atom.hello".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
                         "logcat".to_owned(),
-                        "-T".to_owned(),
-                        "1".to_owned(),
+                        "--pid".to_owned(),
+                        "4793".to_owned(),
                     ],
                 ),
             ]
@@ -419,11 +441,12 @@ mod tests {
             model: Some("Pixel 9".to_owned()),
             device_name: None,
             is_emulator: true,
+            avd_name: None,
         };
 
         assert_eq!(
             destination.display_label(),
-            "Emulator: Pixel 9 [emulator-5554]"
+            "Emulator: Pixel 9 [Emulator; emulator-5554]"
         );
     }
 }

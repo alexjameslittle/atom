@@ -549,7 +549,19 @@ mod tests {
         assert!(!android_build.contains("java_binary("));
         assert!(!android_build.contains("AppEntry.kt"));
         assert!(android_runtime_bridge.contains("hello_atom::atom_runtime_config()"));
-        assert!(android_main.contains("System.mapLibraryName(\"atom_runtime_jni\")"));
+
+        let android_app = fs::read_to_string(root.join(
+            "generated/android/hello-atom/src/main/kotlin/build/atom/hello/AtomApplication.kt",
+        ))
+        .expect("android application");
+        assert!(android_app.contains("class AtomApplication : Application()"));
+        assert!(android_app.contains("System.loadLibrary(\"atom_runtime_jni\")"));
+        assert!(android_app.contains("object AtomRuntimeBridge"));
+        assert!(android_main.contains("class MainActivity : Activity()"));
+        assert!(android_main.contains("atomApp?.sendLifecycle("));
+        assert!(android_build.contains("kt_jvm_library("));
+        assert!(android_build.contains("@androidsdk//:platforms/android-"));
+        assert!(!android_build.contains("cc_import("));
         assert!(
             !root
                 .join("generated/android/hello-atom/src/main/kotlin/build/atom/hello/AppEntry.kt")

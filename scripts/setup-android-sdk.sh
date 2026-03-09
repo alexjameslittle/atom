@@ -9,7 +9,10 @@ if [ -z "${ANDROID_HOME:-}" ]; then
   exit 1
 fi
 
-if [ -d "$ANDROID_HOME/platforms/android-35" ]; then
+if [ -d "$ANDROID_HOME/platforms/android-35" ] \
+  && [ -x "$ANDROID_HOME/platform-tools/adb" ] \
+  && [ -d "$ANDROID_HOME/system-images/android-35" ] \
+  && [ -d "$ANDROID_HOME/ndk" ]; then
   echo "Android SDK already installed at $ANDROID_HOME"
   exit 0
 fi
@@ -44,7 +47,23 @@ fi
 echo "Accepting Android SDK licenses..."
 yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
 
-echo "Installing Android SDK platform and build tools..."
-"$sdkmanager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+echo "Installing Android SDK platform, build tools, platform-tools, emulator, and system image..."
+"$sdkmanager" \
+  "platforms;android-35" \
+  "build-tools;35.0.0" \
+  "platform-tools" \
+  "emulator" \
+  "ndk;27.2.12479018" \
+  "system-images;android-35;google_apis;arm64-v8a" >/dev/null
+
+avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+if ! "$avdmanager" list avd 2>/dev/null | grep -q "atom_35"; then
+  echo "Creating Android emulator AVD (atom_35)..."
+  echo "no" | "$avdmanager" create avd \
+    --name "atom_35" \
+    --package "system-images;android-35;google_apis;arm64-v8a" \
+    --device "pixel_6" \
+    --force >/dev/null 2>&1
+fi
 
 echo "Android SDK installed at $ANDROID_HOME"

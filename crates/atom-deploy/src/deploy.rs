@@ -1,16 +1,17 @@
 use std::fs;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::devices::android::resolve_android_device;
+use crate::devices::android::{prepare_android_emulator, resolve_android_device};
 use crate::devices::ios::{IosDestinationKind, prepare_ios_simulator, resolve_ios_destination};
 use crate::progress::run_step;
 use crate::tools::{
-    ToolRunner, find_bazel_output, find_bazel_output_owned, run_bazel, run_bazel_owned, run_tool,
-    stream_tool,
+    ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool, stream_tool,
 };
 
 /// # Errors
@@ -157,16 +158,29 @@ pub fn deploy_android(
     requested_device: Option<&str>,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
+    let destination = resolve_android_device(repo_root, runner, requested_device)?;
     let target = generated_target(manifest, "android");
+    let build_args = vec![
+        "build".to_owned(),
+        target.clone(),
+        "--android_platforms=//platforms:arm64-v8a".to_owned(),
+    ];
 
     run_step(
         "Building Android app...",
         "Built Android app",
         "Android build failed",
-        || run_bazel(runner, repo_root, &["build", &target]),
+        || run_bazel_owned(runner, repo_root, &build_args),
     )?;
 
-    let apk = find_bazel_output(runner, repo_root, &target, &["app.apk", ".apk"], "APK")?;
+    let apk = find_bazel_output_owned(
+        runner,
+        repo_root,
+        &build_args,
+        &target,
+        &["app.apk", ".apk"],
+        "APK",
+    )?;
     let application_id = manifest.android.application_id.as_deref().ok_or_else(|| {
         AtomError::new(
             AtomErrorCode::InternalBug,
@@ -174,55 +188,77 @@ pub fn deploy_android(
         )
     })?;
 
-    let selected_serial = resolve_android_device(repo_root, runner, requested_device)?;
+    let serial = run_step(
+        "Preparing emulator...",
+        "Emulator ready",
+        "Emulator preparation failed",
+        || prepare_android_emulator(repo_root, runner, &destination),
+    )?;
+
     let component = format!("{application_id}/.MainActivity");
-    if let Some(serial) = selected_serial.as_deref() {
-        run_step(
-            "Installing app...",
-            "App installed",
-            "Installation failed",
-            || {
-                run_tool(
-                    runner,
-                    repo_root,
-                    "adb",
-                    &["-s", serial, "install", "-r", apk.as_str()],
-                )
-            },
-        )?;
-        run_step("Launching app...", "App launched", "Launch failed", || {
+    run_step(
+        "Installing app...",
+        "App installed",
+        "Installation failed",
+        || {
             run_tool(
                 runner,
                 repo_root,
                 "adb",
-                &["-s", serial, "shell", "am", "start", "-n", &component],
+                &["-s", &serial, "install", "-r", apk.as_str()],
             )
-        })?;
-        eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
-        stream_tool(
+        },
+    )?;
+    // Clear logcat before launch so we capture all logs from app start.
+    run_tool(runner, repo_root, "adb", &["-s", &serial, "logcat", "-c"])?;
+    run_step("Launching app...", "App launched", "Launch failed", || {
+        run_tool(
             runner,
             repo_root,
             "adb",
-            &["-s", serial, "logcat", "-T", "1"],
+            &["-s", &serial, "shell", "am", "start", "-n", &component],
         )
-    } else {
-        run_step(
-            "Installing app...",
-            "App installed",
-            "Installation failed",
-            || run_tool(runner, repo_root, "adb", &["install", "-r", apk.as_str()]),
-        )?;
-        run_step("Launching app...", "App launched", "Launch failed", || {
-            run_tool(
-                runner,
-                repo_root,
-                "adb",
-                &["shell", "am", "start", "-n", &component],
-            )
-        })?;
-        eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
-        stream_tool(runner, repo_root, "adb", &["logcat", "-T", "1"])
+    })?;
+
+    // Wait for the app process to appear, then stream only its logs (matching
+    // iOS --console behaviour which only shows the app's stdout/stderr).
+    let pid = wait_for_app_pid(runner, repo_root, &serial, application_id)?;
+
+    eprintln!("→ Streaming logs for {application_id} (pid {pid})... (Ctrl+C to stop)");
+    stream_tool(
+        runner,
+        repo_root,
+        "adb",
+        &["-s", &serial, "logcat", "--pid", &pid],
+    )
+}
+
+fn wait_for_app_pid(
+    runner: &mut impl ToolRunner,
+    repo_root: &Utf8Path,
+    serial: &str,
+    application_id: &str,
+) -> AtomResult<String> {
+    for _ in 0..10 {
+        if let Ok(output) = capture_tool(
+            runner,
+            repo_root,
+            "adb",
+            &["-s", serial, "shell", "pidof", application_id],
+        ) {
+            let pid = output.trim();
+            if !pid.is_empty() {
+                return Ok(pid.to_owned());
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
     }
+    Err(AtomError::new(
+        AtomErrorCode::ExternalToolFailed,
+        format!(
+            "could not find running process for {application_id} — the app may have crashed on launch"
+        ),
+    ))
 }
 
 #[must_use]

@@ -7,5 +7,7 @@ actionlint = "1.7.11"
 shellcheck = "0.11.0"
 
 [env]
-ANDROID_HOME = "{{config_root}}/.android/sdk"
+ANDROID_HOME = "{{env.HOME}}/.android/sdk"
+ANDROID_NDK_HOME = "{{env.HOME}}/.android/sdk/ndk/27.2.12479018"
+_.path = ["{{env.HOME}}/.android/sdk/platform-tools", "{{env.HOME}}/.android/sdk/emulator"]
 
