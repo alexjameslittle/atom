@@ -16,6 +16,8 @@ pub(crate) fn build_ios_plan(
         generated_root.join("BUILD.bazel"),
         generated_root.join("Info.generated.plist"),
         generated_root.join("LaunchScreen.storyboard"),
+        generated_root.join("atom_runtime.h"),
+        generated_root.join("atom_runtime_app_bridge.rs"),
         generated_root.join("AtomAppDelegate.swift"),
         generated_root.join("SceneDelegate.swift"),
         generated_root.join("AtomBindings.swift"),
@@ -41,6 +43,7 @@ pub(crate) fn render_ios_build_file(
         "ios/BUILD.bazel",
         context! {
             support_module => swift_support_module_name(app),
+            entry_crate_label => &app.entry_crate_label,
             module_labels,
             bundle_id => ios.bundle_id.as_deref().unwrap_or_default(),
             deployment_target => ios.deployment_target.as_deref().unwrap_or_default(),
@@ -63,6 +66,19 @@ pub(crate) fn render_ios_plist(app: &AppConfig, ios: &IosConfig) -> AtomResult<S
 
 pub(crate) fn render_ios_launch_storyboard() -> String {
     include_str!("templates/ios/LaunchScreen.storyboard").to_owned()
+}
+
+pub(crate) fn render_ios_runtime_header() -> String {
+    include_str!("templates/ios/atom_runtime.h").to_owned()
+}
+
+pub(crate) fn render_ios_runtime_bridge(app: &AppConfig) -> AtomResult<String> {
+    render(
+        "ios/atom_runtime_app_bridge.rs",
+        context! {
+            entry_crate_name => &app.entry_crate_name,
+        },
+    )
 }
 
 pub(crate) fn render_swift_app_delegate(_app: &AppConfig) -> String {

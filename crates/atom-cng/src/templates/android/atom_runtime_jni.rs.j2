@@ -9,7 +9,7 @@ type JInt = i32;
 
 #[unsafe(export_name = env!("ATOM_JNI_INIT_EXPORT"))]
 pub extern "system" fn atom_runtime_jni_init(_env: JniEnv, _class: JniClass) -> JLong {
-    atom_runtime::init_runtime(atom_runtime::RuntimeConfig::default())
+    atom_runtime::init_runtime({{ entry_crate_name }}::atom_runtime_config())
         .ok()
         .and_then(|handle| i64::try_from(handle).ok())
         .unwrap_or(0)

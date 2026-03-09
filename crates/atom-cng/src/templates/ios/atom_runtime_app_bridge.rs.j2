@@ -5,9 +5,6 @@ use atom_ffi::{
     write_error_buffer,
 };
 
-use crate::config::RuntimeConfig;
-use crate::registry;
-
 /// # Safety
 ///
 /// `out_handle` must be a valid writable pointer and `out_error_flatbuffer` must be null or a
@@ -23,24 +20,16 @@ pub unsafe extern "C" fn atom_app_init(
             AtomErrorCode::BridgeInvalidArgument,
             "atom_app_init requires a non-null out_handle",
         );
-        // SAFETY: the FFI caller owns `out_error_flatbuffer`.
         unsafe { write_error_buffer(out_error_flatbuffer, &error) };
         return error.exit_code();
     }
 
-    // TODO: Parse config_flatbuffer into RuntimeConfig when app crates provide
-    // module and plugin registrations via FlatBuffer or a Rust-side registration
-    // mechanism. For now, construct a default config.
-    let config = RuntimeConfig::default();
-
-    match registry::init_runtime(config) {
+    match atom_runtime::init_runtime({{ entry_crate_name }}::atom_runtime_config()) {
         Ok(handle) => {
-            // SAFETY: `out_handle` is non-null and points to caller-provided writable memory.
             unsafe {
                 ptr::write(out_handle, handle);
             }
             if !out_error_flatbuffer.is_null() {
-                // SAFETY: `out_error_flatbuffer` points to writable caller memory.
                 unsafe {
                     ptr::write(out_error_flatbuffer, AtomOwnedBuffer::empty());
                 }
@@ -48,7 +37,6 @@ pub unsafe extern "C" fn atom_app_init(
             0
         }
         Err(error) => {
-            // SAFETY: the FFI caller owns `out_error_flatbuffer`.
             unsafe { write_error_buffer(out_error_flatbuffer, &error) };
             error.exit_code()
         }
@@ -67,16 +55,14 @@ pub unsafe extern "C" fn atom_app_handle_lifecycle(
     let event = match AtomLifecycleEvent::try_from(event) {
         Ok(event) => event,
         Err(error) => {
-            // SAFETY: the FFI caller owns `out_error_flatbuffer`.
             unsafe { write_error_buffer(out_error_flatbuffer, &error) };
             return error.exit_code();
         }
     };
 
-    match registry::handle_lifecycle(handle, event) {
+    match atom_runtime::handle_lifecycle(handle, event) {
         Ok(()) => {
             if !out_error_flatbuffer.is_null() {
-                // SAFETY: `out_error_flatbuffer` points to writable caller memory.
                 unsafe {
                     ptr::write(out_error_flatbuffer, AtomOwnedBuffer::empty());
                 }
@@ -84,7 +70,6 @@ pub unsafe extern "C" fn atom_app_handle_lifecycle(
             0
         }
         Err(error) => {
-            // SAFETY: the FFI caller owns `out_error_flatbuffer`.
             unsafe { write_error_buffer(out_error_flatbuffer, &error) };
             error.exit_code()
         }
@@ -93,7 +78,7 @@ pub unsafe extern "C" fn atom_app_handle_lifecycle(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn atom_app_shutdown(handle: AtomRuntimeHandle) {
-    registry::shutdown_runtime(handle);
+    atom_runtime::shutdown_runtime(handle);
 }
 
 /// # Safety
@@ -101,6 +86,5 @@ pub extern "C" fn atom_app_shutdown(handle: AtomRuntimeHandle) {
 /// `buffer` must have been allocated by `AtomOwnedBuffer::from_vec`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atom_buffer_free(buffer: AtomOwnedBuffer) {
-    // SAFETY: buffers returned through the FFI are created by `AtomOwnedBuffer::from_vec`.
     let _ = unsafe { buffer.into_vec() };
 }

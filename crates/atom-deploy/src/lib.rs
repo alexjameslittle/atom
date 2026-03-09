@@ -77,6 +77,7 @@ mod tests {
                 name: "Hello Atom".to_owned(),
                 slug: "hello-atom".to_owned(),
                 entry_crate_label: "//examples/hello-world/apps/hello_atom:hello_atom".to_owned(),
+                entry_crate_name: "hello_atom".to_owned(),
             },
             ios: IosConfig {
                 enabled: true,

@@ -23,6 +23,7 @@ pub(crate) fn build_android_plan(
     let files = vec![
         generated_root.join("BUILD.bazel"),
         generated_root.join("AndroidManifest.generated.xml"),
+        generated_root.join("atom_runtime_jni.rs"),
         source_root.join("AtomApplication.kt"),
         source_root.join("AtomBindings.kt"),
         source_root.join("MainActivity.kt"),
@@ -113,6 +114,19 @@ pub(crate) fn render_kotlin_main_activity(
             name => &app.name,
             slug => &app.slug,
             generated_root => generated_root.as_str(),
+        },
+    )
+}
+
+pub(crate) fn render_android_runtime_jni(
+    app: &AppConfig,
+    android: &AndroidConfig,
+) -> AtomResult<String> {
+    render(
+        "android/atom_runtime_jni.rs",
+        context! {
+            entry_crate_name => &app.entry_crate_name,
+            jni_prefix => jni_prefix(android.application_id.as_deref().unwrap_or_default()),
         },
     )
 }
