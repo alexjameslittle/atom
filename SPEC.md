@@ -670,6 +670,7 @@ CNG consumes:
 - module-owned FlatBuffers schema files
 - selected platform set
 - build profile
+- config/CNG plugin contributions (activated by app metadata fields)
 
 Generated host customization MUST happen through module metadata or config/CNG plugins. Runtime
 plugins MUST NOT directly alter generated native host trees.
@@ -684,6 +685,11 @@ plugins MUST NOT directly alter generated native host trees.
 | entitlements          | deep merge                         | conflicting scalar values fail with `CNG_CONFLICT` |
 | generated sources     | concatenate in stable module order | never conflicts                                    |
 | init hooks            | stable module order                | never conflicts                                    |
+
+Config/CNG plugin contributions follow the same merge rules. Plugin contributions are merged after
+module metadata in plugin registration order. Conflicts between plugin contributions and module
+metadata MUST fail with `CNG_CONFLICT`. Plugin-contributed files are copied into the host tree
+during emission; plugin-contributed Bazel resources are appended to the platform build rule.
 
 The app manifest MAY later add explicit override sections. Until then, conflicting scalar values
 MUST fail generation.
@@ -702,6 +708,20 @@ function build_generation_plan(manifest, modules):
         plan.entitlements = deep_merge(plan.entitlements, module.entitlements) or error CNG_CONFLICT
         plan.generated_sources.extend(module.generated_sources)
         plan.module_bindings.append(module.id)
+
+    for entry in manifest.config_plugins:
+        plugin = instantiate_plugin(entry.id, entry.config)
+        plugin.validate() or error
+        if manifest.ios.enabled:
+            ios_contrib = plugin.contribute_ios(ctx)
+            plan.plist = deep_merge(plan.plist, ios_contrib.plist_entries) or error CNG_CONFLICT
+            plan.files.extend(ios_contrib.files)
+            plan.ios_resources.extend(ios_contrib.bazel_resources)
+        if manifest.android.enabled:
+            android_contrib = plugin.contribute_android(ctx)
+            plan.android_manifest = deep_merge(plan.android_manifest, android_contrib.android_manifest_entries) or error CNG_CONFLICT
+            plan.files.extend(android_contrib.files)
+            plan.android_resources.extend(android_contrib.bazel_resources)
 
     if manifest.ios.enabled:
         plan.ios = build_ios_plan(manifest, plan)
@@ -1299,16 +1319,84 @@ Conformance example:
 
 Required behavior:
 
+- config/CNG plugins are separate crates that implement a `ConfigPlugin` trait owned by `atom-cng`
+- `atom-cng` has no knowledge of any specific plugin's domain (icons, splash screens, etc.)
 - config/CNG plugins contribute deterministic host customization per Section 9
 - config/CNG plugins remain separate from runtime plugins and native modules
-- runtime plugins do not mutate generated native trees directly
+- runtime plugins MUST NOT mutate generated native trees directly
 - the same app may combine runtime plugins, native modules, and config/CNG plugins coherently
+
+#### 11.8.1 Config Plugin Trait
+
+A config plugin crate MUST implement:
+
+- `id() -> &str` returning a unique plugin identifier
+- `validate() -> AtomResult<()>` for plugin-owned config validation
+- `contribute_ios(ctx) -> AtomResult<PlatformContribution>` for iOS host customization
+- `contribute_android(ctx) -> AtomResult<PlatformContribution>` for Android host customization
+
+A `PlatformContribution` MUST contain:
+
+- `files`: list of files to copy or generate into the host tree
+- `plist_entries`: plist fragments merged per Section 9.2
+- `android_manifest_entries`: manifest fragments merged per Section 9.2
+- `bazel_resources`: additional resources for the platform build rule
+
+CNG MUST merge all config plugin contributions after module metadata and before host tree emission.
+Conflicts between plugin contributions and module metadata MUST fail with `CNG_CONFLICT`.
+
+#### 11.8.2 Plugin Configuration in Bazel
+
+`atom_app` MUST NOT hard-code plugin-specific fields. Each plugin crate ships a Starlark macro that
+returns a config dict. `atom_app` accepts these via a `config_plugins` parameter:
+
+```starlark
+load("@atom//crates/atom-cng-app-icon:defs.bzl", "atom_app_icon")
+
+atom_app(
+    ...
+    config_plugins = [
+        atom_app_icon(
+            ios = "assets/AppIcon.icon",
+            android = "assets/ic_launcher.png",
+        ),
+    ],
+)
+```
+
+Each plugin macro MUST return `{"id": "<plugin_id>", "config": {...}}`. `atom_app` MUST serialize
+the list into a `config_plugins` array in the metadata JSON. CNG MUST instantiate plugins by `id`,
+pass the opaque `config` to the plugin for parsing and validation, then call contribution methods.
+
+#### 11.8.3 App Icon Config Plugin (`atom-cng-app-icon`)
+
+The app icon plugin is the first concrete config/CNG plugin. It is a separate crate that implements
+`ConfigPlugin` and ships its own `atom_app_icon(...)` Starlark macro.
+
+The plugin owns its config shape. `atom-cng` knows nothing about icon formats.
+
+Per-destination behavior:
+
+- **iOS**: validate the path references a `.icon` bundle containing `icon.json`, copy the bundle
+  into `generated/ios/{slug}/AppIcon.icon/`, contribute `CFBundleIconFile = "AppIcon"` to plist, add
+  the bundle to `ios_application` resources
+- **Android**: validate the source path exists, copy into
+  `generated/android/{slug}/src/main/res/mipmap-xxxhdpi/ic_launcher.png`, contribute
+  `android:icon="@mipmap/ic_launcher"` to the manifest `<application>` element, add the res
+  directory to `android_binary` resource files
+- **macOS, Web**: future destinations; omitted until those platforms are supported
+
+When no icon paths are configured, the plugin MUST contribute nothing (no-op).
 
 Conformance example:
 
-- Input: canonical app with one runtime plugin, one native module, and one config/CNG plugin
-- Expected output: generated hosts reflect the config plugin's deterministic customization, the
-  runtime plugin remains a runtime-only concern, and no manual edits to generated roots are needed
+- Input: canonical app with one runtime plugin, one native module, and the `atom-cng-app-icon`
+  config plugin configured with `ios = "assets/AppIcon.icon"` and
+  `android = "assets/ic_launcher.png"`
+- Expected output: generated hosts include the correct icon files, plist/manifest reference them,
+  build rules include them as resources — all contributed by the plugin crate, not by `atom-cng`
+  itself. The runtime plugin remains a runtime-only concern, and no manual edits to generated roots
+  are needed. A third party could write a new config plugin crate following the same pattern.
 
 ### 11.9 Phase 6: Developer Workflow, Ecosystem, and Evaluation
 
