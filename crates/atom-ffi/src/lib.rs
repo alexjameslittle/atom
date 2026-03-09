@@ -25,6 +25,9 @@ pub enum AtomErrorCode {
     RuntimeTransitionInvalid,
     ModuleInitFailed,
     CliUsageError,
+    AutomationUnavailable,
+    AutomationTargetNotFound,
+    AutomationLogCaptureFailed,
     ExternalToolFailed,
     InternalBug,
 }
@@ -50,6 +53,9 @@ impl AtomErrorCode {
             Self::RuntimeTransitionInvalid => "RUNTIME_TRANSITION_INVALID",
             Self::ModuleInitFailed => "MODULE_INIT_FAILED",
             Self::CliUsageError => "CLI_USAGE_ERROR",
+            Self::AutomationUnavailable => "AUTOMATION_UNAVAILABLE",
+            Self::AutomationTargetNotFound => "AUTOMATION_TARGET_NOT_FOUND",
+            Self::AutomationLogCaptureFailed => "AUTOMATION_LOG_CAPTURE_FAILED",
             Self::ExternalToolFailed => "EXTERNAL_TOOL_FAILED",
             Self::InternalBug => "INTERNAL_BUG",
         }
@@ -73,7 +79,10 @@ impl AtomErrorCode {
             | Self::BridgeInitFailed
             | Self::RuntimeTransitionInvalid
             | Self::ModuleInitFailed => 68,
-            Self::ExternalToolFailed => 69,
+            Self::AutomationUnavailable
+            | Self::AutomationTargetNotFound
+            | Self::AutomationLogCaptureFailed
+            | Self::ExternalToolFailed => 69,
             Self::InternalBug => 70,
         }
     }
@@ -288,8 +297,27 @@ mod tests {
         assert_eq!(AtomErrorCode::ModuleDependencyCycle.exit_code(), 66);
         assert_eq!(AtomErrorCode::CngConflict.exit_code(), 67);
         assert_eq!(AtomErrorCode::RuntimeTransitionInvalid.exit_code(), 68);
+        assert_eq!(AtomErrorCode::AutomationUnavailable.exit_code(), 69);
+        assert_eq!(AtomErrorCode::AutomationTargetNotFound.exit_code(), 69);
+        assert_eq!(AtomErrorCode::AutomationLogCaptureFailed.exit_code(), 69);
         assert_eq!(AtomErrorCode::ExternalToolFailed.exit_code(), 69);
         assert_eq!(AtomErrorCode::InternalBug.exit_code(), 70);
+    }
+
+    #[test]
+    fn automation_error_codes_match_spec_strings() {
+        assert_eq!(
+            AtomErrorCode::AutomationUnavailable.as_str(),
+            "AUTOMATION_UNAVAILABLE"
+        );
+        assert_eq!(
+            AtomErrorCode::AutomationTargetNotFound.as_str(),
+            "AUTOMATION_TARGET_NOT_FOUND"
+        );
+        assert_eq!(
+            AtomErrorCode::AutomationLogCaptureFailed.as_str(),
+            "AUTOMATION_LOG_CAPTURE_FAILED"
+        );
     }
 
     #[test]

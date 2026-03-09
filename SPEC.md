@@ -38,8 +38,8 @@ Atom is not:
 - Define deterministic CNG behavior and concrete generated outputs.
 - Define a Bazel-first build contract using `bzlmod`.
 - Define a small CLI with machine-verifiable behavior.
-- Define a framework-owned developer automation surface for evidence capture and basic UI
-  interaction on runnable mobile hosts.
+- Define a framework-owned evaluation surface for logs, evidence capture, UI inspection, and basic
+  UI interaction on runnable platform destinations.
 - Keep the first implementation slice narrow enough to validate quickly.
 
 ### 2.2 Non-Goals
@@ -143,29 +143,30 @@ Planned public Bazel surface:
 
 Every user-facing failure MUST map to one of the following codes.
 
-| Domain   | Code                          | Meaning                                          | CLI Exit |
-| -------- | ----------------------------- | ------------------------------------------------ | -------- |
-| Manifest | `MANIFEST_NOT_FOUND`          | generated app metadata could not be found        | `65`     |
-| Manifest | `MANIFEST_PARSE_ERROR`        | generated app metadata could not be parsed       | `65`     |
-| Manifest | `MANIFEST_MISSING_FIELD`      | required field missing                           | `65`     |
-| Manifest | `MANIFEST_INVALID_VALUE`      | field type or value invalid                      | `65`     |
-| Manifest | `MANIFEST_UNKNOWN_KEY`        | unknown field encountered                        | `65`     |
-| Modules  | `MODULE_NOT_FOUND`            | configured module crate path missing             | `66`     |
-| Modules  | `MODULE_DUPLICATE_ID`         | duplicate module identifier                      | `66`     |
-| Modules  | `MODULE_DEPENDENCY_CYCLE`     | module dependency cycle detected                 | `66`     |
-| Modules  | `MODULE_MANIFEST_INVALID`     | module manifest could not be loaded or validated | `66`     |
-| CNG      | `CNG_CONFLICT`                | merge conflict with no legal resolution          | `67`     |
-| CNG      | `CNG_TEMPLATE_ERROR`          | template or codegen failure                      | `67`     |
-| CNG      | `CNG_WRITE_ERROR`             | generated files could not be written             | `67`     |
-| Bridge   | `BRIDGE_INVALID_ARGUMENT`     | native host passed invalid ABI data              | `68`     |
-| Bridge   | `BRIDGE_INIT_FAILED`          | runtime bridge bootstrap failed                  | `68`     |
-| Runtime  | `RUNTIME_TRANSITION_INVALID`  | invalid lifecycle transition                     | `68`     |
-| Runtime  | `MODULE_INIT_FAILED`          | module init or shutdown hook failed              | `68`     |
-| CLI      | `CLI_USAGE_ERROR`             | invalid CLI invocation                           | `64`     |
-| Auto     | `AUTOMATION_UNAVAILABLE`      | required automation backend unavailable          | `69`     |
-| Auto     | `AUTOMATION_TARGET_NOT_FOUND` | requested UI target could not be resolved        | `69`     |
-| Tooling  | `EXTERNAL_TOOL_FAILED`        | Bazel or another required tool failed            | `69`     |
-| Internal | `INTERNAL_BUG`                | unexpected framework bug or invariant break      | `70`     |
+| Domain   | Code                            | Meaning                                          | CLI Exit |
+| -------- | ------------------------------- | ------------------------------------------------ | -------- |
+| Manifest | `MANIFEST_NOT_FOUND`            | generated app metadata could not be found        | `65`     |
+| Manifest | `MANIFEST_PARSE_ERROR`          | generated app metadata could not be parsed       | `65`     |
+| Manifest | `MANIFEST_MISSING_FIELD`        | required field missing                           | `65`     |
+| Manifest | `MANIFEST_INVALID_VALUE`        | field type or value invalid                      | `65`     |
+| Manifest | `MANIFEST_UNKNOWN_KEY`          | unknown field encountered                        | `65`     |
+| Modules  | `MODULE_NOT_FOUND`              | configured module crate path missing             | `66`     |
+| Modules  | `MODULE_DUPLICATE_ID`           | duplicate module identifier                      | `66`     |
+| Modules  | `MODULE_DEPENDENCY_CYCLE`       | module dependency cycle detected                 | `66`     |
+| Modules  | `MODULE_MANIFEST_INVALID`       | module manifest could not be loaded or validated | `66`     |
+| CNG      | `CNG_CONFLICT`                  | merge conflict with no legal resolution          | `67`     |
+| CNG      | `CNG_TEMPLATE_ERROR`            | template or codegen failure                      | `67`     |
+| CNG      | `CNG_WRITE_ERROR`               | generated files could not be written             | `67`     |
+| Bridge   | `BRIDGE_INVALID_ARGUMENT`       | native host passed invalid ABI data              | `68`     |
+| Bridge   | `BRIDGE_INIT_FAILED`            | runtime bridge bootstrap failed                  | `68`     |
+| Runtime  | `RUNTIME_TRANSITION_INVALID`    | invalid lifecycle transition                     | `68`     |
+| Runtime  | `MODULE_INIT_FAILED`            | module init or shutdown hook failed              | `68`     |
+| CLI      | `CLI_USAGE_ERROR`               | invalid CLI invocation                           | `64`     |
+| Auto     | `AUTOMATION_UNAVAILABLE`        | required automation backend unavailable          | `69`     |
+| Auto     | `AUTOMATION_TARGET_NOT_FOUND`   | requested UI target could not be resolved        | `69`     |
+| Auto     | `AUTOMATION_LOG_CAPTURE_FAILED` | requested logs could not be collected            | `69`     |
+| Tooling  | `EXTERNAL_TOOL_FAILED`          | Bazel or another required tool failed            | `69`     |
+| Internal | `INTERNAL_BUG`                  | unexpected framework bug or invariant break      | `70`     |
 
 Canonical machine-readable error payload:
 
@@ -941,27 +942,57 @@ Rules:
 - When attached to an interactive TTY and `--device` is omitted, `atom run ios` and
   `atom run android` SHOULD offer an interactive destination picker.
 
-#### 9.8.4 Developer Evidence and Automation
+#### 9.8.4 Developer Evaluation, Evidence, and Automation
 
-Runnable mobile hosts MUST expose a framework-owned automation surface suitable for both developer
+Runnable debug targets MUST expose a framework-owned evaluation surface suitable for both developer
 debugging and agent verification.
+
+Definitions:
+
+- A `platform` is a supported app host family such as `ios`, `android`, and future values including
+  `macos`, `windows`, `linux`, and `tui`.
+- A `destination` is a debuggable runtime instance on a platform, such as an iOS simulator, iOS
+  device, Android emulator, Android device, local desktop process, or terminal session.
+- A destination advertises a capability set chosen from `launch`, `logs`, `screenshot`, `video`,
+  `inspect_ui`, `interact`, and `evaluate`.
+- An `evaluation run` is a sequenced execution of launch, wait, inspect, interact, and
+  artifact-capture steps against one selected destination, producing a machine-readable proof
+  bundle.
 
 Required capabilities:
 
-- destination discovery for simulators, emulators, and supported physical devices
+- destination discovery across supported platforms
+- log capture to an explicit output path
 - screenshot capture to an explicit output path
 - screen recording to an explicit output path
 - machine-readable UI inspection with element metadata and screen bounds
 - basic interaction: tap, long press, swipe/drag, and text entry
+- sequenced evaluation runs that can coordinate the above capabilities and retain proof artifacts
 
 Rules:
 
-- Evidence commands MUST work against the same destinations accepted by `atom run`.
+- All runnable iOS and Android targets accepted by `atom run` MUST also be surfaced as destinations.
+- Additional platforms and destination kinds MAY be added later without weakening the required iOS
+  and Android contracts.
+- Every destination MUST report a stable identifier, platform, destination kind, display name,
+  availability, debug state, and capability set.
+- Evidence and interaction commands MUST work against the same runnable targets accepted by
+  `atom run`, surfaced through the destination model.
+- Log capture MUST be able to collect Atom runtime logs plus relevant host-process logs for the
+  selected destination when the underlying platform tooling makes them available.
+- Log capture MUST write to a caller-selected output path and MUST fail with
+  `AUTOMATION_LOG_CAPTURE_FAILED` when collection was explicitly requested but could not be
+  completed.
 - Screenshot and video capture MUST be available without requiring Xcode project generation or
   Android Studio project generation.
 - UI inspection output MUST be machine-readable and include, at minimum, screen size plus per-node
   bounds, label or text, role or class, visibility, and enabled state when the platform backend can
   supply them.
+- Evaluation runs MUST be able to emit a step transcript and an artifact manifest that references
+  logs, screenshots, videos, and UI snapshots captured during the run.
+- Artifact-producing commands MUST allow caller-selected repo-relative or absolute output paths.
+- Video capture SHOULD be startable before the first interaction step and stoppable after the last
+  required step so one artifact can prove the full interaction flow.
 - The primary automation backend MUST be semantic, not pixel-only.
 - iOS automation MUST use a framework-owned XCUITest-based backend or a framework-owned
   WebDriverAgent-compatible backend. Coordinate-only `simctl` helpers are insufficient as the
@@ -982,12 +1013,15 @@ Required commands:
 - `atom prebuild --dry-run`
 - `atom run ios`
 - `atom run android`
+- `atom destinations`
 - `atom devices ios`
 - `atom devices android`
+- `atom evidence logs`
 - `atom evidence screenshot`
 - `atom evidence video`
 - `atom inspect ui`
 - `atom interact`
+- `atom evaluate run`
 - `atom test`
 
 ### 10.2 Exit Codes
@@ -1027,10 +1061,18 @@ consumes Atom via `bzlmod`.
 
 - MUST follow the Android deployment sequence defined in Section 9.8.3
 
-`atom devices ios` and `atom devices android`:
+`atom destinations`:
 
 - MUST support a machine-readable output mode suitable for agents
+- MUST report stable destination identifiers, platform, destination kind, display name,
+  availability, debug state, and capability set
+
+`atom devices ios` and `atom devices android`:
+
+- MUST be supported as compatibility commands for mobile-specific destination discovery
+- MUST support a machine-readable output mode suitable for agents
 - MUST report stable destination identifiers, destination kind, display name, and availability
+- MUST only return destinations for the requested mobile platform
 
 `atom evidence screenshot`:
 
@@ -1041,6 +1083,12 @@ consumes Atom via `bzlmod`.
 
 - MUST record a screen video from the selected destination
 - MUST write the video to the requested output path
+
+`atom evidence logs`:
+
+- MUST collect logs from the selected destination or launched app process
+- MUST write the logs to the requested output path
+- SHOULD preserve timestamps and stream ordering when the backend can provide them
 
 `atom inspect ui`:
 
@@ -1055,26 +1103,67 @@ consumes Atom via `bzlmod`.
 - MUST fail with `AUTOMATION_UNAVAILABLE` when the selected destination does not support the
   required backend
 
+`atom evaluate run`:
+
+- MUST execute a machine-readable evaluation plan against one selected destination
+- MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
+  interactions
+- MUST write a machine-readable artifact manifest plus referenced artifacts under the requested
+  output directory
+- MUST stop on the first failed required step and surface the underlying automation or tool failure
+
 `atom test`:
 
 - MUST invoke `bazel test //...`
 
-### 10.4 Automation Contracts
+### 10.4 Evaluation Contracts
 
 The exact automation transport is implementation-defined, but the public CLI contract is not.
 
-Automation contract rules:
+Evaluation contract rules:
 
+- Destinations are the canonical debug-target abstraction for evaluation.
 - Evidence and interaction commands MUST accept the same destination identifiers reported by
-  `atom devices`.
+  `atom destinations` and `atom devices`.
 - Implementations MAY expose additional subcommands, but they MUST preserve the required commands
   from Section 10.1.
 - Commands intended for agent use SHOULD offer stable machine-readable output without requiring ANSI
   terminal parsing.
-- Screenshot, video, and UI inspection artifacts MUST be writable to caller-selected repo-relative
-  or absolute output paths.
+- Screenshot, video, UI inspection, and log artifacts MUST be writable to caller-selected
+  repo-relative or absolute output paths.
+- Evaluation plans MUST be portable across supported platforms and destination kinds through
+  capability discovery rather than through hard-coded simulator-only assumptions.
+- An evaluation plan MUST support, at minimum, these step kinds: `launch`, `wait_for_ui`, `tap`,
+  `long_press`, `swipe`, `drag`, `type_text`, `screenshot`, `inspect_ui`, `start_video`,
+  `stop_video`, and `collect_logs`.
+- Interaction and wait steps MUST accept either a semantic target descriptor or an explicit
+  coordinate descriptor.
+- Evaluation output MUST include a machine-readable bundle manifest with the selected destination
+  id, platform, timestamps, executed steps, per-step status, and artifact paths.
 
-### 10.5 Reference Algorithm: `prebuild --dry-run`
+### 10.5 Reference Algorithm: `evaluate run`
+
+```text
+function cli_evaluate_run(args):
+    destination = resolve_destination(args.destination)
+    plan = load_evaluation_plan(args.plan)
+    require_capabilities(destination, plan)
+    session = create_evaluation_session(destination, args.output_dir)
+
+    if plan.collect_logs_on_start:
+        session.logs = start_log_capture(destination, args.output_dir)
+    if plan.record_video_on_start:
+        session.video = start_video_capture(destination, args.output_dir)
+
+    for step in plan.steps:
+        execute_step(destination, session, step) or error from underlying command
+
+    finalize_optional_captures(session)
+    write_bundle_manifest(session)
+    exit 0
+```
+
+### 10.6 Reference Algorithm: `prebuild --dry-run`
 
 ```text
 function cli_prebuild_dry_run(args):
@@ -1164,7 +1253,7 @@ Conformance example:
 - Expected output: runtime boots successfully and exposes navigation through the runtime plugin
   layer without app-specific host bootstrap changes
 
-### 11.6 Phase 5: Developer Workflow, Config Plugins, and Automation
+### 11.6 Phase 5: Developer Workflow, Config Plugins, and Evaluation
 
 Required behavior:
 
@@ -1172,17 +1261,21 @@ Required behavior:
 - generated outputs remain framework-owned
 - customization path exists through config/CNG plugins or module metadata without manual edits to
   generated roots
-- destination discovery, screenshot capture, video capture, UI inspection, and basic UI interaction
-  work on runnable mobile hosts
+- destination discovery, log capture, screenshot capture, video capture, UI inspection, and basic UI
+  interaction work on runnable iOS and Android destinations
+- `atom evaluate run` can orchestrate launch, waits, inspection, interactions, and artifact capture
+  into one proof bundle
 - automation backends are framework-owned and semantic-first per Section 9.8.4
+- the evaluation model remains extensible to additional platforms and destination kinds through
+  capability discovery
 
 Conformance example:
 
-- Input: run the canonical example app, inspect the UI, tap the primary visible control, and capture
-  a screenshot
+- Input: run the canonical example app, start an evaluation run with log capture and video
+  recording, inspect the UI, tap the primary visible control, and capture a screenshot
 - Expected output: framework CLI commands drive the app on a runnable destination, emit
-  machine-readable inspection data, write screenshot or video artifacts, and observe the expected UI
-  transition without manual interaction
+  machine-readable inspection data, write logs plus screenshot or video artifacts, produce an
+  artifact manifest, and observe the expected UI transition without manual interaction
 
 ### 11.7 Phase 6: Optional Renderer
 
@@ -1208,9 +1301,10 @@ specified in a separate renderer spec if and when that work begins.
 - **Should Android-on-Linux be first-class in the first host-capable milestone or follow macOS-first
   bring-up?** CI MUST test on both Linux and macOS. Android builds (APK generation) MUST work on
   Linux. iOS builds require macOS and MUST only run in macOS CI. See Section 14.
-- **Should screenshots, recordings, and UI interaction live in external ad hoc scripts or in the
-  framework?** In the framework. Agents and humans need a stable, supported CLI surface for proof of
-  behavior on real mobile hosts. See Sections 9.8.4, 10.1, and 11.6.
+- **Should screenshots, recordings, logs, and UI interaction live in external ad hoc scripts or in
+  the framework?** In the framework. Agents and humans need a stable, supported CLI surface for
+  proof of behavior on real mobile hosts and future platform destinations. See Sections 9.8.4, 10.1,
+  and 11.6.
 
 ## 14. CI Specification
 

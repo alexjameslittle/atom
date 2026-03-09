@@ -35,14 +35,15 @@ The target developer experience is:
 4. Compose first-party or third-party runtime plugins such as navigation.
 5. Run `atom prebuild` to generate iOS and Android host code.
 6. Build and run with Bazel-driven commands.
-7. Capture evidence and automate the running app through framework-owned CLI tools.
+7. Evaluate the running app through framework-owned CLI tools that can inspect, interact, and
+   collect proof artifacts.
 
 The app author should not need to write Swift, Kotlin, Gradle, or Xcode project files directly.
 Native code will still exist, but it should be generated, minimal, and framework-owned.
 
-The same principle should apply to debugging and proof. Screenshots, screen recordings, destination
-selection, and basic UI automation should be exposed through Atom itself instead of relying on a
-pile of ad hoc local scripts.
+The same principle should apply to debugging and proof. Logs, screenshots, screen recordings,
+platform and destination selection, and repeatable evaluation runs should be exposed through Atom
+itself instead of relying on a pile of ad hoc local scripts.
 
 ## Non-Goals For V1
 
@@ -199,24 +200,49 @@ Local validation in this environment shows `mise` has registry entries for:
 
 That means the toolchain plan is viable without inventing custom plugin wiring.
 
-## Device Automation Strategy
+## Evaluation and Debug Automation Strategy
 
-The framework needs two distinct but related debugging capabilities once runnable hosts exist:
+The framework needs three distinct but related debugging capabilities once runnable hosts exist:
 
 1. Evidence capture so agents and humans can prove what actually rendered.
 2. Live interaction so an agent can tap, type, scroll, and validate flows without hand-driving the
    simulator or device.
+3. Repeatable evaluation runs that combine launch, logs, screenshots, video, UI inspection, and
+   interactions into one proof bundle.
 
-The right abstraction is not "screen scraping only." It should be a framework-owned automation layer
+The right abstraction is not "screen scraping only." It should be a framework-owned evaluation layer
 with semantic UI access where the platform allows it.
+
+The core abstraction should be `platform + destination`:
+
+- A platform is the host family: `ios`, `android`, and future values like `macos`, `windows`,
+  `linux`, or `tui`.
+- A destination is a debuggable runtime instance on a platform such as a simulator, emulator,
+  physical device, local desktop process, or terminal session.
+- Destinations report a capability set so agents can discover whether launch, logs, screenshots,
+  video, UI inspection, interaction, or full evaluation runs are available before attempting a flow.
+- Mobile support is required first, but the abstraction should not hard-code "simulator only" or
+  "device only" assumptions into the public CLI.
 
 Planned command surface:
 
+- `atom destinations --json`
 - `atom devices <ios|android> [--json]`
-- `atom evidence screenshot <ios|android> --device <id> --output <path>`
-- `atom evidence video <ios|android> --device <id> --output <path>`
-- `atom inspect ui <ios|android> --device <id> [--output <path>]`
-- `atom interact <ios|android> ...` for tap, long-press, swipe, drag, and text entry
+- `atom evidence logs --destination <id> --output <path>`
+- `atom evidence screenshot --destination <id> --output <path>`
+- `atom evidence video --destination <id> --output <path>`
+- `atom inspect ui --destination <id> [--output <path>]`
+- `atom interact --destination <id> ...` for tap, long-press, swipe, drag, and text entry
+- `atom evaluate run --destination <id> --plan <path> --artifacts-dir <path>`
+
+Minimum evaluation plan capabilities:
+
+- Launch or attach to a destination.
+- Wait for a target UI state.
+- Capture logs, screenshots, and video.
+- Inspect the current UI tree.
+- Tap, long-press, swipe, drag, and type text.
+- Emit a machine-readable artifact manifest plus a step transcript for proof.
 
 Backend direction:
 
@@ -224,8 +250,12 @@ Backend direction:
   WebDriverAgent-compatible wrapper around XCTest. This is the only credible path to semantic
   interaction on iOS. `simctl` is good for lifecycle, screenshots, and recordings, but not as the
   primary UI interaction backend.
+- iOS log capture should combine Atom runtime logs with simulator or device log collection so one
+  evaluation run can correlate app behavior with visible UI evidence.
 - Android should use a framework-owned UI Automator-based backend for semantic hierarchy and
   gestures. `adb shell input` remains useful as a fallback, not as the primary contract.
+- Android log capture should combine Atom runtime logs with `logcat`-style device logs so failures
+  are inspectable without reproducing them manually.
 - Both platforms should still expose raw screenshots and video capture through native CLIs because
   they are cheap, reliable, and excellent proof artifacts.
 
@@ -233,9 +263,12 @@ Output expectations:
 
 - Every evidence command writes caller-selected artifacts that can be attached to reviews or agent
   transcripts.
+- Every evaluation run produces a proof bundle with logs, screenshots, video, UI snapshots, and a
+  step-by-step manifest of what the agent attempted.
 - UI inspection should emit machine-readable data with bounds, labels or text, and stable target
   identifiers when the backend can provide them.
-- The commands should be usable against simulators, emulators, and attached physical devices.
+- The commands should be usable against simulators, emulators, attached physical devices, and other
+  future platform destinations that expose the required capabilities.
 
 ## Planned Repository Layout
 
@@ -472,7 +505,7 @@ Exit criteria:
 - Runtime plugins can add app behavior without changing generated Swift or Kotlin boot code
 - Navigation is no longer a kernel concern, but a first-party capability built on top of it
 
-### Phase 5: Developer workflow, config plugins, and agent automation
+### Phase 5: Developer workflow, config plugins, and evaluation
 
 Deliverables:
 
@@ -480,20 +513,29 @@ Deliverables:
 - `atom run android`
 - `atom test`
 - Config/CNG plugin story for native customization
+- `atom destinations --json`
 - `atom devices ios|android --json`
+- `atom evidence logs`
 - `atom evidence screenshot`
 - `atom evidence video`
 - `atom inspect ui`
 - `atom interact` for tap, long-press, swipe, drag, and text entry
+- `atom evaluate run`
 - Framework-owned iOS automation backend based on XCTest semantics
 - Framework-owned Android automation backend based on UI Automator semantics
+- Proof bundles that capture logs, screenshots, video, UI snapshots, and step transcripts
 
 Exit criteria:
 
 - A new app can be created, prebuilt, and run with one documented workflow
-- An agent can launch the example app, capture a screenshot, record a short video, inspect the UI,
-  and drive at least one interaction end-to-end on simulator or emulator without manual clicking
+- An agent can launch the example app, collect logs, capture a screenshot, record a short video,
+  inspect the UI, and drive at least one interaction end-to-end on simulator or emulator without
+  manual clicking
+- The same workflow can be executed as one evaluation run that leaves behind a machine-readable
+  proof bundle
 - The same workflow supports attached physical devices when platform tooling allows it
+- The destination model is extensible to additional platforms and destination kinds without
+  redefining the proof model
 
 ### Phase 6: Optional renderer
 
@@ -517,6 +559,8 @@ Exit criteria:
 - What is the minimum ABI surface needed to keep the bridge stable as modules evolve?
 - Do we expose the iOS automation backend as a direct XCTest runner, or as a WDA-compatible service
   layered over the same primitives?
+- How opinionated should the `atom evaluate run` plan format be in V1: narrowly JSON-first, or broad
+  enough to support multiple serializations from day one?
 
 ## Recommended First Implementation Slice
 
