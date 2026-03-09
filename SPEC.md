@@ -17,6 +17,7 @@ Atom defines a way to build iOS and Android applications where:
 
 - application logic is authored in Rust
 - the shared runtime is headless and platform-agnostic
+- the runtime kernel provides one stable execution model for apps and runtime plugins
 - native host projects are continuously generated from config and module metadata
 - native platform code is minimized to generated Swift/Kotlin glue
 
@@ -32,6 +33,8 @@ Atom is not:
 
 - Define a stable Bazel-native app metadata model through `atom_app(...)`.
 - Define a Rust module format that is consumable by both the runtime and CNG.
+- Define a runtime plugin model that is distinct from native modules.
+- Define a config/CNG plugin model for deterministic native host customization.
 - Define deterministic CNG behavior and concrete generated outputs.
 - Define a Bazel-first build contract using `bzlmod`.
 - Define a small CLI with machine-verifiable behavior.
@@ -487,6 +490,17 @@ function start_runtime(normalized_manifest, resolved_modules):
     return handle
 ```
 
+### 7.6 Runtime Plugin Model
+
+- The runtime MUST provide a runtime plugin registration model that is distinct from native modules.
+- Runtime plugins MAY own plugin-local state, observe lifecycle and app events, and emit effects
+  through the runtime kernel.
+- Runtime plugins MUST use the kernel's dispatch, lifecycle, and task-execution semantics. They MUST
+  NOT introduce a second lifecycle model or direct generated-host customization path.
+- The runtime kernel MUST remain the single authority for lifecycle transitions, effect completion,
+  and dispatch ordering even when higher-level state-management libraries layer on top of it.
+- Navigation MAY be implemented as a first-party runtime plugin rather than as a kernel concern.
+
 ## 8. Bridge ABI Specification
 
 ### 8.1 Primitive Types
@@ -640,6 +654,9 @@ CNG consumes:
 - module-owned FlatBuffers schema files
 - selected platform set
 - build profile
+
+Generated host customization MUST happen through module metadata or config/CNG plugins. Runtime
+plugins MUST NOT directly alter generated native host trees.
 
 ### 9.2 Merge Rules
 
@@ -1129,12 +1146,13 @@ Conformance example:
   callbacks executing. `atom run android` launches the app on an Android emulator with Rust
   lifecycle callbacks executing via JNI.
 
-### 11.5 Phase 4: Core Runtime
+### 11.5 Phase 4: Runtime Kernel and Plugins
 
 Required behavior:
 
 - module init in resolved order
 - runtime lifecycle follows Section 7.2
+- runtime plugins follow Section 7.6
 - invalid transitions return `RUNTIME_TRANSITION_INVALID`
 
 Conformance example:
@@ -1142,14 +1160,18 @@ Conformance example:
 - Input sequence: `init -> background -> resume -> terminate`
 - Expected state sequence:
   `Created -> Initializing -> Running -> Backgrounded -> Running -> Terminating -> Terminated`
+- Input: canonical app with a first-party navigation plugin
+- Expected output: runtime boots successfully and exposes navigation through the runtime plugin
+  layer without app-specific host bootstrap changes
 
-### 11.6 Phase 5: Developer Workflow
+### 11.6 Phase 5: Developer Workflow, Config Plugins, and Automation
 
 Required behavior:
 
 - CLI commands behave as defined in Section 10
 - generated outputs remain framework-owned
-- customization path exists without manual edits to generated roots
+- customization path exists through config/CNG plugins or module metadata without manual edits to
+  generated roots
 - destination discovery, screenshot capture, video capture, UI inspection, and basic UI interaction
   work on runnable mobile hosts
 - automation backends are framework-owned and semantic-first per Section 9.8.4
