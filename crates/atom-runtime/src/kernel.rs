@@ -162,9 +162,10 @@ impl Runtime {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent};
+    use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
 
     use crate::config::{ModuleRegistration, RuntimeConfig};
+    use crate::plugin::{PluginContext, RuntimePlugin};
     use crate::state::RuntimeState;
 
     use super::Runtime;
@@ -341,5 +342,71 @@ mod tests {
         rt.handle_event(AtomLifecycleEvent::Terminate).unwrap();
         assert_eq!(rt.state(), RuntimeState::Terminated);
         assert!(*shutdown_called.lock().unwrap());
+    }
+
+    #[test]
+    fn plugins_follow_registration_and_shutdown_order() {
+        struct TestPlugin {
+            id: &'static str,
+            events: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl RuntimePlugin for TestPlugin {
+            fn id(&self) -> &str {
+                self.id
+            }
+
+            fn on_init(&mut self, _ctx: &PluginContext) -> AtomResult<()> {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("init:{}", self.id));
+                Ok(())
+            }
+
+            fn on_lifecycle(&mut self, event: AtomLifecycleEvent, state: RuntimeState) {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("lifecycle:{}:{event:?}:{state:?}", self.id));
+            }
+
+            fn on_shutdown(&mut self) {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("shutdown:{}", self.id));
+            }
+        }
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let config = RuntimeConfig::builder()
+            .plugin(TestPlugin {
+                id: "first",
+                events: Arc::clone(&events),
+            })
+            .plugin(TestPlugin {
+                id: "second",
+                events: Arc::clone(&events),
+            })
+            .build();
+
+        let mut rt = Runtime::start(1, config).expect("should start");
+        rt.handle_event(AtomLifecycleEvent::Background).unwrap();
+        rt.handle_event(AtomLifecycleEvent::Terminate).unwrap();
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                "init:first",
+                "init:second",
+                "lifecycle:first:Background:Backgrounded",
+                "lifecycle:second:Background:Backgrounded",
+                "lifecycle:first:Terminate:Terminating",
+                "lifecycle:second:Terminate:Terminating",
+                "shutdown:second",
+                "shutdown:first",
+            ]
+        );
     }
 }

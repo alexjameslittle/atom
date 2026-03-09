@@ -1,8 +1,31 @@
 # Hello World
 
 This is the canonical Phase 3 consumer fixture for Bazel-first Atom mobile hosts. It includes one
-Rust-backed module and one native-only module so the metadata pipeline and generated hosts exercise
-both `atom_module(...)` and `atom_native_module(...)`.
+Rust-backed module, one native-only module, and one runtime plugin crate outside `atom-runtime` so
+the metadata pipeline and generated hosts exercise `atom_module(...)`, `atom_native_module(...)`,
+and app-owned `atom_runtime_config()` registration.
+
+`apps/hello_atom` consumes the plugin as a normal Bazel Rust dependency:
+
+```starlark
+atom_app(
+    name = "hello_atom",
+    deps = [
+        "//crates/atom-runtime",
+        "//examples/hello-world/plugins/lifecycle_logger",
+    ],
+)
+```
+
+The app crate opts into the plugin in Rust:
+
+```rust
+pub fn atom_runtime_config() -> atom_runtime::RuntimeConfig {
+    atom_runtime::RuntimeConfig::builder()
+        .plugin(hello_world_lifecycle_logger::LifecycleLoggerPlugin::new())
+        .build()
+}
+```
 
 Run it from the repository root:
 

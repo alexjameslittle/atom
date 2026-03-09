@@ -5,8 +5,9 @@ load("@rules_kotlin//kotlin:jvm.bzl", "kt_jvm_library")
 
 rust_shared_library(
     name = "atom_runtime_jni",
-    srcs = ["//templates/atom_runtime_jni:lib.rs"],
+    srcs = ["atom_runtime_jni.rs"],
     crate_name = "atom_runtime_jni",
+    crate_root = "atom_runtime_jni.rs",
     edition = "2024",
     rustc_env = {
         "ATOM_JNI_INIT_EXPORT": "{{ jni_prefix }}_initRuntime",

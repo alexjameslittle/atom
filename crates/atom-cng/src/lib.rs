@@ -362,6 +362,7 @@ mod tests {
                 name: "Hello Atom".to_owned(),
                 slug: "hello-atom".to_owned(),
                 entry_crate_label: "//apps/hello_atom:hello_atom".to_owned(),
+                entry_crate_name: "hello_atom".to_owned(),
             },
             ios: IosConfig {
                 enabled: true,
@@ -439,7 +440,13 @@ mod tests {
                 .contains(&Utf8PathBuf::from("generated/ios/hello-atom/BUILD.bazel"))
         );
         assert!(plan.generated_files.contains(&Utf8PathBuf::from(
+            "generated/ios/hello-atom/atom_runtime_app_bridge.rs"
+        )));
+        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
             "generated/android/hello-atom/AndroidManifest.generated.xml"
+        )));
+        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
+            "generated/android/hello-atom/atom_runtime_jni.rs"
         )));
         assert!(!render_prebuild_plan(&plan).is_empty());
     }
@@ -479,6 +486,12 @@ mod tests {
         let ios_launch_storyboard =
             fs::read_to_string(root.join("generated/ios/hello-atom/LaunchScreen.storyboard"))
                 .expect("ios launch storyboard");
+        let ios_runtime_header =
+            fs::read_to_string(root.join("generated/ios/hello-atom/atom_runtime.h"))
+                .expect("ios runtime header");
+        let ios_runtime_bridge =
+            fs::read_to_string(root.join("generated/ios/hello-atom/atom_runtime_app_bridge.rs"))
+                .expect("ios runtime bridge");
         let swift_app_delegate =
             fs::read_to_string(root.join("generated/ios/hello-atom/AtomAppDelegate.swift"))
                 .expect("swift app delegate");
@@ -490,6 +503,9 @@ mod tests {
         let android_build =
             fs::read_to_string(root.join("generated/android/hello-atom/BUILD.bazel"))
                 .expect("android build");
+        let android_runtime_bridge =
+            fs::read_to_string(root.join("generated/android/hello-atom/atom_runtime_jni.rs"))
+                .expect("android runtime bridge");
         let android_main =
             fs::read_to_string(root.join(
                 "generated/android/hello-atom/src/main/kotlin/build/atom/hello/MainActivity.kt",
@@ -499,7 +515,10 @@ mod tests {
         assert!(ios_build.contains("ios_application("));
         assert!(ios_build.contains("bundle_id = \"build.atom.hello\""));
         assert!(ios_build.contains("minimum_os_version = \"17.0\""));
-        assert!(ios_build.contains("atom-runtime-swift-bridge"));
+        assert!(ios_build.contains("swift_interop_hint("));
+        assert!(ios_build.contains("rust_static_library("));
+        assert!(ios_build.contains("hdrs = [\"atom_runtime.h\"]"));
+        assert!(ios_build.contains("\":atom_runtime_swift_bridge\""));
         assert!(!ios_build.contains("swift_binary("));
         assert!(ios_build.contains("resources = [\"LaunchScreen.storyboard\"]"));
         assert!(ios_plist.contains("<key>CFBundleShortVersionString</key>"));
@@ -512,6 +531,8 @@ mod tests {
         assert!(ios_plist.contains("<key>UISceneDelegateClassName</key>"));
         assert!(ios_plist.contains("atom_hello_atom_support.AtomSceneDelegate"));
         assert!(ios_launch_storyboard.contains("launchScreen=\"YES\""));
+        assert!(ios_runtime_header.contains("typedef struct AtomSlice"));
+        assert!(ios_runtime_bridge.contains("hello_atom::atom_runtime_config()"));
         assert!(swift_app_delegate.contains("configurationForConnecting"));
         assert!(swift_main.contains("UIApplicationMain("));
         assert!(swift_main.contains("NSStringFromClass(AtomAppDelegate.self)"));
@@ -524,8 +545,10 @@ mod tests {
         assert!(android_build.contains("android_binary("));
         assert!(android_build.contains("manifest = \"AndroidManifest.generated.xml\""));
         assert!(android_build.contains("custom_package = \"build.atom.hello\""));
+        assert!(android_build.contains("srcs = [\"atom_runtime_jni.rs\"]"));
         assert!(!android_build.contains("java_binary("));
         assert!(!android_build.contains("AppEntry.kt"));
+        assert!(android_runtime_bridge.contains("hello_atom::atom_runtime_config()"));
         assert!(android_main.contains("System.mapLibraryName(\"atom_runtime_jni\")"));
         assert!(
             !root

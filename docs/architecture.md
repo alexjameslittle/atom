@@ -42,6 +42,7 @@ Dependency direction should move one way:
   - Module lifecycle management: init in dependency order, shutdown in reverse
   - Runtime plugin host API (`RuntimePlugin` trait) for observing lifecycle events and owning
     plugin-local state
+  - App-owned runtime config assembly through `atom_runtime_config()` in the app crate
   - Tokio `current_thread` async runtime available via `PluginContext`
   - Structured logging via `tracing` at lifecycle transitions
   - Handle-based registry for FFI access from generated native hosts
@@ -55,6 +56,8 @@ Dependency direction should move one way:
 3. `atom-manifest` loads app metadata from Bazel outputs.
 4. `atom-modules` loads module metadata from Bazel outputs and orders dependencies.
 5. `atom-cng` produces a deterministic generation plan and optional emitted host tree.
+6. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
+   kernel-side plugin discovery.
 
 ## Boundaries To Preserve
 

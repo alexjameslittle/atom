@@ -13,4 +13,8 @@ atom_app(
         "//examples/hello-world/modules/native_echo:native_echo",
     ],
     slug = "hello-atom",
+    deps = [
+        "//crates/atom-runtime",
+        "//examples/hello-world/plugins/lifecycle_logger",
+    ],
 )

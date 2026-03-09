@@ -14,6 +14,7 @@ pub(crate) struct RawDocument {
     pub(crate) name: String,
     pub(crate) slug: String,
     pub(crate) entry_crate_label: String,
+    pub(crate) entry_crate_name: String,
     pub(crate) generated_root: Option<String>,
     pub(crate) watch: Option<bool>,
     pub(crate) ios: Option<RawIos>,
@@ -55,11 +56,19 @@ pub(crate) fn validate_app(raw: &RawDocument) -> AtomResult<AppConfig> {
         ));
     }
     validate_absolute_label(&raw.entry_crate_label, "entry_crate_label")?;
+    if !is_crate_name(&raw.entry_crate_name) {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ManifestInvalidValue,
+            "entry_crate_name must match ^[A-Za-z_][A-Za-z0-9_]*$",
+            "entry_crate_name",
+        ));
+    }
 
     Ok(AppConfig {
         name: raw.name.clone(),
         slug: raw.slug.clone(),
         entry_crate_label: raw.entry_crate_label.clone(),
+        entry_crate_name: raw.entry_crate_name.clone(),
     })
 }
 
@@ -265,6 +274,16 @@ fn is_reverse_dns(value: &str) -> bool {
                 .chars()
                 .all(|character| character.is_ascii_alphanumeric() || character == '_')
     })
+}
+
+fn is_crate_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    match characters.next() {
+        Some(character) if character.is_ascii_alphabetic() || character == '_' => (),
+        _ => return false,
+    }
+
+    characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn is_deployment_target(value: &str) -> bool {

@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub name: String,
     pub slug: String,
     pub entry_crate_label: String,
+    pub entry_crate_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +169,7 @@ mod tests {
   "name": "Hello Atom",
   "slug": "hello-atom",
   "entry_crate_label": "//apps/hello_atom:hello_atom",
+  "entry_crate_name": "hello_atom",
   "generated_root": "generated",
   "watch": false,
   "ios": {
@@ -195,6 +197,7 @@ mod tests {
             manifest.app.entry_crate_label,
             "//apps/hello_atom:hello_atom"
         );
+        assert_eq!(manifest.app.entry_crate_name, "hello_atom");
         assert_eq!(manifest.modules.len(), 1);
     }
 
@@ -207,6 +210,7 @@ mod tests {
   "name": "Hello Atom",
   "slug": "hello-atom",
   "entry_crate_label": "//apps/hello_atom:hello_atom",
+  "entry_crate_name": "hello_atom",
   "unknown": true,
   "modules": []
 }"#,
@@ -226,6 +230,7 @@ mod tests {
   "name": "Hello Atom",
   "slug": "hello-atom",
   "entry_crate_label": "//apps/hello_atom:hello_atom",
+  "entry_crate_name": "hello_atom",
   "ios": {
     "enabled": true,
     "bundle_id": "build.atom.hello",
@@ -248,5 +253,24 @@ mod tests {
             crate::bazel::metadata_target("@vendor//modules/device_info:device_info", "_meta")
                 .expect("external label should be supported");
         assert_eq!(target, "@vendor//modules/device_info:device_info_meta");
+    }
+
+    #[test]
+    fn rejects_invalid_entry_crate_name() {
+        let (_directory, root, metadata_path) = write_metadata(
+            r#"{
+  "kind": "atom_app",
+  "target_label": "//apps/hello_atom:hello_atom",
+  "name": "Hello Atom",
+  "slug": "hello-atom",
+  "entry_crate_label": "//apps/hello_atom:hello_atom",
+  "entry_crate_name": "hello-atom",
+  "modules": []
+}"#,
+        );
+
+        let error = load_manifest_from_path(&root, "//apps/hello_atom:hello_atom", &metadata_path)
+            .expect_err("hyphenated crate name should fail");
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::ManifestInvalidValue);
     }
 }

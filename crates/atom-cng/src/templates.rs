@@ -14,6 +14,11 @@ pub(crate) fn env() -> Environment<'static> {
     )
     .expect("ios/Info.generated.plist template");
     env.add_template(
+        "ios/atom_runtime_app_bridge.rs",
+        include_str!("templates/ios/atom_runtime_app_bridge.rs.j2"),
+    )
+    .expect("ios/atom_runtime_app_bridge.rs template");
+    env.add_template(
         "ios/SceneDelegate.swift",
         include_str!("templates/ios/SceneDelegate.swift.j2"),
     )
@@ -48,6 +53,11 @@ pub(crate) fn env() -> Environment<'static> {
         include_str!("templates/android/MainActivity.kt.j2"),
     )
     .expect("android/MainActivity.kt template");
+    env.add_template(
+        "android/atom_runtime_jni.rs",
+        include_str!("templates/android/atom_runtime_jni.rs.j2"),
+    )
+    .expect("android/atom_runtime_jni.rs template");
     env.add_template(
         "schema/atom.fbs",
         include_str!("templates/schema/atom.fbs.j2"),

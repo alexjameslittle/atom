@@ -58,6 +58,7 @@ def atom_app(
         "name": app_name if app_name != None else name,
         "slug": slug if slug != None else name.replace("_", "-"),
         "entry_crate_label": target_label,
+        "entry_crate_name": crate_name if crate_name != None else name.replace("-", "_"),
         "generated_root": generated_root,
         "watch": watch,
         "ios": {
