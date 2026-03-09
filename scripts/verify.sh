@@ -32,7 +32,7 @@ lint() {
   # shellcheck disable=SC2086
   bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going $VERIFY_PACKAGES
   bazelisk run //:format.check
-  shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh
+  shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh .agents/skills/*/scripts/*.sh
   actionlint
 }
 
