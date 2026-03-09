@@ -23,8 +23,7 @@ pub fn validate_transition(
         // iOS fires sceneWillEnterForeground on initial launch when the runtime is already
         // Running, so treat Foreground while Running as a no-op alongside the normal
         // Backgrounded/Suspended → Running transitions.
-        (RuntimeState::Running, AtomLifecycleEvent::Foreground)
-        | (RuntimeState::Backgrounded, AtomLifecycleEvent::Foreground)
+        (RuntimeState::Running | RuntimeState::Backgrounded, AtomLifecycleEvent::Foreground)
         | (RuntimeState::Suspended, AtomLifecycleEvent::Resume) => Ok(RuntimeState::Running),
         (RuntimeState::Backgrounded, AtomLifecycleEvent::Suspend) => Ok(RuntimeState::Suspended),
         (
