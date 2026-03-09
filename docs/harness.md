@@ -17,7 +17,7 @@ the tracked hooks in [.githooks](/Users/alexlittle/conductor/workspaces/atom/teh
 ## Local Guardrails
 
 - `pre-commit` runs formatting and repository-level linters.
-- `pre-push` runs the full verification harness.
+- `pre-push` runs lint plus host tests and the prebuild dry-run. Example app builds rely on CI.
 - `mise run verify` is the canonical local validation command.
 
 The verification harness runs:

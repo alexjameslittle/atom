@@ -87,6 +87,10 @@ case "$mode" in
     generate_example_app
     build_android_app
     ;;
+  pre-push)
+    lint
+    test_suite
+    ;;
   verify)
     lint
     test_suite

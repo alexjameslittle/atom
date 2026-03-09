@@ -69,7 +69,6 @@ jobs:
           - platform: android
             runner: namespace-profile-linux
             verify_mode: build-android
-            setup_android: 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -78,7 +77,6 @@ jobs:
         uses: ./.github/actions/setup
         with:
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          setup-android: ${{ matrix.setup_android || 'false' }}
 
       - name: Build ${{ matrix.platform }} app
         run: mise exec -- ./scripts/verify.sh ${{ matrix.verify_mode }}
