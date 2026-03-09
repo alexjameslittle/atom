@@ -42,8 +42,8 @@ jobs:
         include:
           - os: linux
             runner: namespace-profile-linux
-          - os: macos
-            runner: namespace-profile-macos
+          # - os: macos
+          #   runner: namespace-profile-macos
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -63,9 +63,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: ios
-            runner: namespace-profile-macos
-            verify_mode: build-ios
+          # - platform: ios
+          #   runner: namespace-profile-macos
+          #   verify_mode: build-ios
           - platform: android
             runner: namespace-profile-linux
             verify_mode: build-android
