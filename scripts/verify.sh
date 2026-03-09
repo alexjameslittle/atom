@@ -57,7 +57,7 @@ build_ios_app() {
 build_android_app() {
   # Build Android app (requires ANDROID_HOME).
   if [ -n "${ANDROID_HOME:-}" ]; then
-    bazelisk build //generated/android/hello-atom:app
+    bazelisk build //generated/android/hello-atom:app --android_platforms=//platforms:arm64-v8a
   else
     echo "ANDROID_HOME not set, skipping Android build"
   fi

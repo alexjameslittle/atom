@@ -1,8 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-# Installs the Android SDK command-line tools and accepts licenses.
-# Requires ANDROID_HOME to be set (mise.toml sets this automatically).
+# Installs the Android SDK, NDK, emulator, and a default AVD globally.
+# Intended for local development — CI uses android-actions/setup-android instead.
+#
+# Requires ANDROID_HOME to be set (mise.toml sets this to ~/.android/sdk).
 
 if [ -z "${ANDROID_HOME:-}" ]; then
   echo "ANDROID_HOME is not set" >&2
@@ -47,7 +49,7 @@ fi
 echo "Accepting Android SDK licenses..."
 yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
 
-echo "Installing Android SDK platform, build tools, platform-tools, emulator, and system image..."
+echo "Installing Android SDK packages..."
 "$sdkmanager" \
   "platforms;android-35" \
   "build-tools;35.0.0" \
