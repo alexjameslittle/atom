@@ -1,31 +1,23 @@
+mod kernel;
+
 use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-use atom_ffi::{
-    AtomError, AtomErrorCode, AtomLifecycleEvent, AtomOwnedBuffer, AtomResult, AtomRuntimeHandle,
-    AtomSlice, write_error_buffer,
+pub use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
+use atom_ffi::{AtomOwnedBuffer, AtomRuntimeHandle, AtomSlice, write_error_buffer};
+pub use kernel::{
+    LifecycleTransition, RuntimeApp, RuntimeBuilder, RuntimeContext, RuntimeKernel,
+    RuntimeLogEntry, RuntimeLogLevel, RuntimeModule, RuntimePlugin, RuntimeState,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeState {
-    Created,
-    Initializing,
-    Running,
-    Backgrounded,
-    Suspended,
-    Terminating,
-    Terminated,
-    Failed,
-}
-
 #[derive(Debug, Clone, Copy)]
-struct Runtime {
+struct LifecycleRuntime {
     state: RuntimeState,
 }
 
-impl Runtime {
+impl LifecycleRuntime {
     fn start() -> Self {
         let mut runtime = Self {
             state: RuntimeState::Created,
@@ -80,7 +72,7 @@ impl Runtime {
 }
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
-static RUNTIMES: LazyLock<Mutex<HashMap<AtomRuntimeHandle, Runtime>>> =
+static RUNTIMES: LazyLock<Mutex<HashMap<AtomRuntimeHandle, LifecycleRuntime>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// # Errors
@@ -88,7 +80,7 @@ static RUNTIMES: LazyLock<Mutex<HashMap<AtomRuntimeHandle, Runtime>>> =
 /// Returns an error if the runtime registry mutex is poisoned.
 pub fn init_runtime() -> AtomResult<AtomRuntimeHandle> {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-    let runtime = Runtime::start();
+    let runtime = LifecycleRuntime::start();
     let mut runtimes = RUNTIMES
         .lock()
         .map_err(|_| AtomError::new(AtomErrorCode::InternalBug, "runtime registry poisoned"))?;

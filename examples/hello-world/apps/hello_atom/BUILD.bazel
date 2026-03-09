@@ -1,4 +1,5 @@
 load("@atom//bzl/atom:defs.bzl", "atom_app")
+load("@rules_rust//rust:defs.bzl", "rust_test")
 
 atom_app(
     name = "hello_atom",
@@ -13,4 +14,10 @@ atom_app(
         "//examples/hello-world/modules/native_echo:native_echo",
     ],
     slug = "hello-atom",
+    deps = ["//crates/atom-runtime"],
+)
+
+rust_test(
+    name = "hello_atom_test",
+    crate = ":hello_atom",
 )
