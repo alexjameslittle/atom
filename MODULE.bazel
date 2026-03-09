@@ -153,8 +153,11 @@ android_ndk_repository_extension = use_extension(
 )
 use_repo(android_ndk_repository_extension, "androidndk")
 
-register_toolchains(
-    "@androidsdk//:sdk-toolchain",
-    "@androidsdk//:all",
-    "@androidndk//:all",
-)
+# Android SDK/NDK toolchains are NOT globally registered here because Bazel
+# eagerly resolves registered toolchains even for non-Android builds.  This
+# would require ANDROID_HOME/NDK to be present for every `bazel build`,
+# including lint and test jobs that never target Android.
+#
+# Instead, Android builds pass --extra_toolchains on the command line so the
+# repos are only resolved when actually needed.  See ANDROID_EXTRA_TOOLCHAINS
+# in .bazelrc.
