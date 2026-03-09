@@ -17,7 +17,7 @@ the tracked hooks in [.githooks](/Users/alexlittle/conductor/workspaces/atom/teh
 ## Local Guardrails
 
 - `pre-commit` runs formatting and repository-level linters.
-- `pre-push` runs the full verification harness.
+- `pre-push` runs lint plus host tests and the prebuild dry-run. Example app builds rely on CI.
 - `mise run verify` is the canonical local validation command.
 
 The verification harness runs:
@@ -33,13 +33,15 @@ The verification harness runs:
 
 ## GitHub Guardrails
 
-CI runs three parallel jobs sharing a BuildBuddy remote cache:
+CI runs five parallel job executions sharing a BuildBuddy remote cache:
 
 - **lint** (Linux): clippy, format check, shellcheck, actionlint
 - **test (linux)**: host tests, prebuild dry-run
 - **test (macos)**: host tests, prebuild dry-run
+- **build example apps (ios)** (macOS): prebuild plus iOS example app build
+- **build example apps (android)** (Linux): prebuild plus Android example app build
 
-All three must pass before merge.
+All jobs must pass before merge.
 
 - [ci.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/workflows/ci.yml) defines the
   CI matrix.

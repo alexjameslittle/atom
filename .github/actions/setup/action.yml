@@ -5,6 +5,10 @@ inputs:
   buildbuddy-api-key:
     description: BuildBuddy API key for remote cache
     required: false
+  setup-android:
+    description: Whether to install and configure the Android SDK
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -29,7 +33,15 @@ runs:
         mise trust -y
         mise install
 
+    - name: Cache Android SDK
+      if: inputs.setup-android == 'true'
+      uses: actions/cache@v4
+      with:
+        path: .android/sdk
+        key: ${{ runner.os }}-android-sdk-${{ hashFiles('scripts/setup-android-sdk.sh', 'mise.toml') }}
+
     - name: Set up Android SDK
+      if: inputs.setup-android == 'true'
       shell: bash
       run: mise exec -- ./scripts/setup-android-sdk.sh
 

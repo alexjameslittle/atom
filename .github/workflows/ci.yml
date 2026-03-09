@@ -57,8 +57,18 @@ jobs:
         run: mise exec -- ./scripts/verify.sh test
 
   build-example-apps:
-    name: build example apps
-    runs-on: namespace-profile-macos
+    name: build example apps (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ios
+            runner: namespace-profile-macos
+            verify_mode: build-ios
+          - platform: android
+            runner: namespace-profile-linux
+            verify_mode: build-android
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -68,5 +78,5 @@ jobs:
         with:
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
-      - name: Build apps
-        run: mise exec -- ./scripts/verify.sh build
+      - name: Build ${{ matrix.platform }} app
+        run: mise exec -- ./scripts/verify.sh ${{ matrix.verify_mode }}

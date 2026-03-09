@@ -44,19 +44,29 @@ test_suite() {
 
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
 
-build_apps() {
+generate_example_app() {
   # Generate BUILD files for the example app (non-dry-run).
   bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+}
 
+build_ios_app() {
   # Build iOS app (simulator architecture).
   bazelisk build //generated/ios/hello-atom:app --ios_multi_cpus=sim_arm64
+}
 
+build_android_app() {
   # Build Android app (requires ANDROID_HOME).
   if [ -n "${ANDROID_HOME:-}" ]; then
     bazelisk build //generated/android/hello-atom:app
   else
     echo "ANDROID_HOME not set, skipping Android build"
   fi
+}
+
+build_apps() {
+  generate_example_app
+  build_ios_app
+  build_android_app
 }
 
 case "$mode" in
@@ -68,6 +78,18 @@ case "$mode" in
     ;;
   build)
     build_apps
+    ;;
+  build-ios)
+    generate_example_app
+    build_ios_app
+    ;;
+  build-android)
+    generate_example_app
+    build_android_app
+    ;;
+  pre-push)
+    lint
+    test_suite
     ;;
   verify)
     lint
