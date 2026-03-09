@@ -82,6 +82,27 @@ crate.spec(
     package = "tempfile",
     version = "=3.26.0",
 )
+crate.spec(
+    features = [
+        "rt",
+        "sync",
+        "macros",
+    ],
+    package = "tokio",
+    version = "=1.44.2",
+)
+crate.spec(
+    package = "tracing",
+    version = "=0.1.41",
+)
+crate.spec(
+    features = [
+        "fmt",
+        "env-filter",
+    ],
+    package = "tracing-subscriber",
+    version = "=0.3.19",
+)
 crate.from_specs(
     supported_platform_triples = [
         "aarch64-apple-darwin",

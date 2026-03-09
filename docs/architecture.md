@@ -37,7 +37,16 @@ Dependency direction should move one way:
   - Maps user commands to Bazel-aware workflows
   - Must stay a thin wrapper, not an alternate build system
 - `atom-runtime`
-  - Runtime-side execution model and host integration primitives
+  - Runtime kernel: lifecycle state machine (Created → Initializing → Running →
+    Backgrounded/Suspended → Terminating → Terminated)
+  - Module lifecycle management: init in dependency order, shutdown in reverse
+  - Runtime plugin host API (`RuntimePlugin` trait) for observing lifecycle events and owning
+    plugin-local state
+  - Tokio `current_thread` async runtime available via `PluginContext`
+  - Structured logging via `tracing` at lifecycle transitions
+  - Handle-based registry for FFI access from generated native hosts
+  - `ensure_running()` gate for CNG-generated per-method module exports
+  - Module call dispatch is not the runtime's concern — CNG generates direct per-method FFI exports
 
 ## Metadata Flow
 
