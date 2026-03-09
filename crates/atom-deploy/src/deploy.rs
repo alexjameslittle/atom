@@ -229,7 +229,15 @@ pub fn deploy_android(
         runner,
         repo_root,
         "adb",
-        &["-s", &serial, "logcat", "--pid", &pid],
+        &[
+            "-s",
+            &serial,
+            "logcat",
+            "--pid",
+            &pid,
+            "-s",
+            "AtomRuntime:*",
+        ],
     )
 }
 

@@ -391,6 +391,8 @@ mod tests {
                         "logcat".to_owned(),
                         "--pid".to_owned(),
                         "4793".to_owned(),
+                        "-s".to_owned(),
+                        "AtomRuntime:*".to_owned(),
                     ],
                 ),
             ]

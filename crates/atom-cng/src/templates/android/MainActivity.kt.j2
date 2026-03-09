@@ -33,8 +33,6 @@ class MainActivity : Activity() {
             alpha = 0.6f
         })
         setContentView(layout)
-
-        atomApp?.sendLifecycle(1, "foreground")
     }
 
     override fun onResume() {
