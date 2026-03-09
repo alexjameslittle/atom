@@ -363,6 +363,7 @@ Unknown keys MUST fail validation with `MODULE_MANIFEST_INVALID`.
 
 The normalized module manifest MUST support these fields:
 
+- `kind: "atom_module" | "atom_native_module"`
 - `id: String`
 - `atom_api_level: u32`
 - `min_atom_version: Option<String>`
@@ -388,6 +389,8 @@ The normalized module manifest MUST support these fields:
 
 Schema source of truth rules:
 
+- `kind` MUST be either `atom_module` or `atom_native_module`, matching the Bazel rule that emitted
+  the metadata.
 - `.fbs` files are the only source of truth for the wire contract.
 - Each module MUST declare one or more FlatBuffers schema files in `schema_files`.
 - `atom_api_level` MUST be an integer matching the framework-supported API level for the current
@@ -442,6 +445,7 @@ function resolve_modules(requested_modules, app_manifest, framework):
         metadata_path = bazel_build_and_locate(metadata_target)
         raw = read_text(metadata_path) or error MODULE_MANIFEST_INVALID
         manifest = parse_json(raw) or error MODULE_MANIFEST_INVALID
+        validate manifest.kind in {"atom_module", "atom_native_module"} or error MODULE_MANIFEST_INVALID
         validate manifest.target_label == request.target_label or error MODULE_MANIFEST_INVALID
         validate manifest.atom_api_level == framework.atom_api_level or error EXTENSION_INCOMPATIBLE
         validate framework.version satisfies manifest.min_atom_version if present or error EXTENSION_INCOMPATIBLE
@@ -1418,8 +1422,6 @@ Required behavior:
 - `atom-cng` has no knowledge of any specific plugin's domain (icons, splash screens, etc.)
 - config/CNG plugins contribute deterministic host customization per Section 9
 - config/CNG plugins remain separate from runtime plugins and native modules
-- runtime plugins MUST NOT mutate generated native trees directly
-- incompatible module or config/CNG plugin metadata fails fast with `EXTENSION_INCOMPATIBLE`
 - runtime plugins MUST NOT mutate generated native trees directly
 - incompatible module or config/CNG plugin metadata fails fast with `EXTENSION_INCOMPATIBLE`
 - the same app may combine runtime plugins, native modules, and config/CNG plugins coherently
