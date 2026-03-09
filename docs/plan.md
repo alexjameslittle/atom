@@ -403,6 +403,7 @@ Config/CNG plugins should cover capabilities such as:
 - Requesting generated host registration glue.
 - Validating required app configuration.
 - Contributing deterministic native host customization without manual edits.
+- Per-destination asset generation (e.g., app icons, splash screens).
 
 Boundaries:
 
@@ -541,19 +542,184 @@ Exit criteria:
 
 ### Phase 5: Config/CNG plugin system
 
-Deliverables:
+#### Design principles
 
-- Config/CNG plugin host API and deterministic merge model
-- Separate config/CNG plugin crates for native-host customization
-- Validation hooks and generated-host contribution points owned by `atom-cng`, not `atom-runtime`
-- Example config plugin proving host customization can come from a plugin/library without manual
-  edits
+A config plugin is a separate crate that owns its configuration shape, its validation, and its CNG
+contributions. The framework (`atom-cng`) knows nothing about icons, splash screens, or any specific
+customization — it only knows how to call `ConfigPlugin` trait methods and merge the results.
 
-Exit criteria:
+This mirrors the runtime plugin model: the kernel does not know plugin identities, and config
+plugins are consumed as normal Rust crate dependencies.
 
-- Native-host customization can be added through a config/CNG plugin without changing `atom-runtime`
-- Runtime plugins and config/CNG plugins remain separate concepts with separate APIs
-- The same app can combine runtime plugins, native modules, and config/CNG plugins coherently
+#### Crate structure
+
+Each config plugin is a standalone crate:
+
+```text
+crates/
+  atom-cng/               # framework: owns ConfigPlugin trait + merge
+  atom-cng-app-icon/      # plugin: owns icon config shape, validation, CNG contributions
+  atom-cng-splash-screen/ # (future) another plugin
+```
+
+The framework crate (`atom-cng`) exports the trait. Plugin crates depend on `atom-cng` and implement
+the trait. The CLI links plugin crates and passes instantiated plugins to `build_generation_plan`.
+
+#### ConfigPlugin trait
+
+```rust
+/// Implemented by config plugin crates. CNG calls this during plan building.
+pub trait ConfigPlugin: Send + Sync {
+    fn id(&self) -> &str;
+
+    /// Validate plugin config. Called before any contribute methods.
+    fn validate(&self) -> AtomResult<()>;
+
+    /// Contribute to the iOS host tree. Return empty contribution if not applicable.
+    fn contribute_ios(&self, ctx: &ConfigPluginContext) -> AtomResult<PlatformContribution>;
+
+    /// Contribute to the Android host tree. Return empty contribution if not applicable.
+    fn contribute_android(&self, ctx: &ConfigPluginContext) -> AtomResult<PlatformContribution>;
+}
+
+pub struct ConfigPluginContext<'a> {
+    pub app: &'a AppConfig,
+    pub repo_root: &'a Utf8Path,
+    pub generated_root: &'a Utf8Path,
+}
+
+pub struct PlatformContribution {
+    pub files: Vec<ContributedFile>,
+    pub plist_entries: JsonMap,
+    pub android_manifest_entries: JsonMap,
+    pub bazel_resources: Vec<String>,
+}
+
+pub struct ContributedFile {
+    pub source: FileSource,
+    pub output: Utf8PathBuf,
+}
+
+pub enum FileSource {
+    /// Copy an existing file or directory from the repo into the generated tree.
+    Copy(Utf8PathBuf),
+    /// Write this content as a new file in the generated tree.
+    Content(String),
+}
+```
+
+CNG collects contributions from all plugins and merges them into the generation plan using the same
+deep-merge rules as module metadata (Section 9.2 of the spec). Conflicts between plugin
+contributions and module metadata fail with `CNG_CONFLICT`.
+
+#### Bazel surface
+
+`atom_app` does not hard-code plugin-specific fields. Instead, each plugin crate ships a Starlark
+macro that returns a config dict. `atom_app` accepts a list of these:
+
+```starlark
+load("@atom//crates/atom-cng-app-icon:defs.bzl", "atom_app_icon")
+
+atom_app(
+    name = "hello_atom",
+    ...
+    config_plugins = [
+        atom_app_icon(
+            ios = "assets/AppIcon.icon",
+            android = "assets/ic_launcher.png",
+        ),
+    ],
+)
+```
+
+Each plugin macro returns a dict with `{"id": "...", "config": {...}}`. `atom_app` serializes the
+list into a `config_plugins` array in the metadata JSON:
+
+```json
+{
+  "config_plugins": [
+    {
+      "id": "app_icon",
+      "config": {
+        "ios": "assets/AppIcon.icon",
+        "android": "assets/ic_launcher.png"
+      }
+    }
+  ]
+}
+```
+
+The framework reads this array, instantiates each plugin by `id`, passes the opaque `config` to the
+plugin for parsing and validation, then calls `contribute_ios`/`contribute_android` during plan
+building.
+
+#### Plan merge integration
+
+The reference algorithm in Section 9.3 extends to run config plugins after module metadata merging
+and before platform plan building:
+
+```text
+for plugin_entry in manifest.config_plugins:
+    plugin = instantiate_plugin(plugin_entry.id, plugin_entry.config)
+    plugin.validate() or error
+
+    if manifest.ios.enabled:
+        contrib = plugin.contribute_ios(ctx)
+        plan.plist = deep_merge(plan.plist, contrib.plist_entries) or error CNG_CONFLICT
+        plan.files.extend(contrib.files)
+        plan.ios_resources.extend(contrib.bazel_resources)
+
+    if manifest.android.enabled:
+        contrib = plugin.contribute_android(ctx)
+        plan.android_manifest = deep_merge(plan.android_manifest, contrib.android_manifest_entries) or error CNG_CONFLICT
+        plan.files.extend(contrib.files)
+        plan.android_resources.extend(contrib.bazel_resources)
+```
+
+#### First plugin: `atom-cng-app-icon`
+
+The app icon plugin is the first concrete config plugin, proving the system works end-to-end.
+
+The plugin owns its config shape:
+
+```rust
+pub struct AppIconPlugin {
+    ios: Option<Utf8PathBuf>,
+    android: Option<Utf8PathBuf>,
+}
+```
+
+Per-destination behavior:
+
+| Destination | Format                   | Plugin behavior                                                                                                                                                                                                                        |
+| ----------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS 26+     | `.icon` bundle           | Validate bundle contains `icon.json`. Copy into `generated/ios/{slug}/AppIcon.icon/`. Contribute `CFBundleIconFile = "AppIcon"` to plist. Add bundle to `ios_application` resources.                                                   |
+| Android     | Launcher icon            | Validate source exists. Copy into `generated/android/{slug}/src/main/res/mipmap-xxxhdpi/ic_launcher.png`. Contribute `android:icon="@mipmap/ic_launcher"` to manifest `<application>`. Add res dir to `android_binary` resource files. |
+| macOS       | `.icns`                  | Future: separate destination method when macOS is supported.                                                                                                                                                                           |
+| Web         | favicon + manifest icons | Future: separate destination method when web is supported.                                                                                                                                                                             |
+
+When neither `ios` nor `android` is set in the plugin config, it contributes nothing (no-op).
+
+#### Deliverables
+
+- `ConfigPlugin` trait and `PlatformContribution` types in `atom-cng`
+- `config_plugins` param on `atom_app()` accepting a list of plugin config dicts
+- `config_plugins` field in the app metadata JSON schema
+- Plugin instantiation and contribution merging in `build_generation_plan`
+- Contributed file emission in `emit_host_tree`
+- Template support for plugin-contributed resources and plist/manifest entries
+- `atom-cng-app-icon` crate with Starlark macro and Rust `ConfigPlugin` implementation
+- Example app using the icon plugin on both platforms
+
+#### Exit criteria
+
+- A config plugin crate can contribute files, plist entries, manifest entries, and Bazel resources
+  without any changes to `atom-cng` or `atom-runtime`
+- `atom-cng` has no knowledge of icons — the icon plugin is the only crate that knows about icon
+  formats
+- The example app uses `atom_app_icon(...)` and displays the correct icon on both iOS and Android
+- Runtime plugins and config plugins remain separate concepts with separate APIs
+- A third party could write a new config plugin crate following the same pattern
 
 ### Phase 6: Developer workflow, ecosystem, and evaluation
 
