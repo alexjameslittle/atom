@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build a Rust-first framework for shipping iOS and Android apps with:
+Build a Bazel-first, Rust-authored framework for shipping iOS and Android apps with:
 
 - App code written in Rust.
 - A headless shared runtime kernel for lifecycle, state, effects, task execution, and module access.
@@ -32,8 +32,9 @@ The target developer experience is:
 1. Write an app crate in Rust.
 2. Declare app config in `atom_app(...)`.
 3. Add `atom_module(...)` and `atom_native_module(...)` targets to the app.
-4. Compose first-party or third-party runtime plugins such as navigation.
-5. Compose config/CNG plugins when native-host customization is needed.
+4. Compose first-party or third-party runtime plugins in app code through `atom_runtime_config()`.
+5. Declare config/CNG plugins in `atom_app(...).config_plugins` when native-host customization is
+   needed.
 6. Run `atom prebuild` to generate iOS and Android host code.
 7. Build and run with Bazel-driven commands.
 8. Evaluate the running app through framework-owned CLI tools that can inspect, interact, and
@@ -118,19 +119,26 @@ one blessed built-in feature.
 
 ### 4. Module SDK
 
-A native module is a Rust crate that exposes:
+A native module is a Bazel target backed by Rust and/or platform-specific sources. It exposes:
 
 - A stable module identifier.
-- A typed Rust API used by the app.
-- Bazel metadata that declares permissions, platform requirements, config fragments, and generated
-  bridge needs.
-- Optional platform-specific implementation crates when a module truly needs them.
+- A typed Rust API used by the app when the module is Rust-backed.
+- Bazel metadata in `atom_module(...)` or `atom_native_module(...)` that declares permissions,
+  platform requirements, compatibility metadata, config fragments, and generated-bridge needs.
+- `.fbs` schemas that define the ABI-visible wire contract.
+- Optional platform-specific implementation sources when a module truly needs them.
 
 Modules are not the same thing as runtime plugins. Modules bridge host capabilities into Rust.
 Runtime plugins compose Rust-side app behavior on top of the kernel.
 
 The framework should aggregate module metadata during CNG and use it to shape the generated native
 host.
+
+Authority split:
+
+- Bazel metadata owns packaging, inclusion, compatibility gates, and host-generation inputs.
+- `.fbs` owns the request/response wire contract.
+- Rust, Swift, and Kotlin own implementation details behind those contracts.
 
 ### 5. Bridge layer
 
@@ -140,7 +148,7 @@ Planned direction:
 
 - Use a framework-owned ABI instead of a general-purpose bridge like JS or React Native.
 - Keep Swift/Kotlin very thin: bootstrap, lifecycle forwarding, and marshaling.
-- Generate the registration tables from Rust module metadata.
+- Generate the registration tables from normalized Bazel module metadata.
 
 This favors a custom C ABI over `uniffi` for the core framework boundary because the framework
 controls both ends and needs deterministic startup, lifecycle, and registry behavior. `uniffi` can
@@ -153,6 +161,7 @@ CNG should take:
 - `atom_app(...)` metadata
 - App crate metadata
 - `atom_module(...)` / `atom_native_module(...)` metadata
+- config plugin entries declared in `atom_app(...).config_plugins`
 - Build profile / environment data
 
 And deterministically generate:
@@ -191,7 +200,7 @@ Additional Bazel dependencies (pinned in SPEC.md Section 3):
 - `rules_swift = 2.1.1`
 - `apple_support = 1.24.2`
 - `rules_kotlin = 1.9.0`
-- `rules_java = 8.14.0`
+- `rules_java = 9.3.0`
 
 ### Rust dependency model
 
@@ -363,7 +372,7 @@ edits.
 Each module should have three layers:
 
 1. A Rust-facing API used by the app.
-2. A manifest that describes platform requirements.
+2. Bazel-owned metadata that describes compatibility and platform requirements.
 3. A platform bridge implementation used by generated host code.
 
 The key requirement is that module authors stay mostly in Rust. Swift/Kotlin should be generated or
@@ -407,11 +416,38 @@ Config/CNG plugins should cover capabilities such as:
 
 Boundaries:
 
+- Runtime plugins should be registered in app-owned code through `atom_runtime_config()` or an
+  equivalent generated builder entry point.
+- Generated Rust app bridges should call the app entry crate identified by `entry_crate_name` rather
+  than hard-coding plugin identities into the runtime kernel or native templates.
 - Runtime plugins should not mutate generated native trees directly.
+- Config/CNG plugins should be declared through plugin-specific Starlark macros that feed
+  `atom_app(...).config_plugins`; they are build-time libraries, not runtime constructs.
 - Config/CNG plugins should not own the app event loop or state container.
 - Native modules bridge platform capabilities and are not a substitute for runtime plugins.
 - The runtime kernel should remain small and stable enough that multiple state-management styles can
   sit on top of it without fragmenting lifecycle or effect semantics.
+
+## Compatibility Model
+
+The library ecosystem should start with a deliberately small compatibility contract instead of
+trying to encode every possible version rule up front.
+
+Recommended initial fields for modules and config/CNG plugins:
+
+- `atom_api_level`: required integer that gates runtime/CNG contract compatibility.
+- `min_atom_version`: optional semver lower bound for source-level API expectations.
+- `ios_min_deployment_target`: optional lower bound when an extension requires a newer iOS floor.
+- `android_min_sdk`: optional lower bound when an extension requires a newer Android floor.
+
+Validation rules:
+
+- `atom prebuild` should fail fast if a module or config/CNG plugin declares a different
+  `atom_api_level` than the framework supports.
+- `atom prebuild` should fail fast if the app's iOS or Android deployment targets are lower than an
+  extension's declared minimums.
+- Compatibility failures should point at the offending target label and field so third-party library
+  adoption is debuggable.
 
 ## UI Strategy
 
@@ -513,6 +549,7 @@ Deliverables:
 
 - Stable public runtime plugin host API and registration contract
 - App-owned runtime registration through `atom_runtime_config()` or equivalent builder
+- Generated Rust app bridges call the app entry crate identified by `entry_crate_name`
 - Example plugin crate outside `atom-runtime` proving the kernel does not know plugin identities
 - Runtime plugin ordering model proven without generated host changes
 - Bazel guidance for publishing and consuming plugin crates as normal dependencies
@@ -520,8 +557,8 @@ Deliverables:
 Exit criteria:
 
 - The example app uses a plugin crate outside `atom-runtime` on both platforms
-- A plugin can be added or removed without changing `atom-runtime` or generated Swift/Kotlin boot
-  code
+- A plugin can be added or removed without changing `atom-runtime` or generated Swift/Kotlin
+  templates beyond the generic bridge
 - The same registration path works for framework-owned and third-party-style plugin crates
 
 ### Phase 4C: First-party plugin libraries
@@ -540,7 +577,7 @@ Exit criteria:
   plugins
 - Navigation or routing is proven to be a library concern, not a kernel concern
 
-### Phase 5: Config/CNG plugin system
+### Phase 5: Config/CNG plugin system and compatibility contract
 
 #### Design principles
 
@@ -632,14 +669,16 @@ atom_app(
 )
 ```
 
-Each plugin macro returns a dict with `{"id": "...", "config": {...}}`. `atom_app` serializes the
-list into a `config_plugins` array in the metadata JSON:
+Each plugin macro returns a dict with at least
+`{"id": "...", "atom_api_level": 1, "config": {...}}`. `atom_app` serializes the list into a
+`config_plugins` array in the metadata JSON:
 
 ```json
 {
   "config_plugins": [
     {
       "id": "app_icon",
+      "atom_api_level": 1,
       "config": {
         "ios": "assets/AppIcon.icon",
         "android": "assets/ic_launcher.png"
@@ -649,9 +688,13 @@ list into a `config_plugins` array in the metadata JSON:
 }
 ```
 
-The framework reads this array, instantiates each plugin by `id`, passes the opaque `config` to the
-plugin for parsing and validation, then calls `contribute_ios`/`contribute_android` during plan
-building.
+Each plugin macro should also declare compatibility metadata alongside the opaque config payload:
+`atom_api_level` is required, and `min_atom_version`, `ios_min_deployment_target`, and
+`android_min_sdk` are optional.
+
+The framework reads this array, validates compatibility first, instantiates each plugin by `id`,
+passes the opaque `config` to the plugin for parsing and validation, then calls
+`contribute_ios`/`contribute_android` during plan building.
 
 #### Plan merge integration
 
@@ -705,6 +748,7 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 - `ConfigPlugin` trait and `PlatformContribution` types in `atom-cng`
 - `config_plugins` param on `atom_app()` accepting a list of plugin config dicts
 - `config_plugins` field in the app metadata JSON schema
+- Compatibility metadata and validation for modules and config/CNG plugins
 - Plugin instantiation and contribution merging in `build_generation_plan`
 - Contributed file emission in `emit_host_tree`
 - Template support for plugin-contributed resources and plist/manifest entries
@@ -720,6 +764,8 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 - The example app uses `atom_app_icon(...)` and displays the correct icon on both iOS and Android
 - Runtime plugins and config plugins remain separate concepts with separate APIs
 - A third party could write a new config plugin crate following the same pattern
+- Incompatible modules or config/CNG plugins fail before host generation begins
+- The same app can combine runtime plugins, native modules, and config/CNG plugins coherently
 
 ### Phase 6: Developer workflow, ecosystem, and evaluation
 
@@ -774,20 +820,26 @@ Exit criteria:
   later via `rules_xcodeproj`?
 - Should the core Rust output be a `staticlib`, `cdylib`, or both?
 - Do we support Android on Linux from the start, or only macOS first while iOS is being brought up?
-- How much of app configuration lives in `atom_app(...)` versus Rust APIs?
+- What minimum startup payload should still move through `config_flatbuffer` in the initial profile
+  once `atom_runtime_config()` owns runtime registration?
 - What is the minimum ABI surface needed to keep the bridge stable as modules evolve?
 - Do we expose the iOS automation backend as a direct XCTest runner, or as a WDA-compatible service
   layered over the same primitives?
 - How opinionated should the `atom evaluate run` plan format be in V1: narrowly JSON-first, or broad
   enough to support multiple serializations from day one?
 
-## Recommended First Implementation Slice
+## Recommended Next Implementation Slice
 
-Once planning is approved, the first build work should be deliberately narrow:
+The repo now has runnable generated hosts and app-owned runtime plugin registration. The next slice
+should tighten the library contract instead of reopening bootstrap work:
 
-1. Toolchain files only: `mise.toml`, `.bazelversion`, `MODULE.bazel`, and `bzl/atom`.
-2. A tiny `atom-manifest` crate that loads Bazel-generated app metadata.
-3. A tiny `atom-cli` crate with `prebuild --dry-run`.
+1. Align the spec, plan, and Bazel rules around Bazel-owned module metadata plus `entry_crate_name`
+   as the runtime registration anchor.
+2. Stabilize `atom_app(...).config_plugins`, the `ConfigPlugin` trait, and one example plugin as the
+   build-time extension path for native-host customization.
+3. Add minimal compatibility validation for modules and config/CNG plugins before generation.
+4. Prove the contract with one example config/CNG plugin and one third-party-style module/library
+   integration path.
 
-That gives us a real Bazel + Rust base, validates the developer setup, and lets us prove the CNG
-graph before we touch iOS or Android host generation.
+That sequence preserves the current working runtime path, closes the remaining ecosystem gap, and
+sets up a more credible Expo-style library story without inventing a second metadata system.

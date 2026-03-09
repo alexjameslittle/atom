@@ -117,7 +117,7 @@ Required pinned Bazel modules for the initial implementation:
 - `rules_swift = 2.1.1`
 - `apple_support = 1.24.2`
 - `rules_kotlin = 1.9.0`
-- `rules_java = 8.14.0`
+- `rules_java = 9.3.0`
 
 Required Rust toolchain defaults:
 
@@ -139,36 +139,38 @@ Planned public Bazel surface:
 - `atom_app` for consumer applications
 - `atom_module` for Rust-authored Atom modules
 - `atom_native_module` for native-only or mixed native modules
+- plugin-specific Starlark macros consumed through `atom_app(...).config_plugins`
 - `atom_schema_bundle` for module-owned FlatBuffers schemas
 
 ## 4. Error Taxonomy
 
 Every user-facing failure MUST map to one of the following codes.
 
-| Domain   | Code                            | Meaning                                          | CLI Exit |
-| -------- | ------------------------------- | ------------------------------------------------ | -------- |
-| Manifest | `MANIFEST_NOT_FOUND`            | generated app metadata could not be found        | `65`     |
-| Manifest | `MANIFEST_PARSE_ERROR`          | generated app metadata could not be parsed       | `65`     |
-| Manifest | `MANIFEST_MISSING_FIELD`        | required field missing                           | `65`     |
-| Manifest | `MANIFEST_INVALID_VALUE`        | field type or value invalid                      | `65`     |
-| Manifest | `MANIFEST_UNKNOWN_KEY`          | unknown field encountered                        | `65`     |
-| Modules  | `MODULE_NOT_FOUND`              | configured module crate path missing             | `66`     |
-| Modules  | `MODULE_DUPLICATE_ID`           | duplicate module identifier                      | `66`     |
-| Modules  | `MODULE_DEPENDENCY_CYCLE`       | module dependency cycle detected                 | `66`     |
-| Modules  | `MODULE_MANIFEST_INVALID`       | module manifest could not be loaded or validated | `66`     |
-| CNG      | `CNG_CONFLICT`                  | merge conflict with no legal resolution          | `67`     |
-| CNG      | `CNG_TEMPLATE_ERROR`            | template or codegen failure                      | `67`     |
-| CNG      | `CNG_WRITE_ERROR`               | generated files could not be written             | `67`     |
-| Bridge   | `BRIDGE_INVALID_ARGUMENT`       | native host passed invalid ABI data              | `68`     |
-| Bridge   | `BRIDGE_INIT_FAILED`            | runtime bridge bootstrap failed                  | `68`     |
-| Runtime  | `RUNTIME_TRANSITION_INVALID`    | invalid lifecycle transition                     | `68`     |
-| Runtime  | `MODULE_INIT_FAILED`            | module init or shutdown hook failed              | `68`     |
-| CLI      | `CLI_USAGE_ERROR`               | invalid CLI invocation                           | `64`     |
-| Auto     | `AUTOMATION_UNAVAILABLE`        | required automation backend unavailable          | `69`     |
-| Auto     | `AUTOMATION_TARGET_NOT_FOUND`   | requested UI target could not be resolved        | `69`     |
-| Auto     | `AUTOMATION_LOG_CAPTURE_FAILED` | requested logs could not be collected            | `69`     |
-| Tooling  | `EXTERNAL_TOOL_FAILED`          | Bazel or another required tool failed            | `69`     |
-| Internal | `INTERNAL_BUG`                  | unexpected framework bug or invariant break      | `70`     |
+| Domain    | Code                            | Meaning                                          | CLI Exit |
+| --------- | ------------------------------- | ------------------------------------------------ | -------- |
+| Manifest  | `MANIFEST_NOT_FOUND`            | generated app metadata could not be found        | `65`     |
+| Manifest  | `MANIFEST_PARSE_ERROR`          | generated app metadata could not be parsed       | `65`     |
+| Manifest  | `MANIFEST_MISSING_FIELD`        | required field missing                           | `65`     |
+| Manifest  | `MANIFEST_INVALID_VALUE`        | field type or value invalid                      | `65`     |
+| Manifest  | `MANIFEST_UNKNOWN_KEY`          | unknown field encountered                        | `65`     |
+| Modules   | `MODULE_NOT_FOUND`              | configured module crate path missing             | `66`     |
+| Modules   | `MODULE_DUPLICATE_ID`           | duplicate module identifier                      | `66`     |
+| Modules   | `MODULE_DEPENDENCY_CYCLE`       | module dependency cycle detected                 | `66`     |
+| Modules   | `MODULE_MANIFEST_INVALID`       | module manifest could not be loaded or validated | `66`     |
+| Extension | `EXTENSION_INCOMPATIBLE`        | module or config plugin is incompatible          | `66`     |
+| CNG       | `CNG_CONFLICT`                  | merge conflict with no legal resolution          | `67`     |
+| CNG       | `CNG_TEMPLATE_ERROR`            | template or codegen failure                      | `67`     |
+| CNG       | `CNG_WRITE_ERROR`               | generated files could not be written             | `67`     |
+| Bridge    | `BRIDGE_INVALID_ARGUMENT`       | native host passed invalid ABI data              | `68`     |
+| Bridge    | `BRIDGE_INIT_FAILED`            | runtime bridge bootstrap failed                  | `68`     |
+| Runtime   | `RUNTIME_TRANSITION_INVALID`    | invalid lifecycle transition                     | `68`     |
+| Runtime   | `MODULE_INIT_FAILED`            | module init or shutdown hook failed              | `68`     |
+| CLI       | `CLI_USAGE_ERROR`               | invalid CLI invocation                           | `64`     |
+| Auto      | `AUTOMATION_UNAVAILABLE`        | required automation backend unavailable          | `69`     |
+| Auto      | `AUTOMATION_TARGET_NOT_FOUND`   | requested UI target could not be resolved        | `69`     |
+| Auto      | `AUTOMATION_LOG_CAPTURE_FAILED` | requested logs could not be collected            | `69`     |
+| Tooling   | `EXTERNAL_TOOL_FAILED`          | Bazel or another required tool failed            | `69`     |
+| Internal  | `INTERNAL_BUG`                  | unexpected framework bug or invariant break      | `70`     |
 
 Canonical machine-readable error payload:
 
@@ -185,7 +187,7 @@ table AtomError {
 Rules:
 
 - `AtomError.code` MUST match one of the taxonomy codes in this section.
-- `path` SHOULD be present for manifest and module validation errors.
+- `path` SHOULD be present for manifest and extension validation errors.
 - `message` MUST be human-readable.
 - Machine-readable outputs MUST emit exactly one `atom.error.AtomError` FlatBuffer on failure.
 
@@ -212,31 +214,44 @@ The Bazel rule MUST emit a single JSON metadata document with these top-level ke
 - `name`
 - `slug`
 - `entry_crate_label`
+- `entry_crate_name`
 - `generated_root`
 - `watch`
 - `ios`
 - `android`
 - `modules`
+- `config_plugins`
 
 Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
 
 ### 5.3 Field Cheat Sheet
 
-| Key                 | Type          | Required         | Default                   | Validation                          |
-| ------------------- | ------------- | ---------------- | ------------------------- | ----------------------------------- |
-| `name`              | string        | yes              | none                      | non-empty UTF-8                     |
-| `slug`              | string        | yes              | none                      | regex `^[a-z][a-z0-9-]{1,62}$`      |
-| `entry_crate_label` | string        | yes              | none                      | absolute Bazel label                |
-| `generated_root`    | string        | no               | `"generated"`             | relative path, MUST NOT be absolute |
-| `watch`             | bool          | no               | `false`                   | boolean                             |
-| `ios.enabled`       | bool          | no               | `true` if section present | boolean                             |
-| `bundle_id`         | string        | yes when enabled | none                      | reverse-DNS identifier              |
-| `deployment_target` | string        | yes when enabled | none                      | regex `^[0-9]+\\.[0-9]+$`           |
-| `android.enabled`   | bool          | no               | `true` if section present | boolean                             |
-| `application_id`    | string        | yes when enabled | none                      | reverse-DNS identifier              |
-| `min_sdk`           | integer       | yes when enabled | none                      | `>= 24`                             |
-| `target_sdk`        | integer       | yes when enabled | none                      | `>= min_sdk`                        |
-| `modules`           | array<string> | no               | `[]`                      | absolute Bazel labels, unique       |
+| Key                 | Type          | Required         | Default                   | Validation                                       |
+| ------------------- | ------------- | ---------------- | ------------------------- | ------------------------------------------------ |
+| `name`              | string        | yes              | none                      | non-empty UTF-8                                  |
+| `slug`              | string        | yes              | none                      | regex `^[a-z][a-z0-9-]{1,62}$`                   |
+| `entry_crate_label` | string        | yes              | none                      | absolute Bazel label                             |
+| `entry_crate_name`  | string        | yes              | none                      | regex `^[A-Za-z_][A-Za-z0-9_]*$`                 |
+| `generated_root`    | string        | no               | `"generated"`             | relative path, MUST NOT be absolute              |
+| `watch`             | bool          | no               | `false`                   | boolean                                          |
+| `ios.enabled`       | bool          | no               | `true` if section present | boolean                                          |
+| `bundle_id`         | string        | yes when enabled | none                      | reverse-DNS identifier                           |
+| `deployment_target` | string        | yes when enabled | none                      | regex `^[0-9]+\\.[0-9]+$`                        |
+| `android.enabled`   | bool          | no               | `true` if section present | boolean                                          |
+| `application_id`    | string        | yes when enabled | none                      | reverse-DNS identifier                           |
+| `min_sdk`           | integer       | yes when enabled | none                      | `>= 24`                                          |
+| `target_sdk`        | integer       | yes when enabled | none                      | `>= min_sdk`                                     |
+| `modules`           | array<string> | no               | `[]`                      | absolute Bazel labels, unique                    |
+| `config_plugins`    | array<object> | no               | `[]`                      | entries require unique `id` plus object `config` |
+
+Each `config_plugins` entry MUST support these fields:
+
+- `id: String`
+- `atom_api_level: u32`
+- `min_atom_version: Option<String>`
+- `ios_min_deployment_target: Option<String>`
+- `android_min_sdk: Option<u32>`
+- `config: JsonMap`
 
 ### 5.4 Validation Rules
 
@@ -244,6 +259,7 @@ Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
 - `app.slug` MUST be unique within generated output paths.
 - `android.target_sdk` MUST be greater than or equal to `android.min_sdk`.
 - Module target labels MUST be unique across `modules`.
+- Config-plugin IDs MUST be unique across `config_plugins`.
 - `generated_root` MUST be relative to the repo root.
 
 ### 5.5 Canonical Example
@@ -255,6 +271,7 @@ Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
   "name": "Hello Atom",
   "slug": "hello-atom",
   "entry_crate_label": "//apps/hello_atom:hello_atom",
+  "entry_crate_name": "hello_atom",
   "generated_root": "generated",
   "watch": false,
   "ios": {
@@ -268,7 +285,8 @@ Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
     "min_sdk": 28,
     "target_sdk": 35
   },
-  "modules": ["//modules/device_info:device_info"]
+  "modules": ["//modules/device_info:device_info"],
+  "config_plugins": []
 }
 ```
 
@@ -291,53 +309,65 @@ function load_manifest(repo_root, app_target):
     android = validate_android_section(parsed.get("android"))
     build = validate_build_section(parsed.get("generated_root"), parsed.get("watch"))
     modules = validate_module_array(parsed.get("modules", []))
+    config_plugins = validate_config_plugin_array(parsed.get("config_plugins", []))
 
     if not ios.enabled and not android.enabled:
         error MANIFEST_INVALID_VALUE at "ios/android"
 
-    return NormalizedManifest(app, ios, android, build, modules)
+    return NormalizedManifest(app, ios, android, build, modules, config_plugins)
 ```
 
 ## 6. Module Specification
 
-### 6.1 Source Format
+### 6.1 Source Of Truth
 
-Each module crate MUST define exactly one Rust type annotated with `#[atom_module]` and implementing
-`AtomModule`.
+`atom_module(...)` and `atom_native_module(...)` MUST be the source of truth for module metadata
+consumed by module resolution and CNG.
 
-Required source shape:
+Rules:
 
-```rust
-#[atom_module]
-pub struct DeviceInfoModule;
+- requested modules are identified by Bazel target labels listed in `atom_app(...).modules`
+- `atom_module(...)` is for Rust-authored modules that also compile a Rust library target
+- `atom_native_module(...)` is for native-only or mixed native modules that do not require a Rust
+  library target
+- module discovery MUST occur by building and loading the generated `<target>_atom_module_metadata`
+  JSON target emitted by the Bazel rule
+- optional Rust helper traits or proc macros MAY exist for ergonomics, but module discovery and CNG
+  MUST NOT depend on proc-macro-generated manifest exports or runtime reflection
+- `.fbs` files remain the source of truth for ABI-visible request and response payloads
 
-impl AtomModule for DeviceInfoModule {
-    fn manifest() -> ModuleManifest {
-        ModuleManifest::new("device_info")
-            .schema_file("schema/device_info.fbs")
-    }
+### 6.2 Required Metadata Shape
 
-    fn exports(exports: &mut ModuleExports) {
-        exports.export::<device_info_fb::GetDeviceInfoRequest, device_info_fb::GetDeviceInfoResponse>(
-            "get",
-            device_info_get,
-        );
-    }
-}
-```
+The Bazel-generated metadata document MUST include these top-level keys:
 
-### 6.2 Required Trait Surface
+- `kind`
+- `target_label`
+- `id`
+- `atom_api_level`
+- `min_atom_version`
+- `ios_min_deployment_target`
+- `android_min_sdk`
+- `depends_on`
+- `schema_files`
+- `methods`
+- `permissions`
+- `plist`
+- `android_manifest`
+- `entitlements`
+- `generated_sources`
+- `init_priority`
+- `ios_srcs`
+- `android_srcs`
 
-```rust
-pub trait AtomModule {
-    fn manifest() -> ModuleManifest;
-    fn exports(exports: &mut ModuleExports);
-}
-```
+Unknown keys MUST fail validation with `MODULE_MANIFEST_INVALID`.
 
-`ModuleManifest` MUST support these fields:
+The normalized module manifest MUST support these fields:
 
 - `id: String`
+- `atom_api_level: u32`
+- `min_atom_version: Option<String>`
+- `ios_min_deployment_target: Option<String>`
+- `android_min_sdk: Option<u32>`
 - `depends_on: Vec<String>`
 - `schema_files: Vec<String>`
 - `methods: Vec<MethodSpec>`
@@ -347,6 +377,8 @@ pub trait AtomModule {
 - `entitlements: JsonMap`
 - `generated_sources: Vec<GeneratedSourceSpec>`
 - `init_priority: i32`
+- `ios_srcs: Vec<String>`
+- `android_srcs: Vec<String>`
 
 `MethodSpec` MUST support these fields:
 
@@ -358,45 +390,40 @@ Schema source of truth rules:
 
 - `.fbs` files are the only source of truth for the wire contract.
 - Each module MUST declare one or more FlatBuffers schema files in `schema_files`.
-- Schema file paths MUST be relative to the module crate root.
+- `atom_api_level` MUST be an integer matching the framework-supported API level for the current
+  build.
+- `min_atom_version`, when present, MUST be a semver lower bound satisfied by the current framework
+  version.
+- `ios_min_deployment_target`, when present, MUST use the same `major.minor` format as
+  `ios.deployment_target` and the app's configured iOS deployment target MUST be greater than or
+  equal to the module's requirement.
+- `android_min_sdk`, when present, MUST be `>= 24` and the app's configured Android `min_sdk` MUST
+  be greater than or equal to the module's requirement.
+- Rule inputs for `schema_files`, `ios_srcs`, and `android_srcs` MAY be package-relative, but the
+  emitted metadata MUST normalize them to repo-relative paths.
 - Existing FlatBuffers schemas MAY be reused unchanged by listing them in `schema_files`.
-- The proc macro MUST NOT infer FlatBuffers table definitions from Rust struct fields.
 - Rust request and response types used at the ABI boundary MUST be generated from `.fbs`.
 - Handwritten Rust structs and enums MAY exist as implementation details, but they MUST NOT define
   or evolve the wire contract.
 - `MethodSpec.request_table` and `MethodSpec.response_table` MUST be fully qualified FlatBuffers
   table names declared by the module's schema files.
+- `depends_on` entries MUST be absolute Bazel labels.
 
-### 6.3 Build-Time Manifest Extraction
+### 6.3 Optional Rust Helper APIs
 
-The `#[atom_module]` macro MUST generate a manifest export symbol:
+Rust-authored modules MAY expose typed Rust APIs, helper traits, or proc macros such as `AtomModule`
+to reduce boilerplate for library authors.
 
-```c
-AtomOwnedBuffer atom_module_manifest_flatbuffer(void);
-```
+Rules:
 
-Meaning:
-
-- it returns canonical FlatBuffer metadata for the module manifest
-- the returned buffer is allocated by Rust
-- callers MUST free it with `atom_buffer_free`
-
-CNG MUST resolve module manifests by invoking this generated export through a framework helper
-binary. The helper binary is part of the implementation, but the externally visible contract is the
-FlatBuffer payload.
-
-The manifest payload MUST include:
-
-- `schema_files`
-- fully qualified request and response table names for every method
-- enough metadata for CNG to assemble an aggregate schema and drive language binding generation
-
-CNG MUST treat the module-owned `.fbs` files as the source of truth. It MUST NOT synthesize
-FlatBuffers table definitions from Rust structs.
+- these helper APIs are library-author conveniences only
+- they MUST NOT define canonical module metadata for CNG or module resolution
+- they MUST NOT replace Bazel metadata loading as the module discovery mechanism
+- they MAY validate local implementation details against the Bazel-owned metadata contract
 
 ### 6.4 Module Resolution Rules
 
-- Requested modules are taken from `[[modules]]` in manifest declaration order.
+- Requested modules are taken from `atom_app(...).modules` in declaration order.
 - A module dependency graph is formed using `depends_on`.
 - Resolution order MUST be a topological sort of dependencies.
 - For ties, declaration order MUST win.
@@ -406,22 +433,26 @@ FlatBuffers table definitions from Rust structs.
 ### 6.5 Reference Algorithm: Module Resolution
 
 ```text
-function resolve_modules(requested_modules):
+function resolve_modules(requested_modules, app_manifest, framework):
     loaded = []
     seen_ids = set()
 
     for request in requested_modules in declaration order:
-        if request.id in seen_ids:
-            error MODULE_DUPLICATE_ID at "modules." + request.id
-        if crate path does not exist:
-            error MODULE_NOT_FOUND at request.crate
+        metadata_target = derive_metadata_target(request.target_label, "_atom_module_metadata")
+        metadata_path = bazel_build_and_locate(metadata_target)
+        raw = read_text(metadata_path) or error MODULE_MANIFEST_INVALID
+        manifest = parse_json(raw) or error MODULE_MANIFEST_INVALID
+        validate manifest.target_label == request.target_label or error MODULE_MANIFEST_INVALID
+        validate manifest.atom_api_level == framework.atom_api_level or error EXTENSION_INCOMPATIBLE
+        validate framework.version satisfies manifest.min_atom_version if present or error EXTENSION_INCOMPATIBLE
+        validate app_manifest.ios.deployment_target >= manifest.ios_min_deployment_target if both present or error EXTENSION_INCOMPATIBLE
+        validate app_manifest.android.min_sdk >= manifest.android_min_sdk if both present or error EXTENSION_INCOMPATIBLE
 
-        manifest_flatbuffer = extract_module_manifest_flatbuffer(request.crate)
-        manifest = parse_flatbuffer(manifest_flatbuffer) or error MODULE_MANIFEST_INVALID
-        validate manifest.id == request.id or error MODULE_MANIFEST_INVALID
+        if manifest.id in seen_ids:
+            error MODULE_DUPLICATE_ID at manifest.id
 
         loaded.push((request, manifest))
-        seen_ids.add(request.id)
+        seen_ids.add(manifest.id)
 
     graph = build_dependency_graph(loaded)
     ordered = topological_sort(graph) or error MODULE_DEPENDENCY_CYCLE
@@ -507,6 +538,8 @@ function start_runtime(normalized_manifest, resolved_modules):
 - Apps MUST opt into runtime plugins in app code by constructing the runtime configuration passed to
   the kernel. `atom-runtime` MUST NOT perform dynamic plugin discovery or hard-code first-party
   plugin registration.
+- The app entry crate MUST expose `atom_runtime_config()` or an equivalent generated builder entry
+  point that returns the runtime configuration used for startup.
 - First-party runtime plugins SHOULD ship as separate crates depending on `atom-runtime`.
 - First-party and third-party runtime plugins SHOULD use the same public host API and app-owned
   registration model.
@@ -568,10 +601,24 @@ Return rules:
 - `0` means success
 - non-zero means failure and MUST populate `out_error_flatbuffer`
 
+### 8.2.1 App-Owned Runtime Registration Handshake
+
+The runtime registration handshake for the initial mobile profile MUST be app-owned.
+
+Rules:
+
+- the app entry crate identified by `entry_crate_name` MUST expose `atom_runtime_config()` or an
+  equivalent generated builder entry point
+- generated Rust bridge code for iOS and Android MUST call that app-owned registration function
+  during `atom_app_init` or JNI init before the runtime is started
+- adding or removing a runtime plugin MUST NOT require edits to generated Swift/Kotlin host
+  templates beyond the generic framework-owned bridge
+- `atom-runtime` MUST remain unaware of concrete plugin crate identities
+
 ### 8.3 Generated Method Exports
 
-For each module method declared through `exports.export::<Request, Response>(...)`, CNG MUST
-generate a direct Rust export with this shape:
+For each module method declared in normalized module metadata, CNG MUST generate a direct Rust
+export with this shape:
 
 ```c
 int32_t atom_device_info_get(
@@ -592,8 +639,10 @@ Export naming rules:
 - `AtomSlice` is caller-owned and borrowed for the duration of the call only.
 - `AtomOwnedBuffer` returned by Rust is Rust-owned until the caller frees it with
   `atom_buffer_free`.
-- `config_flatbuffer`, `input_flatbuffer`, `out_response_flatbuffer`, and `out_error_flatbuffer`
-  MUST conform to the generated FlatBuffers schema for the current app build.
+- `input_flatbuffer`, `out_response_flatbuffer`, and `out_error_flatbuffer` MUST conform to the
+  generated FlatBuffers schema for the current app build.
+- `config_flatbuffer` MAY be empty in the initial conformance profile. When present, it MUST conform
+  to the generated startup schema for the current app build.
 - Hosts MUST NOT retain borrowed pointers after the call returns.
 
 ### 8.5 Wire Format
@@ -608,8 +657,8 @@ CNG MUST emit:
 The build layer MUST generate Rust bindings for the runtime side and Swift/Kotlin bindings for
 native hosts from the aggregate schema plus all module-owned schema files.
 
-Those generated bindings MUST define the Rust request and response types used with
-`exports.export::<Request, Response>(...)`.
+Those generated bindings MUST define the Rust request and response types used by generated
+per-method exports and by module implementation code.
 
 The `input_flatbuffer` payload MUST be the method-specific request table, not a generic wrapper
 envelope.
@@ -652,8 +701,9 @@ buffers.
 Failures from `atom_app_init`, `atom_app_handle_lifecycle`, and generated per-method exports MUST
 return an `atom.error.AtomError` FlatBuffer in `out_error_flatbuffer`.
 
-The app bootstrap payload passed to `atom_app_init` MUST also be a CNG-generated FlatBuffer payload
-that contains normalized app configuration and platform startup settings.
+`config_flatbuffer` is reserved for a CNG-generated startup payload containing normalized app
+configuration and platform startup settings. The initial conformance profile MAY pass an empty
+payload while relying on the app-owned runtime registration handshake from Section 8.2.1.
 
 The initial bridge profile is synchronous only. Async module work MAY happen inside the Rust
 runtime, but it MUST complete behind the synchronous generated method export boundary until a future
@@ -667,13 +717,55 @@ CNG consumes:
 
 - normalized `atom_app(...)` metadata
 - resolved module metadata
+- serialized config/CNG plugin entries from app metadata
 - module-owned FlatBuffers schema files
 - selected platform set
 - build profile
-- config/CNG plugin contributions (activated by app metadata fields)
 
 Generated host customization MUST happen through module metadata or config/CNG plugins. Runtime
 plugins MUST NOT directly alter generated native host trees.
+
+### 9.1.1 Config/CNG Plugins
+
+Config/CNG plugins MUST be declared in Bazel through plugin-specific Starlark macros that feed
+`atom_app(...).config_plugins`, not through runtime discovery.
+
+Each serialized `config_plugins` entry MUST include:
+
+- `id`
+- `atom_api_level`
+- `min_atom_version`
+- `ios_min_deployment_target`
+- `android_min_sdk`
+- `config`
+
+Rules:
+
+- apps MUST opt into config/CNG plugins through `atom_app(...).config_plugins`
+- config/CNG plugin resolution order MUST follow `atom_app(...).config_plugins` declaration order
+- config/CNG plugins are build-time extensions only; they MUST NOT be linked into or discovered by
+  `atom-runtime`
+- config/CNG plugin crates MUST implement the `ConfigPlugin` trait defined by `atom-cng`
+- config/CNG plugins MAY contribute files, plist fragments, Android manifest fragments, and Bazel
+  resources
+- plugin-specific configuration shape MUST be owned by the plugin's Starlark macro and Rust crate,
+  not by `atom_app(...)` or `atom-cng`
+- config/CNG plugins MUST use deterministic merge semantics compatible with Section 9.2
+
+### 9.1.2 Compatibility Validation
+
+The initial extension compatibility contract MUST be intentionally small and explicit.
+
+Rules:
+
+- the framework MUST declare one supported `atom_api_level` per build
+- every module and config/CNG plugin MUST declare `atom_api_level`
+- `atom prebuild` MUST fail fast with `EXTENSION_INCOMPATIBLE` if any module or config/CNG plugin
+  declares a different `atom_api_level`
+- `min_atom_version`, when present, MUST be satisfied by the current framework version
+- `ios_min_deployment_target` and `android_min_sdk`, when present, MUST be satisfied by the app
+  manifest before host generation begins
+- compatibility failures MUST identify the offending target label and field
 
 ### 9.2 Merge Rules
 
@@ -697,9 +789,12 @@ MUST fail generation.
 ### 9.3 Reference Algorithm: Plan Merge
 
 ```text
-function build_generation_plan(manifest, modules):
+function build_generation_plan(manifest, modules, framework):
     plan = new GenerationPlan()
     plan.app = manifest.app
+
+    validate_extension_compatibility(modules, manifest.config_plugins, manifest, framework)
+        or error EXTENSION_INCOMPATIBLE
 
     for module in modules in resolved order:
         plan.permissions = union(plan.permissions, module.permissions)
@@ -709,7 +804,7 @@ function build_generation_plan(manifest, modules):
         plan.generated_sources.extend(module.generated_sources)
         plan.module_bindings.append(module.id)
 
-    for entry in manifest.config_plugins:
+    for entry in manifest.config_plugins in declaration order:
         plugin = instantiate_plugin(entry.id, entry.config)
         plugin.validate() or error
         if manifest.ios.enabled:
@@ -1324,6 +1419,9 @@ Required behavior:
 - config/CNG plugins contribute deterministic host customization per Section 9
 - config/CNG plugins remain separate from runtime plugins and native modules
 - runtime plugins MUST NOT mutate generated native trees directly
+- incompatible module or config/CNG plugin metadata fails fast with `EXTENSION_INCOMPATIBLE`
+- runtime plugins MUST NOT mutate generated native trees directly
+- incompatible module or config/CNG plugin metadata fails fast with `EXTENSION_INCOMPATIBLE`
 - the same app may combine runtime plugins, native modules, and config/CNG plugins coherently
 
 #### 11.8.1 Config Plugin Trait
@@ -1364,9 +1462,12 @@ atom_app(
 )
 ```
 
-Each plugin macro MUST return `{"id": "<plugin_id>", "config": {...}}`. `atom_app` MUST serialize
-the list into a `config_plugins` array in the metadata JSON. CNG MUST instantiate plugins by `id`,
-pass the opaque `config` to the plugin for parsing and validation, then call contribution methods.
+Each plugin macro MUST return at least
+`{"id": "<plugin_id>", "atom_api_level": <n>, "config": {...}}`. It MAY also include
+`min_atom_version`, `ios_min_deployment_target`, and `android_min_sdk`. `atom_app` MUST serialize
+the list into a `config_plugins` array in the metadata JSON. CNG MUST validate compatibility fields,
+instantiate plugins by `id`, pass the opaque `config` to the plugin for parsing and validation, then
+call contribution methods.
 
 #### 11.8.3 App Icon Config Plugin (`atom-cng-app-icon`)
 
