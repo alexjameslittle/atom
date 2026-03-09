@@ -5,23 +5,16 @@ already know the area you are changing.
 
 ## Start Here
 
-- [../AGENTS.md](/Users/alexlittle/conductor/workspaces/atom/tehran/AGENTS.md): short repo map and
-  working rules for agents.
-- [architecture.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/architecture.md): crate
-  boundaries, dependency direction, and metadata flow.
-- [harness.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/harness.md): bootstrap,
-  verification, hooks, and CI guardrails.
+- [../AGENTS.md](../AGENTS.md): short repo map and working rules for agents.
+- [architecture.md](architecture.md): crate boundaries, dependency direction, and metadata flow.
+- [harness.md](harness.md): bootstrap, verification, hooks, and CI guardrails.
 
 ## Design Context
 
-- [core-beliefs.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/core-beliefs.md):
-  agent-first operating principles for this repo.
-- [design-docs/README.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/design-docs/README.md):
-  stable decision records for architecture choices.
-- [plan.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/plan.md): roadmap and
-  implementation sequencing.
-- [../SPEC.md](/Users/alexlittle/conductor/workspaces/atom/tehran/SPEC.md): normative behavior
-  target. Keep it aligned with implementation.
+- [core-beliefs.md](core-beliefs.md): agent-first operating principles for this repo.
+- [design-docs/README.md](design-docs/README.md): stable decision records for architecture choices.
+- [plan.md](plan.md): roadmap and implementation sequencing.
+- [../SPEC.md](../SPEC.md): normative behavior target. Keep it aligned with implementation.
 
 ## Update Rule
 
