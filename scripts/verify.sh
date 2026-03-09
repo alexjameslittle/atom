@@ -10,7 +10,7 @@ mode=${1:-verify}
 # BUILD files reference platform-specific rules (android_binary, UIKit) that are
 # only valid when built with the correct platform flags via `atom run`.
 # If you add a new top-level directory with BUILD files, add it here.
-VERIFY_PACKAGES="//crates/... //examples/... //bzl/... //tools/..."
+VERIFY_PACKAGES="//crates/... //examples/... //bzl/... //tools/... //platforms/..."
 
 check_for_unverified_packages() {
   for dir in "$repo_root"/*/; do
