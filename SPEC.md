@@ -34,6 +34,8 @@ Atom is not:
 - Define a stable Bazel-native app metadata model through `atom_app(...)`.
 - Define a Rust module format that is consumable by both the runtime and CNG.
 - Define a runtime plugin model that is distinct from native modules.
+- Define a runtime plugin model that supports first-party and third-party library crates through the
+  same public API.
 - Define a config/CNG plugin model for deterministic native host customization.
 - Define deterministic CNG behavior and concrete generated outputs.
 - Define a Bazel-first build contract using `bzlmod`.
@@ -500,7 +502,20 @@ function start_runtime(normalized_manifest, resolved_modules):
   NOT introduce a second lifecycle model or direct generated-host customization path.
 - The runtime kernel MUST remain the single authority for lifecycle transitions, effect completion,
   and dispatch ordering even when higher-level state-management libraries layer on top of it.
-- Navigation MAY be implemented as a first-party runtime plugin rather than as a kernel concern.
+- `atom-runtime` MUST expose only destination-agnostic plugin host types. Its public plugin API MUST
+  NOT mention iOS, Android, simulator, emulator, device, route-stack, or renderer-specific types.
+- Apps MUST opt into runtime plugins in app code by constructing the runtime configuration passed to
+  the kernel. `atom-runtime` MUST NOT perform dynamic plugin discovery or hard-code first-party
+  plugin registration.
+- First-party runtime plugins SHOULD ship as separate crates depending on `atom-runtime`.
+- First-party and third-party runtime plugins SHOULD use the same public host API and app-owned
+  registration model.
+- Navigation SHOULD be implemented as a first-party runtime plugin crate such as `atom-navigation`,
+  not as a kernel concern.
+- Destination- or platform-specific behavior MAY be packaged as separate adapter/plugin crates
+  outside `atom-runtime`, but those crates MUST NOT redefine lifecycle semantics.
+- `atom-runtime` MUST NOT own route stacks, screen descriptors, destination discovery, device
+  automation, or generated-host customization.
 
 ## 8. Bridge ABI Specification
 
@@ -1235,13 +1250,12 @@ Conformance example:
   callbacks executing. `atom run android` launches the app on an Android emulator with Rust
   lifecycle callbacks executing via JNI.
 
-### 11.5 Phase 4: Runtime Kernel and Plugins
+### 11.5 Phase 4A: Runtime Kernel
 
 Required behavior:
 
 - module init in resolved order
 - runtime lifecycle follows Section 7.2
-- runtime plugins follow Section 7.6
 - invalid transitions return `RUNTIME_TRANSITION_INVALID`
 
 Conformance example:
@@ -1249,11 +1263,54 @@ Conformance example:
 - Input sequence: `init -> background -> resume -> terminate`
 - Expected state sequence:
   `Created -> Initializing -> Running -> Backgrounded -> Running -> Terminating -> Terminated`
-- Input: canonical app with a first-party navigation plugin
-- Expected output: runtime boots successfully and exposes navigation through the runtime plugin
-  layer without app-specific host bootstrap changes
 
-### 11.6 Phase 5: Developer Workflow, Config Plugins, and Evaluation
+### 11.6 Phase 4B: Runtime Plugin SDK and Registration
+
+Required behavior:
+
+- runtime plugins follow Section 7.6
+- apps register runtime plugins in app-owned code rather than through kernel-side discovery
+- generated hosts do not require per-plugin bootstrap changes
+- the same registration path works for framework-owned and third-party-style plugin crates
+
+Conformance example:
+
+- Input: canonical app with one external plugin crate
+- Expected output: runtime boots successfully with the plugin registered through app-owned runtime
+  config and without changes to `atom-runtime` or generated host templates
+
+### 11.7 Phase 4C: First-Party Plugin Libraries
+
+Required behavior:
+
+- first-party plugins ship as separate crates outside `atom-runtime`
+- no first-party plugin types are re-exported from `atom-runtime`
+- at least one routing/navigation-style plugin is proven as a library concern rather than a kernel
+  concern
+- at least one additional non-routing plugin crate proves the model is generic
+
+Conformance example:
+
+- Input: canonical app with `atom-navigation` or `atom-router` plus one additional plugin crate
+- Expected output: runtime boots successfully, plugin behavior is available through the shared
+  public plugin API, and either plugin can be removed without kernel changes
+
+### 11.8 Phase 5: Config/CNG Plugin System
+
+Required behavior:
+
+- config/CNG plugins contribute deterministic host customization per Section 9
+- config/CNG plugins remain separate from runtime plugins and native modules
+- runtime plugins do not mutate generated native trees directly
+- the same app may combine runtime plugins, native modules, and config/CNG plugins coherently
+
+Conformance example:
+
+- Input: canonical app with one runtime plugin, one native module, and one config/CNG plugin
+- Expected output: generated hosts reflect the config plugin's deterministic customization, the
+  runtime plugin remains a runtime-only concern, and no manual edits to generated roots are needed
+
+### 11.9 Phase 6: Developer Workflow, Ecosystem, and Evaluation
 
 Required behavior:
 
@@ -1268,6 +1325,7 @@ Required behavior:
 - automation backends are framework-owned and semantic-first per Section 9.8.4
 - the evaluation model remains extensible to additional platforms and destination kinds through
   capability discovery
+- apps can consume first-party and third-party-style plugin crates through documented workflows
 
 Conformance example:
 
@@ -1277,7 +1335,7 @@ Conformance example:
   machine-readable inspection data, write logs plus screenshot or video artifacts, produce an
   artifact manifest, and observe the expected UI transition without manual interaction
 
-### 11.7 Phase 6: Optional Renderer
+### 11.10 Phase 7: Optional Renderer
 
 Renderer behavior is intentionally outside the minimum Atom conformance profile and SHOULD be
 specified in a separate renderer spec if and when that work begins.
@@ -1304,7 +1362,7 @@ specified in a separate renderer spec if and when that work begins.
 - **Should screenshots, recordings, logs, and UI interaction live in external ad hoc scripts or in
   the framework?** In the framework. Agents and humans need a stable, supported CLI surface for
   proof of behavior on real mobile hosts and future platform destinations. See Sections 9.8.4, 10.1,
-  and 11.6.
+  and 11.9.
 
 ## 14. CI Specification
 
