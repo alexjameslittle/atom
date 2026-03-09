@@ -361,6 +361,16 @@ mod tests {
                         "build.atom.hello/.MainActivity".to_owned(),
                     ],
                 ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "logcat".to_owned(),
+                        "-T".to_owned(),
+                        "1".to_owned(),
+                    ],
+                ),
             ]
         );
     }

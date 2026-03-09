@@ -198,6 +198,13 @@ pub fn deploy_android(
                 &["-s", serial, "shell", "am", "start", "-n", &component],
             )
         })?;
+        eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
+        stream_tool(
+            runner,
+            repo_root,
+            "adb",
+            &["-s", serial, "logcat", "-T", "1"],
+        )
     } else {
         run_step(
             "Installing app...",
@@ -213,8 +220,9 @@ pub fn deploy_android(
                 &["shell", "am", "start", "-n", &component],
             )
         })?;
+        eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
+        stream_tool(runner, repo_root, "adb", &["logcat", "-T", "1"])
     }
-    Ok(())
 }
 
 #[must_use]
