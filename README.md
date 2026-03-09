@@ -4,25 +4,25 @@ Planning repository for a Rust-first mobile application framework.
 
 The current focus is architecture and tooling, not scaffolding. The formal specification is in
 [SPEC.md](SPEC.md), and the implementation roadmap is in [docs/plan.md](docs/plan.md). For
-repository conventions and the documentation map, start with
-[AGENTS.md](/Users/alexlittle/conductor/workspaces/atom/tehran/AGENTS.md) and
-[docs/README.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/README.md).
+repository conventions and the documentation map, start with [AGENTS.md](AGENTS.md) and
+[docs/README.md](docs/README.md).
 
-This branch now bootstraps the Phase 0, Phase 1, and Phase 2 slice from the spec:
+This branch now implements the Phase 4 runtime/plugin slice from the spec:
 
 - Bazel `bzlmod` toolchain wiring via `.bazelversion`, `MODULE.bazel`, and `mise.toml`
 - Bazel-native Rust dependency pinning through `crate_universe` `crate.spec(...)` entries in
-  [`MODULE.bazel`](/Users/alexlittle/conductor/workspaces/atom/tehran/MODULE.bazel)
-- public Bazel macros for consumers in
-  [`bzl/atom/defs.bzl`](/Users/alexlittle/conductor/workspaces/atom/tehran/bzl/atom/defs.bzl)
+  [`MODULE.bazel`](MODULE.bazel)
+- public Bazel macros for consumers in [`bzl/atom/defs.bzl`](bzl/atom/defs.bzl)
 - Bazel rule-driven app and module metadata through `atom_app`, `atom_module`, and
   `atom_native_module`
-- `atom-manifest`, `atom-modules`, `atom-cng`, `atom-runtime`, `atom-ffi`, and `atom-cli`
-- a canonical example consumer in
-  [`examples/hello-world`](/Users/alexlittle/conductor/workspaces/atom/tehran/examples/hello-world)
+- `atom-manifest`, `atom-modules`, `atom-cng`, `atom-runtime`, `atom-deploy`, `atom-ffi`, and
+  `atom-cli`
+- first-party runtime plugin crates in `crates/atom-navigation` and `crates/atom-analytics`
+- a canonical example consumer in [`examples/hello-world`](examples/hello-world)
 - local and CI verification harnesses driven by `mise`
 - generated Swift and Kotlin host bootstraps that start the Rust runtime through `atom run ios` and
   `atom run android`
+- app-owned runtime plugin registration through `atom_runtime_config()` in the example app
 
 Current decisions:
 
@@ -33,11 +33,11 @@ Current decisions:
   Cargo manifests are not part of the source of truth.
 - App and module configuration live in Bazel rules, not in `Atom.toml` sidecars.
 
-The first implementation slice, once planning is approved, is:
+The hello-world app now proves:
 
-1. Toolchain bootstrap with `mise.toml`, `.bazelversion`, `MODULE.bazel`, and `bzl/atom`.
-2. A Rust manifest and CNG graph with a dry-run `prebuild`.
-3. Thin generated iOS and Android host glue that can boot the Rust runtime.
+1. Thin generated iOS and Android host glue can boot the Rust runtime.
+2. Runtime plugins are registered in app code instead of kernel-side discovery.
+3. Navigation and analytics stay as normal library crates outside `atom-runtime`.
 
 ## Bootstrap
 
@@ -46,7 +46,6 @@ The first implementation slice, once planning is approved, is:
 mise run verify
 ```
 
-The Git hooks in [.githooks](/Users/alexlittle/conductor/workspaces/atom/tehran/.githooks) are
-installed automatically by the bootstrap task, and GitHub PR verification is defined in
-[.github/workflows/ci.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/workflows/ci.yml).
-Rust formatting, Clippy, and tests are all executed through Bazel entrypoints.
+The Git hooks in [.githooks](.githooks) are installed automatically by the bootstrap task, and
+GitHub PR verification is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml). Rust
+formatting, Clippy, and tests are all executed through Bazel entrypoints.

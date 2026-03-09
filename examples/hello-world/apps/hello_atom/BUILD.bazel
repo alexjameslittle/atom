@@ -14,7 +14,8 @@ atom_app(
     ],
     slug = "hello-atom",
     deps = [
+        "//crates/atom-analytics",
+        "//crates/atom-navigation",
         "//crates/atom-runtime",
-        "//examples/hello-world/plugins/lifecycle_logger",
     ],
 )

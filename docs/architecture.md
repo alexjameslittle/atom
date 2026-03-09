@@ -13,9 +13,9 @@ Bazel is the only source of truth for build graph shape and app/module configura
 
 Dependency direction should move one way:
 
-`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-cng` -> `atom-cli`
+`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-cng` -> `atom-deploy` -> `atom-cli`
 
-`atom-runtime` remains separate from CLI/CNG graph orchestration.
+`atom-runtime` and runtime plugin libraries remain separate from CLI/CNG graph orchestration.
 
 ### Layer Responsibilities
 
@@ -33,6 +33,9 @@ Dependency direction should move one way:
 - `atom-cng`
   - Merges app + module configuration into deterministic generation plans
   - Writes the host tree for dry-run or materialized output
+- `atom-deploy`
+  - Device discovery and destination selection
+  - Build/install/launch orchestration for simulators, emulators, and connected devices
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
   - Must stay a thin wrapper, not an alternate build system
@@ -48,6 +51,14 @@ Dependency direction should move one way:
   - Handle-based registry for FFI access from generated native hosts
   - `ensure_running()` gate for CNG-generated per-method module exports
   - Module call dispatch is not the runtime's concern — CNG generates direct per-method FFI exports
+- `atom-navigation`
+  - First-party runtime plugin crate that owns a route stack through the public `RuntimePlugin`
+    contract
+  - Proves navigation is a library concern rather than kernel state
+- `atom-analytics`
+  - First-party runtime plugin crate that buffers and flushes analytics batches on lifecycle
+    boundaries
+  - Proves non-routing headless app behavior composes through the same public plugin API
 
 ## Metadata Flow
 
@@ -57,7 +68,8 @@ Dependency direction should move one way:
 4. `atom-modules` loads module metadata from Bazel outputs and orders dependencies.
 5. `atom-cng` produces a deterministic generation plan and optional emitted host tree.
 6. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
-   kernel-side plugin discovery.
+   kernel-side plugin discovery. Any first-party or third-party plugin crates enter through that
+   app-owned configuration path.
 
 ## Boundaries To Preserve
 
@@ -66,13 +78,13 @@ Dependency direction should move one way:
 - Keep codegen deterministic. Two identical inputs should produce the same plan and output tree.
 - Keep examples representative. The hello-world example should exercise real repo conventions, not a
   toy path that bypasses them.
+- Keep first-party plugins outside `atom-runtime`. The kernel owns lifecycle and registration, while
+  higher-level concerns like navigation and analytics stay in separate crates.
 
 ## When Adding A New Layer
 
 - Document the responsibility here.
-- Document any new invariants in
-  [core-beliefs.md](/Users/alexlittle/conductor/workspaces/atom/tehran/docs/core-beliefs.md) or a
-  design doc if the change is architectural.
-- Add verification coverage in
-  [`scripts/verify.sh`](/Users/alexlittle/conductor/workspaces/atom/tehran/scripts/verify.sh) if the
-  new layer changes repo-wide expectations.
+- Document any new invariants in [core-beliefs.md](core-beliefs.md) or a design doc if the change is
+  architectural.
+- Add verification coverage in [`scripts/verify.sh`](../scripts/verify.sh) if the new layer changes
+  repo-wide expectations.

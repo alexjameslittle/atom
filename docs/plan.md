@@ -311,10 +311,13 @@ Output expectations:
 │   └── plan.md
 ├── crates/
 │   ├── atom-runtime/
+│   ├── atom-navigation/
+│   ├── atom-analytics/
 │   ├── atom-manifest/
 │   ├── atom-modules/
 │   ├── atom-ffi/
 │   ├── atom-cng/
+│   ├── atom-deploy/
 │   └── atom-cli/
 ├── templates/
 │   ├── ios/
@@ -328,6 +331,8 @@ Notes:
 - `atom-manifest` owns Bazel-generated app metadata loading and validation.
 - `atom-cng` resolves the app + module graph into generated native output.
 - `atom-ffi` owns the stable host ABI.
+- `atom-runtime` owns lifecycle, plugin registration, and runtime/module coordination.
+- `atom-navigation` and `atom-analytics` prove first-party runtime plugins are normal crates.
 - `atom-cli` is a thin frontend over CNG and Bazel commands.
 
 ## CNG Model

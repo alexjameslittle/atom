@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "atom-analytics",
+    srcs = ["src/lib.rs"],
+    crate_name = "atom_analytics",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/atom-ffi",
+        "//crates/atom-runtime",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "atom-analytics-test",
+    crate = ":atom-analytics",
+)
