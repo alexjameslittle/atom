@@ -68,7 +68,7 @@ pub fn resolve_android_device(
         .collect::<Vec<_>>();
     if let Ok(avds) = list_avds(repo_root, runner) {
         for avd in avds {
-            if !running_avds.iter().any(|r| *r == avd) {
+            if !running_avds.contains(&avd) {
                 destinations.push(AndroidDestination {
                     serial: String::new(),
                     state: "avd".to_owned(),
@@ -232,10 +232,9 @@ fn wait_for_android_boot(repo_root: &Utf8Path, runner: &mut impl ToolRunner) -> 
             repo_root,
             "adb",
             &["shell", "getprop", "sys.boot_completed"],
-        ) {
-            if output.trim() == "1" {
-                return Ok(());
-            }
+        ) && output.trim() == "1"
+        {
+            return Ok(());
         }
         thread::sleep(Duration::from_secs(2));
     }
