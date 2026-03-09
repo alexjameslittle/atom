@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
@@ -31,6 +31,13 @@ pub trait ToolRunner {
         tool: &str,
         args: &[String],
     ) -> AtomResult<String>;
+    /// Run a tool with stdout and stderr inherited from the current process, streaming
+    /// output directly to the terminal. Blocks until the process exits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tool invocation fails or exits with a non-zero status.
+    fn stream(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
 }
 
 pub struct ProcessRunner;
@@ -100,6 +107,30 @@ impl ToolRunner for ProcessRunner {
         })
     }
 
+    fn stream(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()> {
+        let status = Command::new(tool)
+            .args(args)
+            .current_dir(repo_root)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|error| {
+                AtomError::new(
+                    AtomErrorCode::ExternalToolFailed,
+                    format!("failed to invoke {tool}: {error}"),
+                )
+            })?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("{tool} {} exited with status {status}", args.join(" "),),
+            ))
+        }
+    }
+
     fn capture_json_file(
         &mut self,
         repo_root: &Utf8Path,
@@ -160,6 +191,25 @@ pub fn run_tool(
     args: &[&str],
 ) -> AtomResult<()> {
     runner.run(
+        repo_root,
+        tool,
+        &args
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// # Errors
+///
+/// Returns an error if the tool invocation fails.
+pub fn stream_tool(
+    runner: &mut impl ToolRunner,
+    repo_root: &Utf8Path,
+    tool: &str,
+    args: &[&str],
+) -> AtomResult<()> {
+    runner.stream(
         repo_root,
         tool,
         &args

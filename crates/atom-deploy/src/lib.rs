@@ -66,6 +66,16 @@ mod tests {
                 .pop_front()
                 .expect("expected captured JSON output for command"))
         }
+
+        fn stream(
+            &mut self,
+            _repo_root: &Utf8Path,
+            tool: &str,
+            args: &[String],
+        ) -> atom_ffi::AtomResult<()> {
+            self.calls.push((tool.to_owned(), args.to_vec()));
+            Ok(())
+        }
     }
 
     fn runnable_manifest(root: &Utf8PathBuf) -> NormalizedManifest {
@@ -172,6 +182,7 @@ mod tests {
                     vec![
                         "simctl".to_owned(),
                         "launch".to_owned(),
+                        "--console".to_owned(),
                         "SIM-123".to_owned(),
                         "build.atom.hello".to_owned(),
                     ],

@@ -10,6 +10,7 @@ use crate::devices::ios::{IosDestinationKind, prepare_ios_simulator, resolve_ios
 use crate::progress::run_step;
 use crate::tools::{
     ToolRunner, find_bazel_output, find_bazel_output_owned, run_bazel, run_bazel_owned, run_tool,
+    stream_tool,
 };
 
 /// # Errors
@@ -92,14 +93,13 @@ fn install_and_launch_simulator(
             )
         },
     )?;
-    run_step("Launching app...", "App launched", "Launch failed", || {
-        run_tool(
-            runner,
-            repo_root,
-            "xcrun",
-            &["simctl", "launch", &simulator, bundle_id],
-        )
-    })
+    eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
+    stream_tool(
+        runner,
+        repo_root,
+        "xcrun",
+        &["simctl", "launch", "--console", &simulator, bundle_id],
+    )
 }
 
 fn install_and_launch_device(
