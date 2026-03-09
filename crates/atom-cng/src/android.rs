@@ -55,6 +55,7 @@ pub(crate) fn render_android_build_file(
             source_root => source_root.as_str(),
             module_labels,
             package_name,
+            target_sdk => android.target_sdk.unwrap_or_default(),
         },
     )
 }

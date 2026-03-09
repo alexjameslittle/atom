@@ -1,6 +1,16 @@
 load("@build_bazel_rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hint")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_static_library", "rust_test")
 
+RUNTIME_DEPS = [
+    "//crates/atom-ffi",
+    "@crates//:tokio",
+    "@crates//:tracing",
+    "@crates//:tracing-subscriber",
+] + select({
+    "@platforms//os:android": ["@crates//:tracing-android"],
+    "//conditions:default": [],
+})
+
 rust_library(
     name = "atom-runtime",
     srcs = glob(["src/**/*.rs"]),
@@ -8,12 +18,7 @@ rust_library(
     crate_root = "src/lib.rs",
     edition = "2024",
     visibility = ["//visibility:public"],
-    deps = [
-        "//crates/atom-ffi",
-        "@crates//:tokio",
-        "@crates//:tracing",
-        "@crates//:tracing-subscriber",
-    ],
+    deps = RUNTIME_DEPS,
 )
 
 rust_static_library(
@@ -23,12 +28,7 @@ rust_static_library(
     crate_root = "src/lib.rs",
     edition = "2024",
     visibility = ["//visibility:public"],
-    deps = [
-        "//crates/atom-ffi",
-        "@crates//:tokio",
-        "@crates//:tracing",
-        "@crates//:tracing-subscriber",
-    ],
+    deps = RUNTIME_DEPS,
 )
 
 swift_interop_hint(

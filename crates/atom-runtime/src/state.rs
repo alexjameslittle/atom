@@ -20,7 +20,10 @@ pub fn validate_transition(
 ) -> AtomResult<RuntimeState> {
     match (from, event) {
         (RuntimeState::Running, AtomLifecycleEvent::Background) => Ok(RuntimeState::Backgrounded),
-        (RuntimeState::Backgrounded, AtomLifecycleEvent::Foreground)
+        // iOS fires sceneWillEnterForeground on initial launch when the runtime is already
+        // Running, so treat Foreground while Running as a no-op alongside the normal
+        // Backgrounded/Suspended → Running transitions.
+        (RuntimeState::Running | RuntimeState::Backgrounded, AtomLifecycleEvent::Foreground)
         | (RuntimeState::Suspended, AtomLifecycleEvent::Resume) => Ok(RuntimeState::Running),
         (RuntimeState::Backgrounded, AtomLifecycleEvent::Suspend) => Ok(RuntimeState::Suspended),
         (
@@ -133,6 +136,16 @@ mod tests {
         let err =
             validate_transition(RuntimeState::Created, AtomLifecycleEvent::Background).unwrap_err();
         assert_eq!(err.code, AtomErrorCode::RuntimeTransitionInvalid);
+    }
+
+    #[test]
+    fn foreground_while_running_is_noop() {
+        // iOS fires sceneWillEnterForeground on initial launch, so Foreground from
+        // Running must be accepted as a no-op rather than returning an error.
+        assert_eq!(
+            validate_transition(RuntimeState::Running, AtomLifecycleEvent::Foreground).unwrap(),
+            RuntimeState::Running,
+        );
     }
 
     #[test]

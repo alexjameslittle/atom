@@ -1,6 +1,48 @@
 package {{ package_name }}
 
-class AtomApplication {
-    val name: String = "{{ name }}"
-    val slug: String = "{{ slug }}"
+import android.app.Application
+import android.util.Log
+
+class AtomApplication : Application() {
+    var runtimeHandle: Long = 0
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        System.loadLibrary("atom_runtime_jni")
+        runtimeHandle = AtomRuntimeBridge.initRuntime()
+        if (runtimeHandle == 0L) {
+            Log.e(TAG, "atom_app_init failed")
+        } else {
+            Log.i(TAG, "Booting {{ name }} ({{ slug }}) on Android")
+            Log.i(TAG, "Modules: ${AtomBindings.moduleSummary}")
+        }
+    }
+
+    override fun onTerminate() {
+        if (runtimeHandle != 0L) {
+            AtomRuntimeBridge.handleLifecycle(runtimeHandle, 5)
+            AtomRuntimeBridge.shutdown(runtimeHandle)
+            runtimeHandle = 0
+        }
+        super.onTerminate()
+    }
+
+    fun sendLifecycle(event: Int, action: String) {
+        if (runtimeHandle == 0L) return
+        val result = AtomRuntimeBridge.handleLifecycle(runtimeHandle, event)
+        if (result != 0) {
+            Log.e(TAG, "$action transition failed with code $result")
+        }
+    }
+
+    companion object {
+        const val TAG = "AtomRuntime"
+    }
+}
+
+object AtomRuntimeBridge {
+    external fun initRuntime(): Long
+    external fun handleLifecycle(handle: Long, event: Int): Int
+    external fun shutdown(handle: Long)
 }
