@@ -156,7 +156,8 @@ fn execute_run(
         "Code generation failed",
         || {
             let modules = resolve_modules(&repo_root, &manifest.modules)?;
-            let plan = build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
+            let plan =
+                build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
             emit_host_tree(&repo_root, &plan)
         },
     )?;

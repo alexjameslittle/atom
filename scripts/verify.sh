@@ -6,7 +6,7 @@ cd "$repo_root"
 
 mode=${1:-verify}
 
-# Source directories to verify. The generated/ directory is excluded because its
+# Source directories to verify. Generated host trees are excluded because their
 # BUILD files reference platform-specific rules (android_binary, UIKit) that are
 # only valid when built with the correct platform flags via `atom run`.
 # If you add a new top-level directory with BUILD files, add it here.
@@ -16,7 +16,7 @@ check_for_unverified_packages() {
   for dir in "$repo_root"/*/; do
     name=$(basename "$dir")
     case "$name" in
-      generated|bazel-*|docs|scripts|templates|node_modules) continue ;;
+      generated|cng-output|bazel-*|docs|scripts|templates|node_modules) continue ;;
     esac
     if [ -f "$dir/BUILD.bazel" ] || [ -f "$dir/BUILD" ]; then
       if ! echo "$VERIFY_PACKAGES" | grep -q "//${name}/\.\.\."; then
@@ -51,13 +51,13 @@ generate_example_app() {
 
 build_ios_app() {
   # Build iOS app (simulator architecture).
-  bazelisk build //generated/ios/hello-atom:app --ios_multi_cpus=sim_arm64
+  bazelisk build //cng-output/ios/hello-atom:app --ios_multi_cpus=sim_arm64
 }
 
 build_android_app() {
   # Build Android app (requires ANDROID_HOME).
   if [ -n "${ANDROID_HOME:-}" ]; then
-    bazelisk build //generated/android/hello-atom:app --android_platforms=//platforms:arm64-v8a
+    bazelisk build //cng-output/android/hello-atom:app --android_platforms=//platforms:arm64-v8a
   else
     echo "ANDROID_HOME not set, skipping Android build"
   fi

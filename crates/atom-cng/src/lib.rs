@@ -9,8 +9,8 @@ use std::fmt::Write;
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::{
-    AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, NormalizedManifest,
-    FRAMEWORK_ATOM_API_LEVEL, FRAMEWORK_VERSION,
+    AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, FRAMEWORK_ATOM_API_LEVEL,
+    FRAMEWORK_VERSION, IosConfig, NormalizedManifest,
 };
 use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -27,7 +27,8 @@ pub trait ConfigPlugin: Send + Sync {
     fn id(&self) -> &str;
     fn validate(&self) -> AtomResult<()>;
     fn contribute_ios(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<PlatformContribution>;
-    fn contribute_android(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<PlatformContribution>;
+    fn contribute_android(&self, ctx: &ConfigPluginContext<'_>)
+    -> AtomResult<PlatformContribution>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,11 +262,7 @@ pub fn build_generation_plan(
     if let Some(android) = &android {
         generated_files.extend(android.files.iter().cloned());
     }
-    generated_files.extend(
-        contributed_files
-            .iter()
-            .map(|file| file.output.clone()),
-    );
+    generated_files.extend(contributed_files.iter().map(|file| file.output.clone()));
 
     Ok(GenerationPlan {
         version: 1,
@@ -587,7 +584,9 @@ fn validate_extension(
             return Err(extension_compatibility_error(
                 target_label,
                 "android_min_sdk",
-                format!("extension requires Android min_sdk {required}, app is configured for {current}"),
+                format!(
+                    "extension requires Android min_sdk {required}, app is configured for {current}"
+                ),
             ));
         }
     }
@@ -595,11 +594,7 @@ fn validate_extension(
     Ok(())
 }
 
-fn extension_compatibility_error(
-    target_label: &str,
-    field: &str,
-    message: String,
-) -> AtomError {
+fn extension_compatibility_error(target_label: &str, field: &str, message: String) -> AtomError {
     AtomError::with_path(
         AtomErrorCode::ExtensionIncompatible,
         message,
@@ -621,11 +616,7 @@ fn compare_semver(current: &str, required: &str) -> AtomResult<Ordering> {
 
 fn parse_deployment_target(value: &str) -> AtomResult<(u32, u32)> {
     let mut components = value.split('.');
-    match (
-        components.next(),
-        components.next(),
-        components.next(),
-    ) {
+    match (components.next(), components.next(), components.next()) {
         (Some(major), Some(minor), None) => Ok((
             parse_u32_component(major, "deployment target")?,
             parse_u32_component(minor, "deployment target")?,
@@ -931,7 +922,7 @@ mod tests {
                         .generated_root
                         .join("android")
                         .join(&ctx.app.slug)
-                        .join("src/main/res/mipmap-xxxhdpi/ic_launcher.png"),
+                        .join("res/mipmap-xxxhdpi/ic_launcher.png"),
                 }],
                 plist_entries: JsonMap::new(),
                 android_manifest_entries: object_from_value(json!({
@@ -939,7 +930,7 @@ mod tests {
                         "@android:icon": "@mipmap/ic_launcher"
                     }
                 })),
-                bazel_resources: vec!["src/main/res/mipmap-xxxhdpi/ic_launcher.png".to_owned()],
+                bazel_resources: vec!["res/mipmap-xxxhdpi/ic_launcher.png".to_owned()],
                 bazel_resource_globs: Vec::new(),
             })
         }
@@ -1115,9 +1106,10 @@ mod tests {
         let android_build =
             fs::read_to_string(root.join("generated/android/hello-atom/BUILD.bazel"))
                 .expect("android build");
-        let android_manifest =
-            fs::read_to_string(root.join("generated/android/hello-atom/AndroidManifest.generated.xml"))
-                .expect("android manifest");
+        let android_manifest = fs::read_to_string(
+            root.join("generated/android/hello-atom/AndroidManifest.generated.xml"),
+        )
+        .expect("android manifest");
         let android_runtime_bridge =
             fs::read_to_string(root.join("generated/android/hello-atom/atom_runtime_jni.rs"))
                 .expect("android runtime bridge");
@@ -1193,8 +1185,11 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let (mut manifest, modules) = write_fixture(&root);
         fs::create_dir_all(root.join("assets/AppIcon.icon")).expect("icon dir");
-        fs::write(root.join("assets/AppIcon.icon/icon.json"), "{\"name\":\"AppIcon\"}")
-            .expect("icon json");
+        fs::write(
+            root.join("assets/AppIcon.icon/icon.json"),
+            "{\"name\":\"AppIcon\"}",
+        )
+        .expect("icon json");
         fs::write(root.join("assets/ic_launcher.png"), "png").expect("png");
         manifest.config_plugins.push(ConfigPluginRequest {
             target_label: "//tests:fixture_plugin".to_owned(),
@@ -1216,22 +1211,29 @@ mod tests {
                 .expect("ios plist");
         let ios_build =
             fs::read_to_string(root.join("generated/ios/hello-atom/BUILD.bazel")).expect("ios");
-        let android_manifest =
-            fs::read_to_string(root.join("generated/android/hello-atom/AndroidManifest.generated.xml"))
-                .expect("android manifest");
+        let android_manifest = fs::read_to_string(
+            root.join("generated/android/hello-atom/AndroidManifest.generated.xml"),
+        )
+        .expect("android manifest");
         let android_build =
             fs::read_to_string(root.join("generated/android/hello-atom/BUILD.bazel"))
                 .expect("android build");
 
-        assert!(root.join("generated/ios/hello-atom/resources/AppIcon.icon/icon.json").exists());
-        assert!(root.join("generated/android/hello-atom/src/main/res/mipmap-xxxhdpi/ic_launcher.png").exists());
+        assert!(
+            root.join("generated/ios/hello-atom/resources/AppIcon.icon/icon.json")
+                .exists()
+        );
+        assert!(
+            root.join("generated/android/hello-atom/res/mipmap-xxxhdpi/ic_launcher.png")
+                .exists()
+        );
         assert!(ios_plist.contains("<key>CFBundleIconName</key>"));
         assert!(ios_plist.contains("<string>AppIcon</string>"));
         assert!(ios_build.contains("glob(["));
         assert!(ios_build.contains("\"resources/AppIcon.icon/**\""));
         assert!(android_manifest.contains("android:icon=\"@mipmap/ic_launcher\""));
         assert!(android_build.contains("resource_files = ["));
-        assert!(android_build.contains("\"src/main/res/mipmap-xxxhdpi/ic_launcher.png\""));
+        assert!(android_build.contains("\"res/mipmap-xxxhdpi/ic_launcher.png\""));
     }
 
     #[test]

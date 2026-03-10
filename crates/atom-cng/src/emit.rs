@@ -3,7 +3,6 @@ use std::fs;
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{ContributedFile, FileSource, GenerationPlan};
 use crate::android::{
     kotlin_package_dir, render_android_build_file, render_android_manifest_xml,
     render_android_runtime_jni, render_kotlin_application, render_kotlin_bindings,
@@ -14,6 +13,7 @@ use crate::ios::{
     render_ios_runtime_bridge, render_ios_runtime_header, render_swift_app_delegate,
     render_swift_bindings, render_swift_main, render_swift_scene_delegate,
 };
+use crate::{ContributedFile, FileSource, GenerationPlan};
 
 /// # Errors
 ///

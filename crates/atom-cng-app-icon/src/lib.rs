@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 const PLUGIN_ID: &str = "app_icon";
 const IOS_RESOURCE_NAME: &str = "AppIcon.icon";
 const IOS_RESOURCE_PREFIX: &str = "resources";
-const ANDROID_RESOURCE_PATH: &str = "src/main/res/mipmap-xxxhdpi/ic_launcher.png";
+const ANDROID_RESOURCE_PATH: &str = "res/mipmap-xxxhdpi/ic_launcher.png";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,8 +31,8 @@ pub fn register(registry: &mut ConfigPluginRegistry) {
 }
 
 fn instantiate(entry: &ConfigPluginRequest) -> AtomResult<Box<dyn ConfigPlugin>> {
-    let config: AppIconConfig =
-        serde_json::from_value(Value::Object(entry.config.clone())).map_err(|error| {
+    let config: AppIconConfig = serde_json::from_value(Value::Object(entry.config.clone()))
+        .map_err(|error| {
             AtomError::with_path(
                 AtomErrorCode::ManifestInvalidValue,
                 format!("failed to parse app_icon config: {error}"),
@@ -238,10 +238,12 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         fs::create_dir_all(root.join("assets/AppIcon.icon")).expect("icon dir");
         fs::create_dir_all(root.join("assets/AppIcon.icon/Assets")).expect("icon assets dir");
-        fs::write(root.join("assets/AppIcon.icon/icon.json"), "{\"name\":\"AppIcon\"}")
-            .expect("icon json");
-        fs::write(root.join("assets/AppIcon.icon/Assets/atom.svg"), "<svg />")
-            .expect("icon svg");
+        fs::write(
+            root.join("assets/AppIcon.icon/icon.json"),
+            "{\"name\":\"AppIcon\"}",
+        )
+        .expect("icon json");
+        fs::write(root.join("assets/AppIcon.icon/Assets/atom.svg"), "<svg />").expect("icon svg");
         fs::write(root.join("assets/ic_launcher.png"), "png").expect("png");
 
         let plugin = instantiate(&plugin_request(json_object(json!({
@@ -249,7 +251,9 @@ mod tests {
             "android": "assets/ic_launcher.png"
         }))))
         .expect("plugin");
-        let ios = plugin.contribute_ios(&context(&root)).expect("ios contribution");
+        let ios = plugin
+            .contribute_ios(&context(&root))
+            .expect("ios contribution");
         let android = plugin
             .contribute_android(&context(&root))
             .expect("android contribution");
@@ -260,19 +264,20 @@ mod tests {
         );
         assert_eq!(
             android.files[0].output,
-            Utf8PathBuf::from("generated/android/hello-atom/src/main/res/mipmap-xxxhdpi/ic_launcher.png")
+            Utf8PathBuf::from("generated/android/hello-atom/res/mipmap-xxxhdpi/ic_launcher.png")
         );
         assert!(ios.bazel_resources.is_empty());
-        assert_eq!(ios.bazel_resource_globs, vec!["resources/AppIcon.icon/**".to_owned()]);
+        assert_eq!(
+            ios.bazel_resource_globs,
+            vec!["resources/AppIcon.icon/**".to_owned()]
+        );
         assert_eq!(
             android.bazel_resources,
-            vec!["src/main/res/mipmap-xxxhdpi/ic_launcher.png".to_owned()]
+            vec!["res/mipmap-xxxhdpi/ic_launcher.png".to_owned()]
         );
     }
 
-    fn json_object(
-        value: serde_json::Value,
-    ) -> serde_json::Map<String, serde_json::Value> {
+    fn json_object(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
         match value {
             serde_json::Value::Object(map) => map,
             _ => serde_json::Map::new(),

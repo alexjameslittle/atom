@@ -265,7 +265,10 @@ pub(crate) fn validate_config_plugins(
                 "config_plugins.id",
             ));
         }
-        validate_absolute_label(&entry.target_label, &format!("config_plugins.{id}.target_label"))?;
+        validate_absolute_label(
+            &entry.target_label,
+            &format!("config_plugins.{id}.target_label"),
+        )?;
         if !seen.insert(id.to_owned()) {
             return Err(AtomError::with_path(
                 AtomErrorCode::ManifestInvalidValue,

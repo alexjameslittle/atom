@@ -226,22 +226,22 @@ Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
 
 ### 5.3 Field Cheat Sheet
 
-| Key                 | Type          | Required         | Default                   | Validation                                       |
-| ------------------- | ------------- | ---------------- | ------------------------- | ------------------------------------------------ |
-| `name`              | string        | yes              | none                      | non-empty UTF-8                                  |
-| `slug`              | string        | yes              | none                      | regex `^[a-z][a-z0-9-]{1,62}$`                   |
-| `entry_crate_label` | string        | yes              | none                      | absolute Bazel label                             |
-| `entry_crate_name`  | string        | yes              | none                      | regex `^[A-Za-z_][A-Za-z0-9_]*$`                 |
-| `generated_root`    | string        | no               | `"generated"`             | relative path, MUST NOT be absolute              |
-| `watch`             | bool          | no               | `false`                   | boolean                                          |
-| `ios.enabled`       | bool          | no               | `true` if section present | boolean                                          |
-| `bundle_id`         | string        | yes when enabled | none                      | reverse-DNS identifier                           |
-| `deployment_target` | string        | yes when enabled | none                      | regex `^[0-9]+\\.[0-9]+$`                        |
-| `android.enabled`   | bool          | no               | `true` if section present | boolean                                          |
-| `application_id`    | string        | yes when enabled | none                      | reverse-DNS identifier                           |
-| `min_sdk`           | integer       | yes when enabled | none                      | `>= 24`                                          |
-| `target_sdk`        | integer       | yes when enabled | none                      | `>= min_sdk`                                     |
-| `modules`           | array<string> | no               | `[]`                      | absolute Bazel labels, unique                    |
+| Key                 | Type          | Required         | Default                   | Validation                                                       |
+| ------------------- | ------------- | ---------------- | ------------------------- | ---------------------------------------------------------------- |
+| `name`              | string        | yes              | none                      | non-empty UTF-8                                                  |
+| `slug`              | string        | yes              | none                      | regex `^[a-z][a-z0-9-]{1,62}$`                                   |
+| `entry_crate_label` | string        | yes              | none                      | absolute Bazel label                                             |
+| `entry_crate_name`  | string        | yes              | none                      | regex `^[A-Za-z_][A-Za-z0-9_]*$`                                 |
+| `generated_root`    | string        | no               | `"generated"`             | relative path, MUST NOT be absolute                              |
+| `watch`             | bool          | no               | `false`                   | boolean                                                          |
+| `ios.enabled`       | bool          | no               | `true` if section present | boolean                                                          |
+| `bundle_id`         | string        | yes when enabled | none                      | reverse-DNS identifier                                           |
+| `deployment_target` | string        | yes when enabled | none                      | regex `^[0-9]+\\.[0-9]+$`                                        |
+| `android.enabled`   | bool          | no               | `true` if section present | boolean                                                          |
+| `application_id`    | string        | yes when enabled | none                      | reverse-DNS identifier                                           |
+| `min_sdk`           | integer       | yes when enabled | none                      | `>= 24`                                                          |
+| `target_sdk`        | integer       | yes when enabled | none                      | `>= min_sdk`                                                     |
+| `modules`           | array<string> | no               | `[]`                      | absolute Bazel labels, unique                                    |
 | `config_plugins`    | array<object> | no               | `[]`                      | entries require unique `id`, `target_label`, and object `config` |
 
 Each `config_plugins` entry MUST support these fields:
@@ -1476,11 +1476,11 @@ atom_app(
 ```
 
 Each plugin macro MUST return at least
-`{"id": "<plugin_id>", "target_label": "<bazel_label>", "atom_api_level": <n>, "config": {...}}`.
-It MAY also include `min_atom_version`, `ios_min_deployment_target`, and `android_min_sdk`.
-`atom_app` MUST serialize the list into a `config_plugins` array in the metadata JSON. CNG MUST
-validate compatibility fields, instantiate plugins by `id`, pass the opaque `config` to the plugin
-for parsing and validation, then call contribution methods.
+`{"id": "<plugin_id>", "target_label": "<bazel_label>", "atom_api_level": <n>, "config": {...}}`. It
+MAY also include `min_atom_version`, `ios_min_deployment_target`, and `android_min_sdk`. `atom_app`
+MUST serialize the list into a `config_plugins` array in the metadata JSON. CNG MUST validate
+compatibility fields, instantiate plugins by `id`, pass the opaque `config` to the plugin for
+parsing and validation, then call contribution methods.
 
 #### 11.8.3 App Icon Config Plugin (`atom-cng-app-icon`)
 

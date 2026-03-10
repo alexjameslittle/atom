@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 
 pub use crate::bazel::{build_metadata_output, metadata_target};
 use crate::validate::{
-    RawDocument, validate_android, validate_app, validate_build, validate_ios, validate_modules,
-    validate_config_plugins,
+    RawDocument, validate_android, validate_app, validate_build, validate_config_plugins,
+    validate_ios, validate_modules,
 };
 
 pub const APP_METADATA_SUFFIX: &str = "_atom_app_metadata";
@@ -332,7 +332,10 @@ mod tests {
         assert_eq!(manifest.config_plugins.len(), 1);
         let plugin = &manifest.config_plugins[0];
         assert_eq!(plugin.id, "app_icon");
-        assert_eq!(plugin.target_label, "//crates/atom-cng-app-icon:atom-cng-app-icon");
+        assert_eq!(
+            plugin.target_label,
+            "//crates/atom-cng-app-icon:atom-cng-app-icon"
+        );
         assert_eq!(plugin.atom_api_level, 1);
         assert_eq!(plugin.min_atom_version.as_deref(), Some("0.1.0"));
     }

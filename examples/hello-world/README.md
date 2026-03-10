@@ -28,9 +28,9 @@ atom_app(
 )
 ```
 
-The `atom_app_icon(...)` config plugin contributes the iOS `.icon` bundle and Android launcher
-PNG during prebuild. The example app now targets iOS 18.0 so the generated host matches the
-working app-icon setup used elsewhere in the repo.
+The `atom_app_icon(...)` config plugin contributes the iOS `.icon` bundle and Android launcher PNG
+during prebuild. The example app now targets iOS 18.0 so the generated host matches the working
+app-icon setup used elsewhere in the repo.
 
 The app crate opts into runtime modules and plugins in Rust:
 
