@@ -42,15 +42,19 @@ Dependency direction should move one way:
 - `atom-runtime`
   - Runtime kernel: lifecycle state machine (Created → Initializing → Running →
     Backgrounded/Suspended → Terminating → Terminated)
+  - Kernel-owned state container and inspection snapshot (`RuntimeSnapshot`) for state values,
+    dispatched events, completed effects, and module call records
   - Module lifecycle management: init in dependency order, shutdown in reverse
   - Runtime plugin host API (`RuntimePlugin` trait) for observing lifecycle events and owning
     plugin-local state
   - App-owned runtime config assembly through `atom_runtime_config()` in the app crate
   - Tokio `current_thread` async runtime available via `PluginContext`
+  - `PluginContext` APIs for shared state writes, event/effect recording, async task execution, and
+    runtime module calls
   - Structured logging via `tracing` at lifecycle transitions
   - Handle-based registry for FFI access from generated native hosts
-  - `ensure_running()` gate for CNG-generated per-method module exports
-  - Module call dispatch is not the runtime's concern — CNG generates direct per-method FFI exports
+  - `ensure_running()` gate plus runtime-side module method registration/call plumbing for
+    Rust-backed modules
 - `atom-navigation`
   - First-party runtime plugin crate that owns a route stack through the public `RuntimePlugin`
     contract
@@ -68,8 +72,8 @@ Dependency direction should move one way:
 4. `atom-modules` loads module metadata from Bazel outputs and orders dependencies.
 5. `atom-cng` produces a deterministic generation plan and optional emitted host tree.
 6. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
-   kernel-side plugin discovery. Any first-party or third-party plugin crates enter through that
-   app-owned configuration path.
+   kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
+   Rust-backed runtime module registrations, enter through that app-owned configuration path.
 
 ## Boundaries To Preserve
 

@@ -8,6 +8,7 @@ use crate::config::RuntimeConfig;
 use crate::kernel::Runtime;
 use crate::logging;
 use crate::state::RuntimeState;
+use crate::store::RuntimeSnapshot;
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static RUNTIMES: LazyLock<Mutex<HashMap<AtomRuntimeHandle, Runtime>>> =
@@ -79,6 +80,14 @@ pub fn current_state(handle: AtomRuntimeHandle) -> Option<RuntimeState> {
         .and_then(|runtimes| runtimes.get(&handle).map(Runtime::state))
 }
 
+/// Query the current snapshot of the runtime identified by `handle`.
+pub fn current_snapshot(handle: AtomRuntimeHandle) -> Option<RuntimeSnapshot> {
+    RUNTIMES
+        .lock()
+        .ok()
+        .and_then(|runtimes| runtimes.get(&handle).map(Runtime::snapshot))
+}
+
 /// Gate function for CNG-generated per-method exports. Returns `Ok(())` if the
 /// runtime is in the `Running` state, or an error otherwise.
 ///
@@ -114,7 +123,10 @@ mod tests {
     use crate::config::RuntimeConfig;
     use crate::state::RuntimeState;
 
-    use super::{current_state, ensure_running, handle_lifecycle, init_runtime, shutdown_runtime};
+    use super::{
+        current_snapshot, current_state, ensure_running, handle_lifecycle, init_runtime,
+        shutdown_runtime,
+    };
 
     #[test]
     fn ensure_running_ok_when_running() {
@@ -144,6 +156,23 @@ mod tests {
 
         handle_lifecycle(handle, AtomLifecycleEvent::Terminate).unwrap();
         assert_eq!(current_state(handle), Some(RuntimeState::Terminated));
+
+        shutdown_runtime(handle);
+    }
+
+    #[test]
+    fn snapshot_tracks_lifecycle() {
+        let handle = init_runtime(RuntimeConfig::default()).expect("init");
+        assert_eq!(
+            current_snapshot(handle).map(|snapshot| snapshot.lifecycle),
+            Some(RuntimeState::Running),
+        );
+
+        handle_lifecycle(handle, AtomLifecycleEvent::Background).unwrap();
+        assert_eq!(
+            current_snapshot(handle).map(|snapshot| snapshot.lifecycle),
+            Some(RuntimeState::Backgrounded),
+        );
 
         shutdown_runtime(handle);
     }

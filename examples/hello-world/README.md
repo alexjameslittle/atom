@@ -5,7 +5,7 @@ Rust-backed module, one native-only module, and two first-party runtime plugin c
 `atom-runtime` so the metadata pipeline and generated hosts exercise `atom_module(...)`,
 `atom_native_module(...)`, and app-owned `atom_runtime_config()` registration.
 
-`apps/hello_atom` consumes the plugins as normal Bazel Rust dependencies:
+`apps/hello_atom` consumes the Rust-backed module and plugins as normal Bazel Rust dependencies:
 
 ```starlark
 atom_app(
@@ -14,11 +14,13 @@ atom_app(
         "//crates/atom-analytics",
         "//crates/atom-navigation",
         "//crates/atom-runtime",
+        "//examples/hello-world/modules/device_info",
+        "//examples/hello-world/plugins/lifecycle_logger",
     ],
 )
 ```
 
-The app crate opts into the plugins in Rust:
+The app crate opts into runtime modules and plugins in Rust:
 
 ```rust
 pub fn atom_runtime_config() -> atom_runtime::RuntimeConfig {
@@ -29,15 +31,23 @@ pub fn atom_runtime_config() -> atom_runtime::RuntimeConfig {
     analytics.handle().track("runtime_configured");
 
     atom_runtime::RuntimeConfig::builder()
+        .module(device_info::runtime_module())
+        .plugin(hello_world_lifecycle_logger::LifecycleLoggerPlugin::new())
         .plugin(navigation)
         .plugin(analytics)
         .build()
 }
 ```
 
-The example-only `plugins/lifecycle_logger` crate remains available as a third-party-style reference
-plugin, but the canonical app wiring now proves that first-party navigation and analytics behavior
-stays outside the runtime kernel.
+`device_info::runtime_module()` registers a Rust-backed module method with the runtime kernel, and
+the example `plugins/lifecycle_logger` crate uses the shared `PluginContext` API to:
+
+- write runtime state
+- run an async warmup task once the runtime reaches `Running`
+- call the `device_info.get` module method through the runtime
+
+That keeps the proof of state changes, async work, and module calls inside the same public runtime
+API surface used by first-party and third-party plugins.
 
 Run it from the repository root:
 

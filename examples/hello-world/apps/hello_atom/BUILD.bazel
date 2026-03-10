@@ -17,5 +17,7 @@ atom_app(
         "//crates/atom-analytics",
         "//crates/atom-navigation",
         "//crates/atom-runtime",
+        "//examples/hello-world/modules/device_info",
+        "//examples/hello-world/plugins/lifecycle_logger",
     ],
 )

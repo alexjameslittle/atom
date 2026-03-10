@@ -10,6 +10,8 @@ rust_library(
     deps = [
         "//crates/atom-ffi",
         "//crates/atom-runtime",
+        "//examples/hello-world/modules/device_info",
+        "@crates//:tokio",
         "@crates//:tracing",
     ],
 )

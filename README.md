@@ -18,6 +18,8 @@ This branch now implements the Phase 4 runtime/plugin slice from the spec:
 - `atom-manifest`, `atom-modules`, `atom-cng`, `atom-runtime`, `atom-deploy`, `atom-ffi`, and
   `atom-cli`
 - first-party runtime plugin crates in `crates/atom-navigation` and `crates/atom-analytics`
+- kernel-owned runtime state, event/effect, async-task, and Rust module-call plumbing in
+  `atom-runtime`
 - a canonical example consumer in [`examples/hello-world`](examples/hello-world)
 - local and CI verification harnesses driven by `mise`
 - generated Swift and Kotlin host bootstraps that start the Rust runtime through `atom run ios` and
@@ -38,6 +40,8 @@ The hello-world app now proves:
 1. Thin generated iOS and Android host glue can boot the Rust runtime.
 2. Runtime plugins are registered in app code instead of kernel-side discovery.
 3. Navigation and analytics stay as normal library crates outside `atom-runtime`.
+4. The runtime can record state changes, run async work, and call a Rust-backed module on both
+   platforms.
 
 ## Bootstrap
 
