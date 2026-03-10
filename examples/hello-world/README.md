@@ -1,15 +1,23 @@
 # Hello World
 
-This is the canonical Phase 4 consumer fixture for Bazel-first Atom mobile hosts. It includes one
-Rust-backed module, one native-only module, and two first-party runtime plugin crates outside
-`atom-runtime` so the metadata pipeline and generated hosts exercise `atom_module(...)`,
-`atom_native_module(...)`, and app-owned `atom_runtime_config()` registration.
+This is the canonical Phase 5 consumer fixture for Bazel-first Atom mobile hosts. It includes one
+Rust-backed module, one native-only module, two first-party runtime plugin crates outside
+`atom-runtime`, and one first-party config/CNG plugin so the metadata pipeline and generated hosts
+exercise `atom_module(...)`, `atom_native_module(...)`, `atom_app(...).config_plugins`, and
+app-owned `atom_runtime_config()` registration.
 
-`apps/hello_atom` consumes the Rust-backed module and plugins as normal Bazel Rust dependencies:
+`apps/hello_atom` consumes the Rust-backed module and runtime plugins as normal Bazel Rust
+dependencies:
 
 ```starlark
 atom_app(
     name = "hello_atom",
+    config_plugins = [
+        atom_app_icon(
+            ios = "assets/AppIcon.icon",
+            android = "assets/ic_launcher.png",
+        ),
+    ],
     deps = [
         "//crates/atom-analytics",
         "//crates/atom-navigation",
@@ -19,6 +27,10 @@ atom_app(
     ],
 )
 ```
+
+The `atom_app_icon(...)` config plugin contributes the iOS `.icon` bundle and Android launcher PNG
+during prebuild. The example app now targets iOS 18.0 so the generated host matches the working
+app-icon setup used elsewhere in the repo.
 
 The app crate opts into runtime modules and plugins in Rust:
 

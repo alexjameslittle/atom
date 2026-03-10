@@ -31,8 +31,12 @@ Dependency direction should move one way:
   - Validates module inputs
   - Resolves dependency order and initialization order
 - `atom-cng`
-  - Merges app + module configuration into deterministic generation plans
+  - Validates extension compatibility for modules and config/CNG plugins
+  - Merges app + module + config-plugin configuration into deterministic generation plans
   - Writes the host tree for dry-run or materialized output
+- `atom-cng-app-icon`
+  - First-party config/CNG plugin crate implementing the public `ConfigPlugin` trait
+  - Owns app icon config parsing, validation, file contributions, and platform resource wiring
 - `atom-deploy`
   - Device discovery and destination selection
   - Build/install/launch orchestration for simulators, emulators, and connected devices
@@ -40,6 +44,7 @@ Dependency direction should move one way:
   - Keeps platform deployment orchestration out of `atom-cli`
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
+  - Links the first-party config plugin registry used during `atom prebuild`
   - Must stay a thin wrapper, not an alternate build system
 - `atom-runtime`
   - Runtime kernel: lifecycle state machine (Created → Initializing → Running →
@@ -72,7 +77,8 @@ Dependency direction should move one way:
 2. `atom-cli` resolves the requested app target.
 3. `atom-manifest` loads app metadata from Bazel outputs.
 4. `atom-modules` loads module metadata from Bazel outputs and orders dependencies.
-5. `atom-cng` produces a deterministic generation plan and optional emitted host tree.
+5. `atom-cng` validates module + config-plugin compatibility, instantiates registered config
+   plugins, and produces a deterministic generation plan.
 6. `atom-deploy` resolves platform-specific build outputs and deployment commands when needed.
 7. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
    kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any

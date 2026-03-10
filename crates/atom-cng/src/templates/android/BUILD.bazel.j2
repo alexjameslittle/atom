@@ -47,6 +47,13 @@ android_binary(
     name = "app",
     manifest = "AndroidManifest.generated.xml",
     custom_package = "{{ package_name }}",
+{% if resource_files %}
+    resource_files = [
+{% for resource in resource_files %}
+        "{{ resource }}",
+{% endfor %}
+    ],
+{% endif %}
     deps = [
         ":generated_kotlin",
         ":atom_runtime_jni",

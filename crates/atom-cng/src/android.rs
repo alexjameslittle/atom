@@ -1,6 +1,6 @@
 use atom_ffi::AtomResult;
 use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, metadata_target};
-use atom_modules::ResolvedModule;
+use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 use minijinja::context;
 
@@ -39,6 +39,7 @@ pub(crate) fn render_android_build_file(
     app: &AppConfig,
     modules: &[ResolvedModule],
     android: &AndroidConfig,
+    resource_files: &[String],
 ) -> AtomResult<String> {
     let package_name = android.application_id.as_deref().unwrap_or_default();
     let package_dir = kotlin_package_dir(package_name);
@@ -55,23 +56,19 @@ pub(crate) fn render_android_build_file(
             source_root => source_root.as_str(),
             module_labels,
             package_name,
+            resource_files,
             target_sdk => android.target_sdk.unwrap_or_default(),
         },
     )
 }
 
 pub(crate) fn render_android_manifest_xml(
-    app: &AppConfig,
     android: &AndroidConfig,
+    manifest: &JsonMap,
 ) -> AtomResult<String> {
-    render(
-        "android/AndroidManifest.xml",
-        context! {
-            package_name => android.application_id.as_deref().unwrap_or_default(),
-            min_sdk => android.min_sdk.unwrap_or_default(),
-            target_sdk => android.target_sdk.unwrap_or_default(),
-            app_name => &app.name,
-        },
+    crate::render_android_manifest_document(
+        android.application_id.as_deref().unwrap_or_default(),
+        manifest,
     )
 }
 

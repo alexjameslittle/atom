@@ -1,6 +1,6 @@
 use atom_ffi::AtomResult;
 use atom_manifest::{AppConfig, BuildConfig, IosConfig, metadata_target};
-use atom_modules::ResolvedModule;
+use atom_modules::{JsonMap, ResolvedModule};
 use minijinja::context;
 
 use crate::PlatformPlan;
@@ -34,6 +34,8 @@ pub(crate) fn render_ios_build_file(
     app: &AppConfig,
     modules: &[ResolvedModule],
     ios: &IosConfig,
+    extra_resources: &[String],
+    extra_resource_globs: &[String],
 ) -> AtomResult<String> {
     let module_labels: Vec<String> = modules
         .iter()
@@ -47,21 +49,14 @@ pub(crate) fn render_ios_build_file(
             module_labels,
             bundle_id => ios.bundle_id.as_deref().unwrap_or_default(),
             deployment_target => ios.deployment_target.as_deref().unwrap_or_default(),
+            extra_resources,
+            extra_resource_globs,
         },
     )
 }
 
-pub(crate) fn render_ios_plist(app: &AppConfig, ios: &IosConfig) -> AtomResult<String> {
-    render(
-        "ios/Info.generated.plist",
-        context! {
-            slug => &app.slug,
-            name => &app.name,
-            bundle_id => ios.bundle_id.as_deref().unwrap_or_default(),
-            deployment_target => ios.deployment_target.as_deref().unwrap_or_default(),
-            support_module => swift_support_module_name(app),
-        },
-    )
+pub(crate) fn render_ios_plist(plist: &JsonMap) -> AtomResult<String> {
+    crate::render_plist_document(plist)
 }
 
 pub(crate) fn render_ios_launch_storyboard() -> String {
@@ -109,6 +104,6 @@ pub(crate) fn render_swift_bindings(modules: &[ResolvedModule]) -> AtomResult<St
     )
 }
 
-fn swift_support_module_name(app: &AppConfig) -> String {
+pub(crate) fn swift_support_module_name(app: &AppConfig) -> String {
     format!("atom_{}_support", app.slug.replace('-', "_"))
 }

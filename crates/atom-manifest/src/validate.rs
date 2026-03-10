@@ -3,8 +3,11 @@ use std::collections::BTreeSet;
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8PathBuf;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
-use crate::{AndroidConfig, AppConfig, BuildConfig, IosConfig, ModuleRequest};
+use crate::{
+    AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, JsonMap, ModuleRequest,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,6 +24,8 @@ pub(crate) struct RawDocument {
     pub(crate) android: Option<RawAndroid>,
     #[serde(default)]
     pub(crate) modules: Vec<String>,
+    #[serde(default)]
+    pub(crate) config_plugins: Vec<RawConfigPlugin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +43,18 @@ pub(crate) struct RawAndroid {
     application_id: Option<String>,
     min_sdk: Option<u32>,
     target_sdk: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawConfigPlugin {
+    id: String,
+    target_label: String,
+    atom_api_level: u32,
+    min_atom_version: Option<String>,
+    ios_min_deployment_target: Option<String>,
+    android_min_sdk: Option<u32>,
+    config: Map<String, Value>,
 }
 
 pub(crate) fn validate_app(raw: &RawDocument) -> AtomResult<AppConfig> {
@@ -234,6 +251,71 @@ pub(crate) fn validate_modules(labels: Vec<String>) -> AtomResult<Vec<ModuleRequ
     Ok(modules)
 }
 
+pub(crate) fn validate_config_plugins(
+    entries: Vec<RawConfigPlugin>,
+) -> AtomResult<Vec<ConfigPluginRequest>> {
+    let mut seen = BTreeSet::new();
+    let mut plugins = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = entry.id.trim();
+        if id.is_empty() {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                "config_plugins entries must declare a non-empty id",
+                "config_plugins.id",
+            ));
+        }
+        validate_absolute_label(
+            &entry.target_label,
+            &format!("config_plugins.{id}.target_label"),
+        )?;
+        if !seen.insert(id.to_owned()) {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                format!("duplicate config plugin id: {id}"),
+                format!("config_plugins.{id}.id"),
+            ));
+        }
+        if let Some(min_atom_version) = &entry.min_atom_version
+            && !is_semver(min_atom_version)
+        {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                "config_plugins.min_atom_version must match semver major.minor.patch",
+                format!("config_plugins.{id}.min_atom_version"),
+            ));
+        }
+        if let Some(ios_min_deployment_target) = &entry.ios_min_deployment_target
+            && !is_deployment_target(ios_min_deployment_target)
+        {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                "config_plugins.ios_min_deployment_target must match ^[0-9]+\\.[0-9]+$",
+                format!("config_plugins.{id}.ios_min_deployment_target"),
+            ));
+        }
+        if let Some(android_min_sdk) = entry.android_min_sdk
+            && android_min_sdk < 24
+        {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                "config_plugins.android_min_sdk must be >= 24",
+                format!("config_plugins.{id}.android_min_sdk"),
+            ));
+        }
+        plugins.push(ConfigPluginRequest {
+            target_label: entry.target_label,
+            id: id.to_owned(),
+            atom_api_level: entry.atom_api_level,
+            min_atom_version: entry.min_atom_version,
+            ios_min_deployment_target: entry.ios_min_deployment_target,
+            android_min_sdk: entry.android_min_sdk,
+            config: JsonMap::from_iter(entry.config),
+        });
+    }
+    Ok(plugins)
+}
+
 pub(crate) fn validate_absolute_label(value: &str, path: &str) -> AtomResult<()> {
     if value.starts_with("//") || value.starts_with('@') {
         Ok(())
@@ -284,6 +366,26 @@ fn is_crate_name(value: &str) -> bool {
     }
 
     characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn is_semver(value: &str) -> bool {
+    let mut components = value.split('.');
+    let parts = [
+        components.next(),
+        components.next(),
+        components.next(),
+        components.next(),
+    ];
+    matches!(
+        parts,
+        [Some(major), Some(minor), Some(patch), None]
+            if !major.is_empty()
+                && !minor.is_empty()
+                && !patch.is_empty()
+                && major.chars().all(|character| character.is_ascii_digit())
+                && minor.chars().all(|character| character.is_ascii_digit())
+                && patch.chars().all(|character| character.is_ascii_digit())
+    )
 }
 
 fn is_deployment_target(value: &str) -> bool {

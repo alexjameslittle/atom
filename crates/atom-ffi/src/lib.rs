@@ -17,6 +17,7 @@ pub enum AtomErrorCode {
     ModuleDuplicateId,
     ModuleDependencyCycle,
     ModuleManifestInvalid,
+    ExtensionIncompatible,
     CngConflict,
     CngTemplateError,
     CngWriteError,
@@ -45,6 +46,7 @@ impl AtomErrorCode {
             Self::ModuleDuplicateId => "MODULE_DUPLICATE_ID",
             Self::ModuleDependencyCycle => "MODULE_DEPENDENCY_CYCLE",
             Self::ModuleManifestInvalid => "MODULE_MANIFEST_INVALID",
+            Self::ExtensionIncompatible => "EXTENSION_INCOMPATIBLE",
             Self::CngConflict => "CNG_CONFLICT",
             Self::CngTemplateError => "CNG_TEMPLATE_ERROR",
             Self::CngWriteError => "CNG_WRITE_ERROR",
@@ -73,7 +75,8 @@ impl AtomErrorCode {
             Self::ModuleNotFound
             | Self::ModuleDuplicateId
             | Self::ModuleDependencyCycle
-            | Self::ModuleManifestInvalid => 66,
+            | Self::ModuleManifestInvalid
+            | Self::ExtensionIncompatible => 66,
             Self::CngConflict | Self::CngTemplateError | Self::CngWriteError => 67,
             Self::BridgeInvalidArgument
             | Self::BridgeInitFailed

@@ -105,6 +105,7 @@ mod tests {
                 watch: false,
             },
             modules: Vec::new(),
+            config_plugins: Vec::new(),
         }
     }
 
