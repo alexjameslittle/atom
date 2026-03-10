@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repo_root=$(cd -- "$(dirname "$0")/../../.." && pwd)
+repo_root=$(cd -- "$(dirname "$0")/../../../.." && pwd)
 cd "$repo_root"
 
 echo "==> Error codes from atom-ffi"

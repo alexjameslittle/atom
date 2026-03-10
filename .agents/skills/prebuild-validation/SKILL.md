@@ -1,3 +1,10 @@
+---
+name: prebuild-validation
+description:
+  Validate Atom's prebuild output by checking the dry-run plan, generated host tree, and determinism
+  for CNG-related changes.
+---
+
 # prebuild-validation
 
 Validate CNG output by running prebuild in both dry-run and real modes, then inspecting the
@@ -16,7 +23,7 @@ Use this skill when changes affect:
 
 1. Run dry-run prebuild and capture the plan output.
 2. Run real prebuild to emit the generated tree.
-3. Run `./scripts/prebuild-validation/check-tree.sh` to validate the output.
+3. Run `scripts/check-tree.sh`.
 4. Compare generated output against expectations for determinism.
 
 ## What to check

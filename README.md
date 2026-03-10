@@ -50,6 +50,6 @@ The hello-world app now proves:
 mise run verify
 ```
 
-The Git hooks in [.githooks](.githooks) are installed automatically by the bootstrap task, and
-GitHub PR verification is defined in [.github/workflows/ci.yml](.github/workflows/ci.yml). Rust
+The Git hooks in [`.githooks`](.githooks) are installed automatically by the bootstrap task, and
+GitHub PR verification is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Rust
 formatting, Clippy, and tests are all executed through Bazel entrypoints.

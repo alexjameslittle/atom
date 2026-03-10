@@ -36,6 +36,8 @@ Dependency direction should move one way:
 - `atom-deploy`
   - Device discovery and destination selection
   - Build/install/launch orchestration for simulators, emulators, and connected devices
+  - Resolves destinations and external tool invocations for deployment workflows
+  - Keeps platform deployment orchestration out of `atom-cli`
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
   - Must stay a thin wrapper, not an alternate build system
@@ -71,7 +73,8 @@ Dependency direction should move one way:
 3. `atom-manifest` loads app metadata from Bazel outputs.
 4. `atom-modules` loads module metadata from Bazel outputs and orders dependencies.
 5. `atom-cng` produces a deterministic generation plan and optional emitted host tree.
-6. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
+6. `atom-deploy` resolves platform-specific build outputs and deployment commands when needed.
+7. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
    kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
    Rust-backed runtime module registrations, enter through that app-owned configuration path.
 
@@ -90,5 +93,5 @@ Dependency direction should move one way:
 - Document the responsibility here.
 - Document any new invariants in [core-beliefs.md](core-beliefs.md) or a design doc if the change is
   architectural.
-- Add verification coverage in [`scripts/verify.sh`](../scripts/verify.sh) if the new layer changes
-  repo-wide expectations.
+- Add verification coverage in [`../scripts/verify.sh`](../scripts/verify.sh) if the new layer
+  changes repo-wide expectations.

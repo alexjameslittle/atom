@@ -1,3 +1,10 @@
+---
+name: docs-sync
+description:
+  Audit repository docs for stale paths, missing coverage, or contradictions after API,
+  architecture, or workflow changes.
+---
+
 # docs-sync
 
 Audit documentation against the codebase to find stale, missing, or contradictory docs.
@@ -9,7 +16,7 @@ architecture boundaries, or updates the plan/spec.
 
 ## Steps
 
-1. Run `./scripts/docs-sync/audit.sh` to collect inventory.
+1. Run `scripts/audit.sh`.
 2. Review the output against the current docs index at `docs/README.md`.
 3. Flag any of the following:
    - Crate modules not mentioned in `docs/architecture.md`

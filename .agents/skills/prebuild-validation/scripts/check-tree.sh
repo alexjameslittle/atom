@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repo_root=$(cd -- "$(dirname "$0")/../../.." && pwd)
+repo_root=$(cd -- "$(dirname "$0")/../../../.." && pwd)
 cd "$repo_root"
 
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"

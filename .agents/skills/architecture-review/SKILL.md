@@ -1,3 +1,10 @@
+---
+name: architecture-review
+description:
+  Check crate dependency direction and type ownership so cross-crate changes stay inside Atom's
+  documented architecture boundaries.
+---
+
 # architecture-review
 
 Validate that changes respect the crate dependency graph and architecture boundaries.
@@ -17,7 +24,7 @@ atom-ffi -> atom-manifest -> atom-modules -> atom-cng -> atom-deploy -> atom-cli
 
 ## Steps
 
-1. Run `./scripts/architecture-review/check-deps.sh` to extract actual crate dependencies.
+1. Run `scripts/check-deps.sh`.
 2. Compare against the intended flow above.
 3. Flag any reverse or unintended cross-layer dependencies.
 4. If a new dependency is intentional, require that it be documented in `docs/architecture.md`.
