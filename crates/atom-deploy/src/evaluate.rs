@@ -1797,12 +1797,19 @@ fn capture_logs_for_launch(
                     "--timeout".to_owned(),
                     format!("{seconds}s"),
                 ],
-            )?
+            )
         }
         AppLaunch::Android { serial } => {
-            capture_tool(runner, repo_root, "adb", &["-s", serial, "logcat", "-d"])?
+            capture_tool(runner, repo_root, "adb", &["-s", serial, "logcat", "-d"])
         }
-    };
+    }
+    .map_err(|error| {
+        AtomError::with_path(
+            AtomErrorCode::AutomationLogCaptureFailed,
+            format!("failed to collect logs: {}", error.message),
+            output_path.as_str(),
+        )
+    })?;
     fs::write(output_path, contents).map_err(|error| {
         AtomError::with_path(
             AtomErrorCode::AutomationLogCaptureFailed,
@@ -2023,21 +2030,23 @@ mod tests {
 
     use crate::destinations::DestinationKind;
     use crate::tools::ToolRunner;
-    use atom_ffi::AtomErrorCode;
+    use atom_ffi::{AtomError, AtomErrorCode};
     use camino::Utf8PathBuf;
     use serde_json::{Value, json};
     use tempfile::tempdir;
 
     use super::{
-        AutomationServer, DestinationCapability, DestinationDescriptor, DestinationPlatform,
-        EvaluationPlan, EvaluationStep, InteractionRequest, interact_with_idb,
-        load_evaluation_plan, require_plan_capabilities,
+        AppLaunch, AutomationServer, DestinationCapability, DestinationDescriptor,
+        DestinationPlatform, EvaluationPlan, EvaluationStep, InteractionRequest,
+        capture_logs_for_launch, interact_with_idb, load_evaluation_plan,
+        require_plan_capabilities,
     };
 
     #[derive(Default)]
     struct FakeToolRunner {
         calls: Vec<(String, Vec<String>)>,
         captures: VecDeque<String>,
+        capture_error: Option<AtomError>,
     }
 
     impl ToolRunner for FakeToolRunner {
@@ -2058,6 +2067,9 @@ mod tests {
             args: &[String],
         ) -> atom_ffi::AtomResult<String> {
             self.calls.push((tool.to_owned(), args.to_vec()));
+            if let Some(error) = self.capture_error.take() {
+                return Err(error);
+            }
             Ok(self
                 .captures
                 .pop_front()
@@ -2248,6 +2260,7 @@ mod tests {
                     .to_owned(),
                 r#"{"elements":[]}"#.to_owned(),
             ]),
+            capture_error: None,
         };
 
         interact_with_idb(
@@ -2276,5 +2289,34 @@ mod tests {
                 ],
             )
         );
+    }
+
+    #[test]
+    fn log_capture_maps_backend_failures_to_automation_log_capture_failed() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let output = root.join("logs.txt");
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::new(),
+            capture_error: Some(AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "idb log failed",
+            )),
+        };
+
+        let error = capture_logs_for_launch(
+            &root,
+            &AppLaunch::IosSimulator {
+                destination_id: "SIM-123".to_owned(),
+            },
+            &output,
+            5,
+            &mut runner,
+        )
+        .expect_err("log capture should fail");
+
+        assert_eq!(error.code, AtomErrorCode::AutomationLogCaptureFailed);
+        assert!(error.message.contains("failed to collect logs"));
     }
 }

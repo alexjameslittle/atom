@@ -271,10 +271,9 @@ Minimum evaluation plan capabilities:
 
 Backend direction:
 
-- iOS should use a framework-owned XCUITest-based backend, or a framework-owned
-  WebDriverAgent-compatible wrapper around XCTest. This is the only credible path to semantic
-  interaction on iOS. `simctl` is good for lifecycle, screenshots, and recordings, but not as the
-  primary UI interaction backend.
+- iOS should use a framework-owned `idb`-backed semantic backend. The underlying implementation may
+  still rely on XCTest-compatible primitives, but `simctl` is not sufficient as the primary
+  interaction backend.
 - iOS log capture should combine Atom runtime logs with simulator or device log collection so one
   evaluation run can correlate app behavior with visible UI evidence.
 - Android should use a framework-owned UI Automator-based backend for semantic hierarchy and
@@ -519,7 +518,7 @@ Deliverables:
 
 - iOS `BUILD.bazel` uses `ios_application` from `rules_apple` (replaces `swift_binary`)
 - Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
-- `atom run ios` builds, installs, and launches on iOS simulator via `xcrun simctl`
+- `atom run ios` builds, installs, and launches on iOS simulator via `idb`
 - `atom run android` builds, installs, and launches on Android emulator via `adb`
 - Ad-hoc code signing for simulator builds
 

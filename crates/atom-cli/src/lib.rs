@@ -395,38 +395,41 @@ fn execute_evidence(
     match &args.command {
         EvidenceCommand::Logs(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let output = resolve_cli_path(&repo_root, &args.output);
             capture_logs(
                 &repo_root,
                 &manifest,
                 &args.target.destination,
-                &args.output,
+                &output,
                 args.seconds,
                 runner,
             )?;
-            Ok(text_output(format!("{}\n", args.output)))
+            Ok(text_output(format!("{output}\n")))
         }
         EvidenceCommand::Screenshot(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let output = resolve_cli_path(&repo_root, &args.output);
             capture_screenshot(
                 &repo_root,
                 &manifest,
                 &args.target.destination,
-                &args.output,
+                &output,
                 runner,
             )?;
-            Ok(text_output(format!("{}\n", args.output)))
+            Ok(text_output(format!("{output}\n")))
         }
         EvidenceCommand::Video(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let output = resolve_cli_path(&repo_root, &args.output);
             capture_video(
                 &repo_root,
                 &manifest,
                 &args.target.destination,
-                &args.output,
+                &output,
                 args.seconds,
                 runner,
             )?;
-            Ok(text_output(format!("{}\n", args.output)))
+            Ok(text_output(format!("{output}\n")))
         }
     }
 }
@@ -441,7 +444,11 @@ fn execute_inspect(
         InspectCommand::Ui(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
             let snapshot = inspect_ui(&repo_root, &manifest, &args.target.destination, runner)?;
-            if let Some(output) = &args.output {
+            if let Some(output) = args
+                .output
+                .as_ref()
+                .map(|path| resolve_cli_path(&repo_root, path))
+            {
                 if let Some(parent) = output.parent() {
                     fs::create_dir_all(parent).map_err(|error| {
                         AtomError::with_path(
@@ -452,7 +459,7 @@ fn execute_inspect(
                     })?;
                 }
                 fs::write(
-                    output,
+                    &output,
                     serde_json::to_string_pretty(&snapshot).map_err(|error| {
                         AtomError::new(
                             AtomErrorCode::InternalBug,
@@ -533,12 +540,14 @@ fn execute_evaluate(
     match &args.command {
         EvaluateCommand::Run(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let plan = resolve_cli_path(&repo_root, &args.plan);
+            let artifacts_dir = resolve_cli_path(&repo_root, &args.artifacts_dir);
             let result = evaluate_run(
                 &repo_root,
                 &manifest,
                 &args.target.destination,
-                &args.plan,
-                &args.artifacts_dir,
+                &plan,
+                &artifacts_dir,
                 runner,
             )?;
             json_output(&result.manifest)
@@ -601,6 +610,14 @@ fn resolve_command_root(cwd: &Utf8Path, workspace_directory: Option<&Utf8Path>) 
     workspace_directory.map_or_else(|| cwd.to_owned(), Utf8PathBuf::from)
 }
 
+fn resolve_cli_path(repo_root: &Utf8Path, path: &Utf8Path) -> Utf8PathBuf {
+    if path.is_absolute() {
+        path.to_owned()
+    } else {
+        repo_root.join(path)
+    }
+}
+
 fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
     for candidate in start.ancestors() {
         if candidate.join("MODULE.bazel").exists() {
@@ -614,12 +631,13 @@ fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
 mod tests {
     use std::fs;
 
-    use camino::Utf8PathBuf;
+    use camino::{Utf8Path, Utf8PathBuf};
     use clap::Parser;
     use tempfile::tempdir;
 
     use super::{
-        Cli, find_workspace_root, resolve_workspace_root_with_workspace_dir, run_from_args,
+        Cli, find_workspace_root, resolve_cli_path, resolve_workspace_root_with_workspace_dir,
+        run_from_args,
     };
 
     fn parse_cli(args: &[&str]) {
@@ -811,5 +829,21 @@ mod tests {
         )
         .expect_err("missing evaluate args should fail");
         assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn resolve_cli_path_joins_repo_relative_paths() {
+        let repo_root = Utf8PathBuf::from("/tmp/atom-workspace");
+        let resolved = resolve_cli_path(&repo_root, Utf8Path::new("examples/plan.json"));
+
+        assert_eq!(resolved, repo_root.join("examples/plan.json"));
+    }
+
+    #[test]
+    fn resolve_cli_path_preserves_absolute_paths() {
+        let repo_root = Utf8PathBuf::from("/tmp/atom-workspace");
+        let absolute = Utf8PathBuf::from("/tmp/output.json");
+
+        assert_eq!(resolve_cli_path(&repo_root, &absolute), absolute);
     }
 }

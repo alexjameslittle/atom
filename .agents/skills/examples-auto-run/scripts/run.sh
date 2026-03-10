@@ -8,6 +8,17 @@ EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
 DEFAULT_PLAN="examples/hello-world/evaluation/automation_fixture_plan.json"
 mode=${1:-smoke}
 
+detect_generated_root() {
+  for candidate in cng-output generated; do
+    if [ -d "$candidate/ios" ] || [ -d "$candidate/android" ] || [ -d "$candidate/schema" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 echo "==> examples-auto-run mode: $mode"
 
 case "$mode" in
@@ -16,10 +27,11 @@ case "$mode" in
     ;;
   generated-tree)
     bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
-    if [ -d generated ]; then
-      find generated -maxdepth 3 -type f | sort | sed 's#^#  #'
+    if generated_root=$(detect_generated_root); then
+      echo "  generated root: $generated_root"
+      find "$generated_root" -maxdepth 3 -type f | sort | sed 's#^#  #'
     else
-      echo "  generated/ not found"
+      echo "  generated host tree not found"
     fi
     ;;
   evaluate)

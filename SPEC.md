@@ -1066,21 +1066,22 @@ invoke `bazel run`.
 
 iOS deployment sequence:
 
-1. `bazel build //generated/ios/<slug>:app` to produce the `.app` bundle.
-2. Boot the default iOS simulator if none is running, or use the currently booted simulator.
-3. `xcrun simctl install <device> <path-to-.app>` to install.
-4. `xcrun simctl launch <device> <bundle_id>` to launch.
+1. `bazel build //<build.generated_root>/ios/<slug>:app` to produce the `.app` bundle.
+2. Boot the requested or default iOS simulator with `idb boot <udid>` when targeting a simulator, or
+   reuse the connected device target when targeting hardware.
+3. `idb install --udid <destination> <path-to-.app>` to install.
+4. `idb launch -w -f --udid <destination> <bundle_id>` to launch.
 
 Android deployment sequence:
 
-1. `bazel build //generated/android/<slug>:app` to produce the APK.
+1. `bazel build //<build.generated_root>/android/<slug>:app` to produce the APK.
 2. `adb install -r <path-to-.apk>` to install on the running emulator or connected device.
 3. `adb shell am start -n <application_id>/.MainActivity` to launch.
 
 Rules:
 
-- Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`xcrun`,
-  `adb`) are not available.
+- Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`idb`, `adb`)
+  are not available.
 - Both commands MUST stream build output to stderr.
 - `atom run ios --device <udid>` and `atom run android --device <serial>` MUST support targeting a
   specific simulator, emulator, or connected device.
@@ -1139,9 +1140,9 @@ Rules:
 - Video capture SHOULD be startable before the first interaction step and stoppable after the last
   required step so one artifact can prove the full interaction flow.
 - The primary automation backend MUST be semantic, not pixel-only.
-- iOS automation MUST use a framework-owned XCUITest-based backend or a framework-owned
-  WebDriverAgent-compatible backend. Coordinate-only `simctl` helpers are insufficient as the
-  primary conformance path.
+- iOS automation MUST use a framework-owned `idb`-backed semantic backend. Implementations MAY
+  satisfy this through XCTest-compatible primitives under the hood, but coordinate-only `simctl`
+  helpers are insufficient as the primary conformance path.
 - Android automation MUST use a framework-owned UI Automator-based or equivalent instrumentation
   backend. `adb shell input` MAY exist only as a fallback for interactions that cannot be expressed
   through the primary backend.
@@ -1551,15 +1552,13 @@ specified in a separate renderer spec if and when that work begins.
 
 - Should app-level override sections be added to resolve plist and manifest merge conflicts?
 - Should renderer work live in this spec or a dedicated additive spec?
-- Should the iOS automation backend be a framework-owned XCTest bundle directly, or a
-  WebDriverAgent-compatible wrapper around the same XCTest primitives?
 
 ## 13. Resolved Questions
 
 - **Should Xcode projects be emitted directly, or derived from Bazel later?** Neither for the
   minimum conformance profile. The generated `ios_application` target is built and deployed via
-  Bazel and `xcrun simctl`. Xcode project generation via `rules_xcodeproj` MAY be added as a
-  convenience in a later phase.
+  Bazel and `idb`. Xcode project generation via `rules_xcodeproj` MAY be added as a convenience in a
+  later phase.
 - **Should the runtime artifact be `staticlib`, `cdylib`, or both?** Both. iOS uses `staticlib`
   linked into the Swift binary. Android uses `cdylib` (shared library) loaded via JNI
   `System.loadLibrary()`. See Section 9.8.
