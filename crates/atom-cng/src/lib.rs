@@ -25,8 +25,20 @@ pub type ConfigPluginFactory = fn(&ConfigPluginRequest) -> AtomResult<Box<dyn Co
 
 pub trait ConfigPlugin: Send + Sync {
     fn id(&self) -> &str;
+
+    /// # Errors
+    ///
+    /// Returns an error if the plugin configuration is invalid.
     fn validate(&self) -> AtomResult<()>;
+
+    /// # Errors
+    ///
+    /// Returns an error if the plugin cannot produce valid iOS contributions.
     fn contribute_ios(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<PlatformContribution>;
+
+    /// # Errors
+    ///
+    /// Returns an error if the plugin cannot produce valid Android contributions.
     fn contribute_android(&self, ctx: &ConfigPluginContext<'_>)
     -> AtomResult<PlatformContribution>;
 }
@@ -146,6 +158,10 @@ pub struct GenerationPlan {
 /// # Errors
 ///
 /// Returns an error if compatibility validation or metadata merging fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "generation planning merges module and plugin contributions in a single pass"
+)]
 pub fn build_generation_plan(
     manifest: &NormalizedManifest,
     modules: &[ResolvedModule],
@@ -154,16 +170,16 @@ pub fn build_generation_plan(
     validate_extension_compatibility(manifest, modules)?;
 
     let mut permissions = BTreeSet::new();
-    let mut plist = manifest
-        .ios
-        .enabled
-        .then(|| default_ios_plist(&manifest.app, &manifest.ios))
-        .unwrap_or_default();
-    let mut android_manifest = manifest
-        .android
-        .enabled
-        .then(|| default_android_manifest(&manifest.app, &manifest.android))
-        .unwrap_or_default();
+    let mut plist = if manifest.ios.enabled {
+        default_ios_plist(&manifest.app, &manifest.ios)
+    } else {
+        JsonMap::new()
+    };
+    let mut android_manifest = if manifest.android.enabled {
+        default_android_manifest(&manifest.app, &manifest.android)
+    } else {
+        JsonMap::new()
+    };
     let mut entitlements = JsonMap::new();
     let mut schema_outputs = Vec::new();
     let mut contributed_files = Vec::new();
@@ -552,43 +568,42 @@ fn validate_extension(
         ));
     }
 
-    if let Some(min_atom_version) = min_atom_version {
-        if compare_semver(FRAMEWORK_VERSION, min_atom_version)? == Ordering::Less {
-            return Err(extension_compatibility_error(
-                target_label,
-                "min_atom_version",
-                format!(
-                    "extension requires Atom version {min_atom_version}, framework is {FRAMEWORK_VERSION}"
-                ),
-            ));
-        }
+    if let Some(min_atom_version) = min_atom_version
+        && compare_semver(FRAMEWORK_VERSION, min_atom_version)? == Ordering::Less
+    {
+        return Err(extension_compatibility_error(
+            target_label,
+            "min_atom_version",
+            format!(
+                "extension requires Atom version {min_atom_version}, framework is {FRAMEWORK_VERSION}"
+            ),
+        ));
     }
 
     if let (Some(current), Some(required)) = (
         manifest.ios.deployment_target.as_deref(),
         ios_min_deployment_target,
-    ) {
-        if compare_deployment_target(current, required)? == Ordering::Less {
-            return Err(extension_compatibility_error(
-                target_label,
-                "ios_min_deployment_target",
-                format!(
-                    "extension requires iOS deployment target {required}, app is configured for {current}"
-                ),
-            ));
-        }
+    ) && compare_deployment_target(current, required)? == Ordering::Less
+    {
+        return Err(extension_compatibility_error(
+            target_label,
+            "ios_min_deployment_target",
+            format!(
+                "extension requires iOS deployment target {required}, app is configured for {current}"
+            ),
+        ));
     }
 
-    if let (Some(current), Some(required)) = (manifest.android.min_sdk, android_min_sdk) {
-        if current < required {
-            return Err(extension_compatibility_error(
-                target_label,
-                "android_min_sdk",
-                format!(
-                    "extension requires Android min_sdk {required}, app is configured for {current}"
-                ),
-            ));
-        }
+    if let (Some(current), Some(required)) = (manifest.android.min_sdk, android_min_sdk)
+        && current < required
+    {
+        return Err(extension_compatibility_error(
+            target_label,
+            "android_min_sdk",
+            format!(
+                "extension requires Android min_sdk {required}, app is configured for {current}"
+            ),
+        ));
     }
 
     Ok(())

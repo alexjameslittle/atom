@@ -41,6 +41,10 @@ struct RawModuleManifest {
     android_srcs: Vec<String>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "module manifest loading intentionally combines parse and validation in one entrypoint"
+)]
 pub(crate) fn load_module_manifest_from_path(
     repo_root: &Utf8Path,
     requested_target: &str,
@@ -101,32 +105,32 @@ pub(crate) fn load_module_manifest_from_path(
             metadata_path.as_str(),
         ));
     }
-    if let Some(min_atom_version) = &parsed.min_atom_version {
-        if !is_semver(min_atom_version) {
-            return Err(AtomError::with_path(
-                AtomErrorCode::ModuleManifestInvalid,
-                "min_atom_version must match semver major.minor.patch",
-                metadata_path.as_str(),
-            ));
-        }
+    if let Some(min_atom_version) = &parsed.min_atom_version
+        && !is_semver(min_atom_version)
+    {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ModuleManifestInvalid,
+            "min_atom_version must match semver major.minor.patch",
+            metadata_path.as_str(),
+        ));
     }
-    if let Some(ios_min_deployment_target) = &parsed.ios_min_deployment_target {
-        if !is_deployment_target(ios_min_deployment_target) {
-            return Err(AtomError::with_path(
-                AtomErrorCode::ModuleManifestInvalid,
-                "ios_min_deployment_target must match ^[0-9]+\\.[0-9]+$",
-                metadata_path.as_str(),
-            ));
-        }
+    if let Some(ios_min_deployment_target) = &parsed.ios_min_deployment_target
+        && !is_deployment_target(ios_min_deployment_target)
+    {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ModuleManifestInvalid,
+            "ios_min_deployment_target must match ^[0-9]+\\.[0-9]+$",
+            metadata_path.as_str(),
+        ));
     }
-    if let Some(android_min_sdk) = parsed.android_min_sdk {
-        if android_min_sdk < 24 {
-            return Err(AtomError::with_path(
-                AtomErrorCode::ModuleManifestInvalid,
-                "android_min_sdk must be >= 24",
-                metadata_path.as_str(),
-            ));
-        }
+    if let Some(android_min_sdk) = parsed.android_min_sdk
+        && android_min_sdk < 24
+    {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ModuleManifestInvalid,
+            "android_min_sdk must be >= 24",
+            metadata_path.as_str(),
+        ));
     }
 
     let depends_on = validate_labels(parsed.depends_on, "depends_on", metadata_path)?;

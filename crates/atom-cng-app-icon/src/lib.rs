@@ -108,7 +108,7 @@ impl ConfigPlugin for AppIconPlugin {
             plist_entries: json_object(json!({
                 "CFBundleIconName": "AppIcon"
             })),
-            android_manifest_entries: Default::default(),
+            android_manifest_entries: serde_json::Map::default(),
             bazel_resources: Vec::new(),
             bazel_resource_globs: vec![format!("{IOS_RESOURCE_PREFIX}/{IOS_RESOURCE_NAME}/**")],
         })
@@ -139,7 +139,7 @@ impl ConfigPlugin for AppIconPlugin {
                     .join(&ctx.app.slug)
                     .join(ANDROID_RESOURCE_PATH),
             }],
-            plist_entries: Default::default(),
+            plist_entries: serde_json::Map::default(),
             android_manifest_entries: json_object(json!({
                 "application": {
                     "@android:icon": "@mipmap/ic_launcher"

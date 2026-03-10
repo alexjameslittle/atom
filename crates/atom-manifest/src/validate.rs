@@ -276,32 +276,32 @@ pub(crate) fn validate_config_plugins(
                 format!("config_plugins.{id}.id"),
             ));
         }
-        if let Some(min_atom_version) = &entry.min_atom_version {
-            if !is_semver(min_atom_version) {
-                return Err(AtomError::with_path(
-                    AtomErrorCode::ManifestInvalidValue,
-                    "config_plugins.min_atom_version must match semver major.minor.patch",
-                    format!("config_plugins.{id}.min_atom_version"),
-                ));
-            }
+        if let Some(min_atom_version) = &entry.min_atom_version
+            && !is_semver(min_atom_version)
+        {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                "config_plugins.min_atom_version must match semver major.minor.patch",
+                format!("config_plugins.{id}.min_atom_version"),
+            ));
         }
-        if let Some(ios_min_deployment_target) = &entry.ios_min_deployment_target {
-            if !is_deployment_target(ios_min_deployment_target) {
-                return Err(AtomError::with_path(
-                    AtomErrorCode::ManifestInvalidValue,
-                    "config_plugins.ios_min_deployment_target must match ^[0-9]+\\.[0-9]+$",
-                    format!("config_plugins.{id}.ios_min_deployment_target"),
-                ));
-            }
+        if let Some(ios_min_deployment_target) = &entry.ios_min_deployment_target
+            && !is_deployment_target(ios_min_deployment_target)
+        {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                "config_plugins.ios_min_deployment_target must match ^[0-9]+\\.[0-9]+$",
+                format!("config_plugins.{id}.ios_min_deployment_target"),
+            ));
         }
-        if let Some(android_min_sdk) = entry.android_min_sdk {
-            if android_min_sdk < 24 {
-                return Err(AtomError::with_path(
-                    AtomErrorCode::ManifestInvalidValue,
-                    "config_plugins.android_min_sdk must be >= 24",
-                    format!("config_plugins.{id}.android_min_sdk"),
-                ));
-            }
+        if let Some(android_min_sdk) = entry.android_min_sdk
+            && android_min_sdk < 24
+        {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ManifestInvalidValue,
+                "config_plugins.android_min_sdk must be >= 24",
+                format!("config_plugins.{id}.android_min_sdk"),
+            ));
         }
         plugins.push(ConfigPluginRequest {
             target_label: entry.target_label,
