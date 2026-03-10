@@ -16,6 +16,8 @@ rust_library(
         "//crates/atom-modules",
         "@crates//:camino",
         "@crates//:clap",
+        "@crates//:serde",
+        "@crates//:serde_json",
     ],
 )
 

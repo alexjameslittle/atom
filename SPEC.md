@@ -217,6 +217,7 @@ The Bazel rule MUST emit a single JSON metadata document with these top-level ke
 - `entry_crate_name`
 - `generated_root`
 - `watch`
+- `automation_fixture`
 - `ios`
 - `android`
 - `modules`
@@ -226,23 +227,24 @@ Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
 
 ### 5.3 Field Cheat Sheet
 
-| Key                 | Type          | Required         | Default                   | Validation                                                       |
-| ------------------- | ------------- | ---------------- | ------------------------- | ---------------------------------------------------------------- |
-| `name`              | string        | yes              | none                      | non-empty UTF-8                                                  |
-| `slug`              | string        | yes              | none                      | regex `^[a-z][a-z0-9-]{1,62}$`                                   |
-| `entry_crate_label` | string        | yes              | none                      | absolute Bazel label                                             |
-| `entry_crate_name`  | string        | yes              | none                      | regex `^[A-Za-z_][A-Za-z0-9_]*$`                                 |
-| `generated_root`    | string        | no               | `"generated"`             | relative path, MUST NOT be absolute                              |
-| `watch`             | bool          | no               | `false`                   | boolean                                                          |
-| `ios.enabled`       | bool          | no               | `true` if section present | boolean                                                          |
-| `bundle_id`         | string        | yes when enabled | none                      | reverse-DNS identifier                                           |
-| `deployment_target` | string        | yes when enabled | none                      | regex `^[0-9]+\\.[0-9]+$`                                        |
-| `android.enabled`   | bool          | no               | `true` if section present | boolean                                                          |
-| `application_id`    | string        | yes when enabled | none                      | reverse-DNS identifier                                           |
-| `min_sdk`           | integer       | yes when enabled | none                      | `>= 24`                                                          |
-| `target_sdk`        | integer       | yes when enabled | none                      | `>= min_sdk`                                                     |
-| `modules`           | array<string> | no               | `[]`                      | absolute Bazel labels, unique                                    |
-| `config_plugins`    | array<object> | no               | `[]`                      | entries require unique `id`, `target_label`, and object `config` |
+| Key                  | Type          | Required         | Default                   | Validation                                                       |
+| -------------------- | ------------- | ---------------- | ------------------------- | ---------------------------------------------------------------- |
+| `name`               | string        | yes              | none                      | non-empty UTF-8                                                  |
+| `slug`               | string        | yes              | none                      | regex `^[a-z][a-z0-9-]{1,62}$`                                   |
+| `entry_crate_label`  | string        | yes              | none                      | absolute Bazel label                                             |
+| `entry_crate_name`   | string        | yes              | none                      | regex `^[A-Za-z_][A-Za-z0-9_]*$`                                 |
+| `generated_root`     | string        | no               | `"generated"`             | relative path, MUST NOT be absolute                              |
+| `watch`              | bool          | no               | `false`                   | boolean                                                          |
+| `automation_fixture` | bool          | no               | `false`                   | boolean                                                          |
+| `ios.enabled`        | bool          | no               | `true` if section present | boolean                                                          |
+| `bundle_id`          | string        | yes when enabled | none                      | reverse-DNS identifier                                           |
+| `deployment_target`  | string        | yes when enabled | none                      | regex `^[0-9]+\\.[0-9]+$`                                        |
+| `android.enabled`    | bool          | no               | `true` if section present | boolean                                                          |
+| `application_id`     | string        | yes when enabled | none                      | reverse-DNS identifier                                           |
+| `min_sdk`            | integer       | yes when enabled | none                      | `>= 24`                                                          |
+| `target_sdk`         | integer       | yes when enabled | none                      | `>= min_sdk`                                                     |
+| `modules`            | array<string> | no               | `[]`                      | absolute Bazel labels, unique                                    |
+| `config_plugins`     | array<object> | no               | `[]`                      | entries require unique `id`, `target_label`, and object `config` |
 
 Each `config_plugins` entry MUST support these fields:
 
@@ -275,6 +277,7 @@ Each `config_plugins` entry MUST support these fields:
   "entry_crate_name": "hello_atom",
   "generated_root": "generated",
   "watch": false,
+  "automation_fixture": false,
   "ios": {
     "enabled": true,
     "bundle_id": "build.atom.hello",
@@ -1525,6 +1528,8 @@ Required behavior:
 - `atom evaluate run` can orchestrate launch, waits, inspection, interactions, and artifact capture
   into one proof bundle
 - automation backends are framework-owned and semantic-first per Section 9.8.4
+- the canonical example app MAY opt into an automation fixture proof surface through
+  `automation_fixture`
 - the evaluation model remains extensible to additional platforms and destination kinds through
   capability discovery
 - apps can consume first-party and third-party-style plugin crates through documented workflows

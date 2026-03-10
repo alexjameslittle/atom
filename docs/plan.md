@@ -791,8 +791,10 @@ Deliverables:
 - `atom inspect ui`
 - `atom interact` for tap, long-press, swipe, drag, and text entry
 - `atom evaluate run`
-- Framework-owned iOS automation backend based on XCTest semantics
-- Framework-owned Android automation backend based on UI Automator semantics
+- `automation_fixture` opt-in on `atom_app(...)` for the example-only proof surface
+- Repo-local skills for destination discovery, evidence capture, and UI evaluation
+- Framework-owned iOS automation backend built on `idb`
+- Framework-owned Android automation backend for semantic automation
 - Proof bundles that capture logs, screenshots, video, UI snapshots, and step transcripts
 
 Exit criteria:
@@ -805,6 +807,8 @@ Exit criteria:
   manual clicking
 - The same workflow can be executed as one evaluation run that leaves behind a machine-readable
   proof bundle
+- Agents can complete the same workflow through repo-local skills without dropping down to raw
+  `idb`, `adb`, or `xcrun`
 - The same workflow supports attached physical devices when platform tooling allows it
 - The destination model is extensible to additional platforms and destination kinds without
   redefining the proof model
@@ -837,16 +841,17 @@ Exit criteria:
 
 ## Recommended Next Implementation Slice
 
-The repo now has runnable generated hosts and app-owned runtime plugin registration. The next slice
-should tighten the library contract instead of reopening bootstrap work:
+The repo now has runnable generated hosts, first-party config/CNG plugins, and a Phase 6 proof
+surface. The next slice should harden the evaluation workflow end to end:
 
-1. Align the spec, plan, and Bazel rules around Bazel-owned module metadata plus `entry_crate_name`
-   as the runtime registration anchor.
-2. Stabilize `atom_app(...).config_plugins`, the `ConfigPlugin` trait, and one example plugin as the
-   build-time extension path for native-host customization.
-3. Add minimal compatibility validation for modules and config/CNG plugins before generation.
-4. Prove the contract with one example config/CNG plugin and one third-party-style module/library
-   integration path.
+1. Keep iOS destination discovery, launch, and semantic automation behind `idb` so agents stay on
+   Atom-owned commands instead of raw tool invocations.
+2. Keep Android evidence and interaction behind the matching Atom surfaces and tighten semantic
+   parity with the iOS path.
+3. Ship repo-local skills for destination discovery, evidence capture, and UI evaluation alongside
+   the CLI so agents can use the framework the same way humans do.
+4. Keep the spec, docs, example plan, and hello-world automation fixture aligned as the proof model
+   expands to more destinations.
 
-That sequence preserves the current working runtime path, closes the remaining ecosystem gap, and
-sets up a more credible Expo-style library story without inventing a second metadata system.
+That sequence preserves the current public contract, raises the quality of runtime proof, and keeps
+the automation story framework-owned instead of drifting into local script sprawl.

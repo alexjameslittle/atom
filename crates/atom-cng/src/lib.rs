@@ -972,6 +972,7 @@ mod tests {
                 slug: "hello-atom".to_owned(),
                 entry_crate_label: "//apps/hello_atom:hello_atom".to_owned(),
                 entry_crate_name: "hello_atom".to_owned(),
+                automation_fixture: false,
             },
             ios: IosConfig {
                 enabled: true,
@@ -1249,6 +1250,32 @@ mod tests {
         assert!(android_manifest.contains("android:icon=\"@mipmap/ic_launcher\""));
         assert!(android_build.contains("resource_files = ["));
         assert!(android_build.contains("\"res/mipmap-xxxhdpi/ic_launcher.png\""));
+    }
+
+    #[test]
+    fn automation_fixture_renders_probe_ui_for_both_platforms() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let (mut manifest, modules) = write_fixture(&root);
+        manifest.app.automation_fixture = true;
+
+        let plan =
+            build_generation_plan(&manifest, &modules, &ConfigPluginRegistry::new()).expect("plan");
+        emit_host_tree(&root, &plan).expect("host tree");
+
+        let ios_scene_delegate =
+            fs::read_to_string(root.join("generated/ios/hello-atom/SceneDelegate.swift"))
+                .expect("ios scene delegate");
+        let android_main =
+            fs::read_to_string(root.join(
+                "generated/android/hello-atom/src/main/kotlin/build/atom/hello/MainActivity.kt",
+            ))
+            .expect("android main");
+
+        assert!(ios_scene_delegate.contains("atom.fixture.primary_button"));
+        assert!(ios_scene_delegate.contains("AtomAutomationRootView"));
+        assert!(android_main.contains("atom.fixture.primary_button"));
+        assert!(android_main.contains("AutomationClient"));
     }
 
     #[test]

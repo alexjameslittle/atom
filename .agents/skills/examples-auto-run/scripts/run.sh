@@ -5,6 +5,7 @@ repo_root=$(cd -- "$(dirname "$0")/../../../.." && pwd)
 cd "$repo_root"
 
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
+DEFAULT_PLAN="examples/hello-world/evaluation/automation_fixture_plan.json"
 mode=${1:-smoke}
 
 echo "==> examples-auto-run mode: $mode"
@@ -21,6 +22,17 @@ case "$mode" in
       echo "  generated/ not found"
     fi
     ;;
+  evaluate)
+    destination=${2:?destination id required}
+    artifacts_dir=${3:?artifacts dir required}
+    plan=${4:-$DEFAULT_PLAN}
+    bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+    bazelisk run //:atom -- evaluate run \
+      --target "$EXAMPLE_TARGET" \
+      --destination "$destination" \
+      --plan "$plan" \
+      --artifacts-dir "$artifacts_dir"
+    ;;
   android)
     ./scripts/verify.sh build-android
     ;;
@@ -29,7 +41,7 @@ case "$mode" in
     ;;
   *)
     echo "unknown mode: $mode" >&2
-    echo "expected one of: smoke, generated-tree, android, ios" >&2
+    echo "expected one of: smoke, generated-tree, evaluate, android, ios" >&2
     exit 64
     ;;
 esac

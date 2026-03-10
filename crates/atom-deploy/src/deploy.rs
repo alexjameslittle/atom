@@ -8,7 +8,9 @@ use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::devices::android::{prepare_android_emulator, resolve_android_device};
-use crate::devices::ios::{IosDestinationKind, prepare_ios_simulator, resolve_ios_destination};
+use crate::devices::ios::{
+    IosDestination, IosDestinationKind, prepare_ios_simulator, resolve_ios_destination,
+};
 use crate::progress::run_step;
 use crate::tools::{
     ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool, stream_tool,
@@ -25,7 +27,7 @@ pub fn deploy_ios(
 ) -> AtomResult<()> {
     let destination = resolve_ios_destination(repo_root, runner, requested_device)?;
     let target = generated_target(manifest, "ios");
-    let build_args = ios_bazel_args(&target, destination.kind);
+    let build_args = ios_bazel_args(&target, &destination);
 
     run_step(
         "Building iOS app...",
@@ -75,12 +77,22 @@ fn install_and_launch_simulator(
     installable_app: &Utf8Path,
     bundle_id: &str,
 ) -> AtomResult<()> {
-    let simulator = run_step(
+    let target_id = run_step(
         "Preparing simulator...",
         "Simulator ready",
         "Simulator preparation failed",
         || prepare_ios_simulator(repo_root, runner, destination),
     )?;
+    install_and_launch_with_idb(repo_root, runner, &target_id, installable_app, bundle_id)
+}
+
+fn install_and_launch_with_idb(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+    destination_id: &str,
+    installable_app: &Utf8Path,
+    bundle_id: &str,
+) -> AtomResult<()> {
     run_step(
         "Installing app...",
         "App installed",
@@ -89,17 +101,28 @@ fn install_and_launch_simulator(
             run_tool(
                 runner,
                 repo_root,
-                "xcrun",
-                &["simctl", "install", &simulator, installable_app.as_str()],
+                "idb",
+                &[
+                    "install",
+                    "--udid",
+                    destination_id,
+                    installable_app.as_str(),
+                ],
             )
         },
     )?;
+    let _ = run_tool(
+        runner,
+        repo_root,
+        "idb",
+        &["terminate", "--udid", destination_id, bundle_id],
+    );
     eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
     stream_tool(
         runner,
         repo_root,
-        "xcrun",
-        &["simctl", "launch", "--console", &simulator, bundle_id],
+        "idb",
+        &["launch", "-w", "-f", "--udid", destination_id, bundle_id],
     )
 }
 
@@ -110,43 +133,7 @@ fn install_and_launch_device(
     installable_app: &Utf8Path,
     bundle_id: &str,
 ) -> AtomResult<()> {
-    run_step(
-        "Installing app on device...",
-        "App installed",
-        "Installation failed",
-        || {
-            run_tool(
-                runner,
-                repo_root,
-                "xcrun",
-                &[
-                    "devicectl",
-                    "device",
-                    "install",
-                    "app",
-                    "--device",
-                    device_id,
-                    installable_app.as_str(),
-                ],
-            )
-        },
-    )?;
-    run_step("Launching app...", "App launched", "Launch failed", || {
-        run_tool(
-            runner,
-            repo_root,
-            "xcrun",
-            &[
-                "devicectl",
-                "device",
-                "process",
-                "launch",
-                "--device",
-                device_id,
-                bundle_id,
-            ],
-        )
-    })
+    install_and_launch_with_idb(repo_root, runner, device_id, installable_app, bundle_id)
 }
 
 /// # Errors
@@ -241,7 +228,7 @@ pub fn deploy_android(
     )
 }
 
-fn wait_for_app_pid(
+pub(crate) fn wait_for_app_pid(
     runner: &mut impl ToolRunner,
     repo_root: &Utf8Path,
     serial: &str,
@@ -279,9 +266,9 @@ pub fn generated_target(manifest: &NormalizedManifest, platform: &str) -> String
     )
 }
 
-fn ios_bazel_args(target: &str, destination: IosDestinationKind) -> Vec<String> {
-    let cpu = match destination {
-        IosDestinationKind::Simulator => "sim_arm64",
+pub(crate) fn ios_bazel_args(target: &str, destination: &IosDestination) -> Vec<String> {
+    let cpu = match destination.kind {
+        IosDestinationKind::Simulator => "sim_arm64,x86_64",
         IosDestinationKind::Device => "arm64",
     };
     vec![
@@ -291,7 +278,7 @@ fn ios_bazel_args(target: &str, destination: IosDestinationKind) -> Vec<String> 
     ]
 }
 
-fn resolve_ios_installable_artifact(path: &Utf8Path) -> AtomResult<Utf8PathBuf> {
+pub(crate) fn resolve_ios_installable_artifact(path: &Utf8Path) -> AtomResult<Utf8PathBuf> {
     if path.extension() == Some("app") {
         return Ok(path.to_owned());
     }

@@ -112,6 +112,7 @@ pub(crate) fn render_kotlin_main_activity(
             name => &app.name,
             slug => &app.slug,
             generated_root => generated_root.as_str(),
+            automation_fixture => app.automation_fixture,
         },
     )
 }

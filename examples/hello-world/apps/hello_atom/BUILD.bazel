@@ -7,6 +7,7 @@ atom_app(
     android_min_sdk = 28,
     android_target_sdk = 35,
     app_name = "Hello Atom",
+    automation_fixture = True,
     config_plugins = [
         atom_app_icon(
             android = "assets/ic_launcher.png",

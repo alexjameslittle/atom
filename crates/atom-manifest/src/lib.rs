@@ -26,6 +26,7 @@ pub struct AppConfig {
     pub slug: String,
     pub entry_crate_label: String,
     pub entry_crate_name: String,
+    pub automation_fixture: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +214,7 @@ mod tests {
             load_manifest_from_path(&root, "//apps/hello_atom:hello_atom", &metadata_path)
                 .expect("metadata should load");
         assert_eq!(manifest.app.slug, "hello-atom");
+        assert!(!manifest.app.automation_fixture);
         assert_eq!(
             manifest.app.entry_crate_label,
             "//apps/hello_atom:hello_atom"
@@ -266,6 +268,32 @@ mod tests {
         let error = load_manifest_from_path(&root, "//apps/hello_atom:hello_atom", &metadata_path)
             .expect_err("relative module label should fail");
         assert_eq!(error.code, atom_ffi::AtomErrorCode::ManifestInvalidValue);
+    }
+
+    #[test]
+    fn loads_automation_fixture_flag() {
+        let (_directory, root, metadata_path) = write_metadata(
+            r#"{
+  "kind": "atom_app",
+  "target_label": "//apps/hello_atom:hello_atom",
+  "name": "Hello Atom",
+  "slug": "hello-atom",
+  "entry_crate_label": "//apps/hello_atom:hello_atom",
+  "entry_crate_name": "hello_atom",
+  "automation_fixture": true,
+  "ios": {
+    "enabled": true,
+    "bundle_id": "build.atom.hello",
+    "deployment_target": "17.0"
+  }
+}"#,
+        );
+
+        let manifest =
+            load_manifest_from_path(&root, "//apps/hello_atom:hello_atom", &metadata_path)
+                .expect("metadata should load");
+
+        assert!(manifest.app.automation_fixture);
     }
 
     #[test]

@@ -1,0 +1,37 @@
+---
+name: evidence-capture
+description:
+  Capture logs, screenshots, video, and UI snapshots through Atom's framework-owned evidence
+  commands.
+---
+
+# evidence-capture
+
+Prefer Atom's evidence commands over ad hoc host tooling so proof artifacts stay consistent across
+agents and humans.
+
+## When to use
+
+Use this skill when:
+
+- A change needs a screenshot, video, or log artifact from a running Atom app.
+- You need a machine-readable UI snapshot for later reasoning.
+- You want artifacts written to explicit caller-selected paths instead of tool defaults.
+
+## Steps
+
+1. Resolve a destination id first with
+   `[$destination-discovery](../destination-discovery/SKILL.md)`.
+2. Run `scripts/run.sh screenshot`, `logs`, `video`, or `inspect-ui` with the chosen destination.
+3. Keep the output paths stable so the evidence can be referenced in follow-on analysis.
+
+## Output
+
+- Screenshot, log, video, or UI snapshot artifact at the requested path.
+
+## Model vs. script split
+
+**Script handles:** invoking `atom evidence ...` and `atom inspect ui` with the required flags.
+
+**Model handles:** deciding which artifact type is needed, choosing durations, and interpreting the
+captured output.

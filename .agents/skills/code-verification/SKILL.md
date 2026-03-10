@@ -25,7 +25,13 @@ This skill is **mandatory** when a change touches any of:
 
 1. Run `scripts/run.sh`.
 2. If any step fails, report the failing step and its output.
-3. Do not proceed with a PR or commit until all steps pass.
+3. If the change touches destination discovery, evidence capture, interaction, evaluation, or the
+   hello-world automation fixture, follow this skill with
+   `[$destination-discovery](../destination-discovery/SKILL.md)`,
+   `[$evidence-capture](../evidence-capture/SKILL.md)`,
+   `[$ui-evaluation](../ui-evaluation/SKILL.md)`, or
+   `[$examples-auto-run](../examples-auto-run/SKILL.md)` in `evaluate` mode for runtime proof.
+4. Do not proceed with a PR or commit until all required verification and runtime proof checks pass.
 
 ## What it checks
 

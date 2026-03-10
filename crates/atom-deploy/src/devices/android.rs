@@ -47,6 +47,16 @@ pub fn resolve_android_device(
     requested_device: Option<&str>,
 ) -> AtomResult<AndroidDestination> {
     if let Some(requested) = requested_device {
+        if let Some(avd_name) = requested.strip_prefix("avd:") {
+            return Ok(AndroidDestination {
+                serial: requested.to_owned(),
+                state: "avd".to_owned(),
+                model: None,
+                device_name: None,
+                is_emulator: true,
+                avd_name: Some(avd_name.to_owned()),
+            });
+        }
         return Ok(AndroidDestination {
             serial: requested.to_owned(),
             state: "device".to_owned(),
@@ -97,6 +107,36 @@ pub fn resolve_android_device(
     }
 
     select_default_android_destination(&destinations)
+}
+
+/// # Errors
+///
+/// Returns an error if `adb devices` cannot be read or parsed.
+pub fn list_android_destinations(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Vec<AndroidDestination>> {
+    let mut destinations = list_android_devices(repo_root, runner)?;
+    let running_avds = destinations
+        .iter()
+        .filter_map(|d| d.avd_name.as_deref())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if let Ok(avds) = list_avds(repo_root, runner) {
+        for avd in avds {
+            if !running_avds.contains(&avd) {
+                destinations.push(AndroidDestination {
+                    serial: format!("avd:{avd}"),
+                    state: "avd".to_owned(),
+                    model: None,
+                    device_name: None,
+                    is_emulator: true,
+                    avd_name: Some(avd),
+                });
+            }
+        }
+    }
+    Ok(destinations)
 }
 
 fn select_default_android_destination(
@@ -171,7 +211,7 @@ pub fn prepare_android_emulator(
         })
 }
 
-fn list_android_devices(
+pub(crate) fn list_android_devices(
     repo_root: &Utf8Path,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<Vec<AndroidDestination>> {
@@ -215,7 +255,10 @@ pub fn parse_android_devices(output: &str) -> Vec<AndroidDestination> {
         .collect()
 }
 
-fn list_avds(repo_root: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<Vec<String>> {
+pub(crate) fn list_avds(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Vec<String>> {
     let output = capture_tool(runner, repo_root, "emulator", &["-list-avds"])?;
     Ok(output
         .lines()

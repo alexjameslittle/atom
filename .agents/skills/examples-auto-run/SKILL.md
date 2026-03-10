@@ -22,14 +22,18 @@ Use this skill when:
 
 1. Run `scripts/run.sh smoke` for a portable dry-run prebuild.
 2. Run `scripts/run.sh generated-tree` when you need the emitted host tree for inspection.
-3. Run `scripts/run.sh android` or `scripts/run.sh ios` on the appropriate host when the branch
+3. Run `scripts/run.sh evaluate <destination> <artifacts-dir> [plan]` when the branch needs a proof
+   bundle from the hello-world automation fixture.
+4. Run `scripts/run.sh android` or `scripts/run.sh ios` on the appropriate host when the branch
    needs a real platform build.
-4. Report skipped platform builds explicitly when the host environment cannot support them.
+5. Report skipped platform builds or evaluation runs explicitly when the host environment cannot
+   support them.
 
 ## Output
 
 - Dry-run prebuild status for the example app.
 - Generated host-tree inventory when requested.
+- Evaluation bundle output when an example destination is available.
 - Platform build results for Android or iOS when run.
 
 ## Model vs. script split
