@@ -1,4 +1,5 @@
 load("@atom//bzl/atom:defs.bzl", "atom_app")
+load("@atom//crates/atom-cng-app-icon:defs.bzl", "atom_app_icon")
 
 atom_app(
     name = "hello_atom",
@@ -7,10 +8,19 @@ atom_app(
     android_target_sdk = 35,
     app_name = "Hello Atom",
     ios_bundle_id = "build.atom.hello",
-    ios_deployment_target = "17.0",
+    ios_deployment_target = "18.0",
     modules = [
         "//examples/hello-world/modules/device_info:device_info",
         "//examples/hello-world/modules/native_echo:native_echo",
+    ],
+    config_plugins = [
+        atom_app_icon(
+            ios = "assets/AppIcon.icon",
+            android = "assets/ic_launcher.png",
+            min_atom_version = "0.1.0",
+            ios_min_deployment_target = "18.0",
+            android_min_sdk = 28,
+        ),
     ],
     slug = "hello-atom",
     deps = [

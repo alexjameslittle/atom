@@ -53,7 +53,16 @@ ios_application(
     bundle_id = "{{ bundle_id }}",
     families = ["iphone", "ipad"],
     infoplists = ["Info.generated.plist"],
-    resources = ["LaunchScreen.storyboard"],
+    resources = [
+        "LaunchScreen.storyboard",
+{% for resource in extra_resources %}
+        "{{ resource }}",
+{% endfor %}
+    ]{% if extra_resource_globs %} + glob([
+{% for resource_glob in extra_resource_globs %}
+        "{{ resource_glob }}",
+{% endfor %}
+    ]){% endif %},
     minimum_os_version = "{{ deployment_target }}",
     deps = [":generated_swift"],
     visibility = ["//visibility:public"],

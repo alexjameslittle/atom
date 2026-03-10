@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use atom_cng::{build_generation_plan, emit_host_tree, render_prebuild_plan};
+use atom_cng::{ConfigPluginRegistry, build_generation_plan, emit_host_tree, render_prebuild_plan};
 pub use atom_deploy::CommandOutput;
 use atom_deploy::progress::run_step;
 use atom_deploy::{ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel};
@@ -103,7 +103,7 @@ fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOu
     let repo_root = resolve_workspace_root(cwd)?;
     let manifest = load_manifest(&repo_root, &args.target)?;
     let modules = resolve_modules(&repo_root, &manifest.modules)?;
-    let plan = build_generation_plan(&manifest, &modules)?;
+    let plan = build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
 
     if args.dry_run {
         return Ok(CommandOutput {
@@ -156,7 +156,7 @@ fn execute_run(
         "Code generation failed",
         || {
             let modules = resolve_modules(&repo_root, &manifest.modules)?;
-            let plan = build_generation_plan(&manifest, &modules)?;
+            let plan = build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
             emit_host_tree(&repo_root, &plan)
         },
     )?;
@@ -184,6 +184,12 @@ fn execute_test(cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<Comm
         stderr: Vec::new(),
         exit_code: 0,
     })
+}
+
+fn default_config_plugin_registry() -> ConfigPluginRegistry {
+    let mut registry = ConfigPluginRegistry::new();
+    atom_cng_app_icon::register(&mut registry);
+    registry
 }
 
 fn resolve_workspace_root(cwd: &Utf8Path) -> AtomResult<Utf8PathBuf> {

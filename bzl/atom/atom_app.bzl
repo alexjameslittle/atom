@@ -2,6 +2,17 @@ load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_rust//rust:defs.bzl", "rust_library")
 
 _APP_METADATA_SUFFIX = "_atom_app_metadata"
+_CONFIG_PLUGIN_REQUIRED_KEYS = (
+    "id",
+    "target_label",
+    "atom_api_level",
+    "config",
+)
+_CONFIG_PLUGIN_OPTIONAL_KEYS = (
+    "min_atom_version",
+    "ios_min_deployment_target",
+    "android_min_sdk",
+)
 
 def _target_label(name):
     package_name = native.package_name()
@@ -16,6 +27,39 @@ def _absolute_label(label):
         return _target_label(label[1:])
     fail("Atom labels must be absolute (`//pkg:target`) or package-relative (`:target`), got '{}'".format(label))
 
+def _normalize_config_plugin(plugin):
+    if type(plugin) != "dict":
+        fail("atom_app config_plugins entries must be dicts, got {}".format(type(plugin)))
+
+    allowed_keys = _CONFIG_PLUGIN_REQUIRED_KEYS + _CONFIG_PLUGIN_OPTIONAL_KEYS
+    for key in plugin.keys():
+        if key not in allowed_keys:
+            fail("atom_app config_plugins entry contains unknown key '{}'".format(key))
+
+    missing = [key for key in _CONFIG_PLUGIN_REQUIRED_KEYS if key not in plugin]
+    if missing:
+        fail("atom_app config_plugins entry is missing required keys: {}".format(", ".join(missing)))
+
+    if type(plugin["id"]) != "string" or not plugin["id"]:
+        fail("atom_app config_plugins entries must declare a non-empty string id")
+    if type(plugin["atom_api_level"]) != "int":
+        fail("atom_app config_plugins '{}' must declare integer atom_api_level".format(plugin["id"]))
+    if type(plugin["config"]) != "dict":
+        fail("atom_app config_plugins '{}' must declare config as a dict".format(plugin["id"]))
+
+    normalized = {
+        "id": plugin["id"],
+        "target_label": _absolute_label(str(plugin["target_label"])),
+        "atom_api_level": plugin["atom_api_level"],
+        "config": plugin["config"],
+    }
+
+    for key in _CONFIG_PLUGIN_OPTIONAL_KEYS:
+        if plugin.get(key) != None:
+            normalized[key] = plugin[key]
+
+    return normalized
+
 def atom_app(
         name,
         app_name = None,
@@ -28,6 +72,7 @@ def atom_app(
         modules = [],
         generated_root = "generated",
         watch = False,
+        config_plugins = [],
         ios_enabled = True,
         ios_bundle_id = None,
         ios_deployment_target = None,
@@ -73,6 +118,7 @@ def atom_app(
             "target_sdk": android_target_sdk,
         },
         "modules": [_absolute_label(label) for label in modules],
+        "config_plugins": [_normalize_config_plugin(plugin) for plugin in config_plugins],
     }
 
     write_file(

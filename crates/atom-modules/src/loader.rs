@@ -13,6 +13,10 @@ struct RawModuleManifest {
     kind: String,
     target_label: String,
     id: String,
+    atom_api_level: u32,
+    min_atom_version: Option<String>,
+    ios_min_deployment_target: Option<String>,
+    android_min_sdk: Option<u32>,
     #[serde(default)]
     depends_on: Vec<String>,
     #[serde(default)]
@@ -97,6 +101,33 @@ pub(crate) fn load_module_manifest_from_path(
             metadata_path.as_str(),
         ));
     }
+    if let Some(min_atom_version) = &parsed.min_atom_version {
+        if !is_semver(min_atom_version) {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ModuleManifestInvalid,
+                "min_atom_version must match semver major.minor.patch",
+                metadata_path.as_str(),
+            ));
+        }
+    }
+    if let Some(ios_min_deployment_target) = &parsed.ios_min_deployment_target {
+        if !is_deployment_target(ios_min_deployment_target) {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ModuleManifestInvalid,
+                "ios_min_deployment_target must match ^[0-9]+\\.[0-9]+$",
+                metadata_path.as_str(),
+            ));
+        }
+    }
+    if let Some(android_min_sdk) = parsed.android_min_sdk {
+        if android_min_sdk < 24 {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ModuleManifestInvalid,
+                "android_min_sdk must be >= 24",
+                metadata_path.as_str(),
+            ));
+        }
+    }
 
     let depends_on = validate_labels(parsed.depends_on, "depends_on", metadata_path)?;
     let schema_files = validate_repo_relative_paths(
@@ -120,6 +151,10 @@ pub(crate) fn load_module_manifest_from_path(
         kind,
         target_label: parsed.target_label,
         id: id.to_owned(),
+        atom_api_level: parsed.atom_api_level,
+        min_atom_version: parsed.min_atom_version,
+        ios_min_deployment_target: parsed.ios_min_deployment_target,
+        android_min_sdk: parsed.android_min_sdk,
         depends_on,
         schema_files,
         methods: parsed.methods,
@@ -132,6 +167,39 @@ pub(crate) fn load_module_manifest_from_path(
         ios_srcs,
         android_srcs,
     })
+}
+
+fn is_deployment_target(value: &str) -> bool {
+    let mut components = value.split('.');
+    let parts = [components.next(), components.next(), components.next()];
+    matches!(
+        parts,
+        [Some(major), Some(minor), None]
+            if !major.is_empty()
+                && !minor.is_empty()
+                && major.chars().all(|character| character.is_ascii_digit())
+                && minor.chars().all(|character| character.is_ascii_digit())
+    )
+}
+
+fn is_semver(value: &str) -> bool {
+    let mut components = value.split('.');
+    let parts = [
+        components.next(),
+        components.next(),
+        components.next(),
+        components.next(),
+    ];
+    matches!(
+        parts,
+        [Some(major), Some(minor), Some(patch), None]
+            if !major.is_empty()
+                && !minor.is_empty()
+                && !patch.is_empty()
+                && major.chars().all(|character| character.is_ascii_digit())
+                && minor.chars().all(|character| character.is_ascii_digit())
+                && patch.chars().all(|character| character.is_ascii_digit())
+    )
 }
 
 fn validate_labels(

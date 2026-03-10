@@ -675,15 +675,17 @@ atom_app(
 ```
 
 Each plugin macro returns a dict with at least
-`{"id": "...", "atom_api_level": 1, "config": {...}}`. `atom_app` serializes the list into a
-`config_plugins` array in the metadata JSON:
+`{"id": "...", "target_label": "...", "atom_api_level": 1, "config": {...}}`. `atom_app`
+serializes the list into a `config_plugins` array in the metadata JSON:
 
 ```json
 {
   "config_plugins": [
     {
       "id": "app_icon",
+      "target_label": "//crates/atom-cng-app-icon:atom-cng-app-icon",
       "atom_api_level": 1,
+      "ios_min_deployment_target": "18.0",
       "config": {
         "ios": "assets/AppIcon.icon",
         "android": "assets/ic_launcher.png"
@@ -741,7 +743,7 @@ Per-destination behavior:
 
 | Destination | Format                   | Plugin behavior                                                                                                                                                                                                                        |
 | ----------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| iOS 26+     | `.icon` bundle           | Validate bundle contains `icon.json`. Copy into `generated/ios/{slug}/AppIcon.icon/`. Contribute `CFBundleIconFile = "AppIcon"` to plist. Add bundle to `ios_application` resources.                                                   |
+| iOS 18+     | `.icon` bundle           | Validate bundle contains `icon.json`. Copy bundle files into `generated/ios/{slug}/AppIcon.icon/`. Contribute `CFBundleIconName = "AppIcon"` to plist. Add the bundle files to `ios_application` resources.                           |
 | Android     | Launcher icon            | Validate source exists. Copy into `generated/android/{slug}/src/main/res/mipmap-xxxhdpi/ic_launcher.png`. Contribute `android:icon="@mipmap/ic_launcher"` to manifest `<application>`. Add res dir to `android_binary` resource files. |
 | macOS       | `.icns`                  | Future: separate destination method when macOS is supported.                                                                                                                                                                           |
 | Web         | favicon + manifest icons | Future: separate destination method when web is supported.                                                                                                                                                                             |

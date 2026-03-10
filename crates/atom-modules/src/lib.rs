@@ -35,6 +35,10 @@ pub struct ModuleManifest {
     pub kind: ModuleKind,
     pub target_label: String,
     pub id: String,
+    pub atom_api_level: u32,
+    pub min_atom_version: Option<String>,
+    pub ios_min_deployment_target: Option<String>,
+    pub android_min_sdk: Option<u32>,
     pub depends_on: Vec<String>,
     pub schema_files: Vec<Utf8PathBuf>,
     pub methods: Vec<MethodSpec>,
@@ -147,6 +151,10 @@ mod tests {
   "kind": "atom_module",
   "target_label": "//modules/device_info:device_info",
   "id": "device_info",
+  "atom_api_level": 1,
+  "min_atom_version": "0.1.0",
+  "ios_min_deployment_target": "17.0",
+  "android_min_sdk": 28,
   "depends_on": [],
   "schema_files": ["modules/device_info/schema/device_info.fbs"],
   "methods": [
@@ -176,6 +184,8 @@ mod tests {
 
         assert_eq!(manifest.kind, ModuleKind::Rust);
         assert_eq!(manifest.id, "device_info");
+        assert_eq!(manifest.atom_api_level, 1);
+        assert_eq!(manifest.min_atom_version.as_deref(), Some("0.1.0"));
         assert_eq!(
             manifest.schema_files,
             vec![Utf8PathBuf::from(
@@ -201,6 +211,10 @@ mod tests {
   "kind": "atom_native_module",
   "target_label": "//modules/device_info:device_info",
   "id": "device_info",
+  "atom_api_level": 1,
+  "min_atom_version": null,
+  "ios_min_deployment_target": null,
+  "android_min_sdk": null,
   "depends_on": [],
   "schema_files": [],
   "methods": [],
@@ -236,6 +250,10 @@ mod tests {
                     kind: ModuleKind::Rust,
                     target_label: "//modules/a:a".to_owned(),
                     id: "a".to_owned(),
+                    atom_api_level: 1,
+                    min_atom_version: None,
+                    ios_min_deployment_target: None,
+                    android_min_sdk: None,
                     depends_on: Vec::new(),
                     schema_files: vec![Utf8PathBuf::from("modules/a/schema/a.fbs")],
                     methods: vec![MethodSpec {
@@ -262,6 +280,10 @@ mod tests {
                     kind: ModuleKind::Native,
                     target_label: "//modules/b:b".to_owned(),
                     id: "b".to_owned(),
+                    atom_api_level: 1,
+                    min_atom_version: None,
+                    ios_min_deployment_target: None,
+                    android_min_sdk: None,
                     depends_on: vec!["//modules/a:a".to_owned()],
                     schema_files: vec![Utf8PathBuf::from("modules/b/schema/b.fbs")],
                     methods: vec![MethodSpec {

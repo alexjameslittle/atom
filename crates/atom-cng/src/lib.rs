@@ -3,20 +3,41 @@ mod emit;
 mod ios;
 mod templates;
 
-use std::collections::BTreeSet;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write;
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
-use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, IosConfig, NormalizedManifest};
+use atom_manifest::{
+    AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, NormalizedManifest,
+    FRAMEWORK_ATOM_API_LEVEL, FRAMEWORK_VERSION,
+};
 use atom_modules::{JsonMap, ResolvedModule};
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::android::build_android_plan;
 pub use crate::emit::emit_host_tree;
 use crate::ios::build_ios_plan;
 
+pub type ConfigPluginFactory = fn(&ConfigPluginRequest) -> AtomResult<Box<dyn ConfigPlugin>>;
+
+pub trait ConfigPlugin: Send + Sync {
+    fn id(&self) -> &str;
+    fn validate(&self) -> AtomResult<()>;
+    fn contribute_ios(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<PlatformContribution>;
+    fn contribute_android(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<PlatformContribution>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigPluginContext<'a> {
+    pub app: &'a AppConfig,
+    pub repo_root: &'a Utf8Path,
+    pub generated_root: &'a Utf8Path,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlatformPlan {
     pub generated_root: Utf8PathBuf,
     pub target: String,
@@ -35,6 +56,67 @@ pub struct SchemaFilePlan {
     pub output: Utf8PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContributedFile {
+    pub source: FileSource,
+    pub output: Utf8PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileSource {
+    Copy(Utf8PathBuf),
+    Content(String),
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlatformContribution {
+    pub files: Vec<ContributedFile>,
+    pub plist_entries: JsonMap,
+    pub android_manifest_entries: JsonMap,
+    pub bazel_resources: Vec<String>,
+    pub bazel_resource_globs: Vec<String>,
+}
+
+#[derive(Default)]
+pub struct ConfigPluginRegistry {
+    factories: BTreeMap<String, ConfigPluginFactory>,
+}
+
+impl ConfigPluginRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(&mut self, id: &str, factory: ConfigPluginFactory) {
+        self.factories.insert(id.to_owned(), factory);
+    }
+
+    fn instantiate(&self, entry: &ConfigPluginRequest) -> AtomResult<Box<dyn ConfigPlugin>> {
+        let Some(factory) = self.factories.get(&entry.id) else {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ExtensionIncompatible,
+                format!("no config plugin is registered for id {}", entry.id),
+                format!("config_plugins.{}.id", entry.id),
+            ));
+        };
+
+        let plugin = factory(entry)?;
+        if plugin.id() != entry.id {
+            return Err(AtomError::with_path(
+                AtomErrorCode::InternalBug,
+                format!(
+                    "config plugin registry returned id {} for requested id {}",
+                    plugin.id(),
+                    entry.id
+                ),
+                entry.target_label.as_str(),
+            ));
+        }
+        Ok(plugin)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerationPlan {
     pub version: u16,
@@ -50,6 +132,10 @@ pub struct GenerationPlan {
     pub entitlements: JsonMap,
     pub schema: SchemaPlan,
     pub schema_files: Vec<SchemaFilePlan>,
+    pub contributed_files: Vec<ContributedFile>,
+    pub ios_resources: Vec<String>,
+    pub ios_resource_globs: Vec<String>,
+    pub android_resources: Vec<String>,
     pub ios: Option<PlatformPlan>,
     pub android: Option<PlatformPlan>,
     pub generated_files: Vec<Utf8PathBuf>,
@@ -58,16 +144,31 @@ pub struct GenerationPlan {
 
 /// # Errors
 ///
-/// Returns an error if module metadata merging produces a conflict.
+/// Returns an error if compatibility validation or metadata merging fails.
 pub fn build_generation_plan(
     manifest: &NormalizedManifest,
     modules: &[ResolvedModule],
+    config_plugins: &ConfigPluginRegistry,
 ) -> AtomResult<GenerationPlan> {
+    validate_extension_compatibility(manifest, modules)?;
+
     let mut permissions = BTreeSet::new();
-    let mut plist = JsonMap::new();
-    let mut android_manifest = JsonMap::new();
+    let mut plist = manifest
+        .ios
+        .enabled
+        .then(|| default_ios_plist(&manifest.app, &manifest.ios))
+        .unwrap_or_default();
+    let mut android_manifest = manifest
+        .android
+        .enabled
+        .then(|| default_android_manifest(&manifest.app, &manifest.android))
+        .unwrap_or_default();
     let mut entitlements = JsonMap::new();
     let mut schema_outputs = Vec::new();
+    let mut contributed_files = Vec::new();
+    let mut ios_resources = Vec::new();
+    let mut ios_resource_globs = Vec::new();
+    let mut android_resources = Vec::new();
     let schema_root = manifest.build.generated_root.join("schema");
     let aggregate_schema = schema_root.join("atom.fbs");
 
@@ -103,6 +204,38 @@ pub fn build_generation_plan(
         }
     }
 
+    let plugin_ctx = ConfigPluginContext {
+        app: &manifest.app,
+        repo_root: &manifest.repo_root,
+        generated_root: &manifest.build.generated_root,
+    };
+    for entry in &manifest.config_plugins {
+        let plugin = config_plugins.instantiate(entry)?;
+        plugin.validate()?;
+
+        if manifest.ios.enabled {
+            let contribution = plugin.contribute_ios(&plugin_ctx)?;
+            deep_merge_map(
+                &mut plist,
+                &contribution.plist_entries,
+                &format!("config_plugins.{}.plist", entry.id),
+            )?;
+            contributed_files.extend(contribution.files);
+            ios_resources.extend(contribution.bazel_resources);
+            ios_resource_globs.extend(contribution.bazel_resource_globs);
+        }
+        if manifest.android.enabled {
+            let contribution = plugin.contribute_android(&plugin_ctx)?;
+            deep_merge_map(
+                &mut android_manifest,
+                &contribution.android_manifest_entries,
+                &format!("config_plugins.{}.android_manifest", entry.id),
+            )?;
+            contributed_files.extend(contribution.files);
+            android_resources.extend(contribution.bazel_resources);
+        }
+    }
+
     let schema = SchemaPlan {
         aggregate: aggregate_schema.clone(),
         modules: schema_outputs
@@ -128,6 +261,11 @@ pub fn build_generation_plan(
     if let Some(android) = &android {
         generated_files.extend(android.files.iter().cloned());
     }
+    generated_files.extend(
+        contributed_files
+            .iter()
+            .map(|file| file.output.clone()),
+    );
 
     Ok(GenerationPlan {
         version: 1,
@@ -143,6 +281,10 @@ pub fn build_generation_plan(
         entitlements,
         schema,
         schema_files: schema_outputs,
+        contributed_files,
+        ios_resources,
+        ios_resource_globs,
+        android_resources,
         ios,
         android,
         generated_files,
@@ -226,6 +368,31 @@ pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
     builder.finished_data().to_vec()
 }
 
+pub(crate) fn render_plist_document(plist: &JsonMap) -> AtomResult<String> {
+    let mut output = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n",
+    );
+    render_plist_value(&mut output, &Value::Object(plist.clone()), 0)?;
+    output.push_str("</plist>\n");
+    Ok(output)
+}
+
+pub(crate) fn render_android_manifest_document(
+    package_name: &str,
+    manifest: &JsonMap,
+) -> AtomResult<String> {
+    let mut output = String::new();
+    writeln!(
+        output,
+        "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"{}\">",
+        xml_escape(package_name)
+    )
+    .expect("write to string");
+    render_android_nodes(&mut output, manifest, 1)?;
+    output.push_str("</manifest>\n");
+    Ok(output)
+}
+
 fn create_prebuild_app<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     name: WIPOffset<&'a str>,
@@ -274,7 +441,65 @@ fn create_prebuild_schema<'a, T>(
     builder.end_table(table)
 }
 
-fn normalize_schema_output(schema_file: &camino::Utf8Path) -> Utf8PathBuf {
+fn default_ios_plist(app: &AppConfig, ios: &IosConfig) -> JsonMap {
+    object_from_value(json!({
+        "CFBundleName": app.slug,
+        "CFBundleDisplayName": app.name,
+        "CFBundleIdentifier": ios.bundle_id.as_deref().unwrap_or_default(),
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "LSRequiresIPhoneOS": true,
+        "MinimumOSVersion": ios.deployment_target.as_deref().unwrap_or_default(),
+        "UIApplicationSupportsIndirectInputEvents": true,
+        "UIApplicationSceneManifest": {
+            "UIApplicationSupportsMultipleScenes": false,
+            "UISceneConfigurations": {
+                "UIWindowSceneSessionRoleApplication": [
+                    {
+                        "UISceneConfigurationName": "Default Configuration",
+                        "UISceneDelegateClassName": format!(
+                            "{}.AtomSceneDelegate",
+                            ios::swift_support_module_name(app)
+                        ),
+                    }
+                ]
+            }
+        },
+        "UIMainStoryboardFile": "",
+        "UILaunchStoryboardName": "LaunchScreen.storyboard",
+        "UISupportedInterfaceOrientations": [
+            "UIInterfaceOrientationPortrait"
+        ]
+    }))
+}
+
+fn default_android_manifest(app: &AppConfig, android: &AndroidConfig) -> JsonMap {
+    object_from_value(json!({
+        "uses-sdk": {
+            "@android:minSdkVersion": android.min_sdk.unwrap_or_default(),
+            "@android:targetSdkVersion": android.target_sdk.unwrap_or_default(),
+        },
+        "application": {
+            "@android:label": app.name,
+            "@android:name": ".AtomApplication",
+            "activity": {
+                "@android:name": ".MainActivity",
+                "@android:exported": true,
+                "intent-filter": {
+                    "action": {
+                        "@android:name": "android.intent.action.MAIN"
+                    },
+                    "category": {
+                        "@android:name": "android.intent.category.LAUNCHER"
+                    }
+                }
+            }
+        }
+    }))
+}
+
+fn normalize_schema_output(schema_file: &Utf8Path) -> Utf8PathBuf {
     let value = schema_file.as_str();
     if let Some(stripped) = value.strip_prefix("schema/") {
         return Utf8PathBuf::from(stripped);
@@ -283,6 +508,162 @@ fn normalize_schema_output(schema_file: &camino::Utf8Path) -> Utf8PathBuf {
         return Utf8PathBuf::from(stripped);
     }
     schema_file.to_owned()
+}
+
+fn validate_extension_compatibility(
+    manifest: &NormalizedManifest,
+    modules: &[ResolvedModule],
+) -> AtomResult<()> {
+    for module in modules {
+        validate_extension(
+            module.manifest.target_label.as_str(),
+            module.manifest.atom_api_level,
+            module.manifest.min_atom_version.as_deref(),
+            module.manifest.ios_min_deployment_target.as_deref(),
+            module.manifest.android_min_sdk,
+            manifest,
+        )?;
+    }
+    for plugin in &manifest.config_plugins {
+        validate_extension(
+            plugin.target_label.as_str(),
+            plugin.atom_api_level,
+            plugin.min_atom_version.as_deref(),
+            plugin.ios_min_deployment_target.as_deref(),
+            plugin.android_min_sdk,
+            manifest,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_extension(
+    target_label: &str,
+    atom_api_level: u32,
+    min_atom_version: Option<&str>,
+    ios_min_deployment_target: Option<&str>,
+    android_min_sdk: Option<u32>,
+    manifest: &NormalizedManifest,
+) -> AtomResult<()> {
+    if atom_api_level != FRAMEWORK_ATOM_API_LEVEL {
+        return Err(extension_compatibility_error(
+            target_label,
+            "atom_api_level",
+            format!(
+                "extension requires atom_api_level {atom_api_level}, framework supports {FRAMEWORK_ATOM_API_LEVEL}"
+            ),
+        ));
+    }
+
+    if let Some(min_atom_version) = min_atom_version {
+        if compare_semver(FRAMEWORK_VERSION, min_atom_version)? == Ordering::Less {
+            return Err(extension_compatibility_error(
+                target_label,
+                "min_atom_version",
+                format!(
+                    "extension requires Atom version {min_atom_version}, framework is {FRAMEWORK_VERSION}"
+                ),
+            ));
+        }
+    }
+
+    if let (Some(current), Some(required)) = (
+        manifest.ios.deployment_target.as_deref(),
+        ios_min_deployment_target,
+    ) {
+        if compare_deployment_target(current, required)? == Ordering::Less {
+            return Err(extension_compatibility_error(
+                target_label,
+                "ios_min_deployment_target",
+                format!(
+                    "extension requires iOS deployment target {required}, app is configured for {current}"
+                ),
+            ));
+        }
+    }
+
+    if let (Some(current), Some(required)) = (manifest.android.min_sdk, android_min_sdk) {
+        if current < required {
+            return Err(extension_compatibility_error(
+                target_label,
+                "android_min_sdk",
+                format!("extension requires Android min_sdk {required}, app is configured for {current}"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn extension_compatibility_error(
+    target_label: &str,
+    field: &str,
+    message: String,
+) -> AtomError {
+    AtomError::with_path(
+        AtomErrorCode::ExtensionIncompatible,
+        message,
+        format!("{target_label}.{field}"),
+    )
+}
+
+fn compare_deployment_target(current: &str, required: &str) -> AtomResult<Ordering> {
+    let current = parse_deployment_target(current)?;
+    let required = parse_deployment_target(required)?;
+    Ok(current.cmp(&required))
+}
+
+fn compare_semver(current: &str, required: &str) -> AtomResult<Ordering> {
+    let current = parse_semver(current)?;
+    let required = parse_semver(required)?;
+    Ok(current.cmp(&required))
+}
+
+fn parse_deployment_target(value: &str) -> AtomResult<(u32, u32)> {
+    let mut components = value.split('.');
+    match (
+        components.next(),
+        components.next(),
+        components.next(),
+    ) {
+        (Some(major), Some(minor), None) => Ok((
+            parse_u32_component(major, "deployment target")?,
+            parse_u32_component(minor, "deployment target")?,
+        )),
+        _ => Err(AtomError::new(
+            AtomErrorCode::InternalBug,
+            format!("invalid deployment target format: {value}"),
+        )),
+    }
+}
+
+fn parse_semver(value: &str) -> AtomResult<(u32, u32, u32)> {
+    let mut components = value.split('.');
+    match (
+        components.next(),
+        components.next(),
+        components.next(),
+        components.next(),
+    ) {
+        (Some(major), Some(minor), Some(patch), None) => Ok((
+            parse_u32_component(major, "semver")?,
+            parse_u32_component(minor, "semver")?,
+            parse_u32_component(patch, "semver")?,
+        )),
+        _ => Err(AtomError::new(
+            AtomErrorCode::InternalBug,
+            format!("invalid semver format: {value}"),
+        )),
+    }
+}
+
+fn parse_u32_component(value: &str, kind: &str) -> AtomResult<u32> {
+    value.parse::<u32>().map_err(|error| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            format!("failed to parse {kind} component {value}: {error}"),
+        )
+    })
 }
 
 fn deep_merge_map(target: &mut JsonMap, source: &JsonMap, context: &str) -> AtomResult<()> {
@@ -313,6 +694,150 @@ fn deep_merge_value(target: &mut Value, source: &Value, path: &str) -> AtomResul
     }
 }
 
+fn object_from_value(value: Value) -> JsonMap {
+    match value {
+        Value::Object(map) => map,
+        _ => JsonMap::new(),
+    }
+}
+
+fn render_plist_value(output: &mut String, value: &Value, indent: usize) -> AtomResult<()> {
+    let prefix = "  ".repeat(indent);
+    match value {
+        Value::Object(map) => {
+            writeln!(output, "{prefix}<dict>").expect("write to string");
+            for (key, entry) in map {
+                writeln!(output, "{prefix}  <key>{}</key>", xml_escape(key)).expect("write");
+                render_plist_value(output, entry, indent + 1)?;
+            }
+            writeln!(output, "{prefix}</dict>").expect("write to string");
+        }
+        Value::Array(values) => {
+            writeln!(output, "{prefix}<array>").expect("write to string");
+            for entry in values {
+                render_plist_value(output, entry, indent + 1)?;
+            }
+            writeln!(output, "{prefix}</array>").expect("write to string");
+        }
+        Value::String(value) => {
+            writeln!(output, "{prefix}<string>{}</string>", xml_escape(value)).expect("write");
+        }
+        Value::Bool(true) => {
+            writeln!(output, "{prefix}<true/>").expect("write to string");
+        }
+        Value::Bool(false) => {
+            writeln!(output, "{prefix}<false/>").expect("write to string");
+        }
+        Value::Number(number) => {
+            if number.is_i64() || number.is_u64() {
+                writeln!(output, "{prefix}<integer>{number}</integer>").expect("write");
+            } else {
+                writeln!(output, "{prefix}<real>{number}</real>").expect("write");
+            }
+        }
+        Value::Null => {
+            return Err(AtomError::new(
+                AtomErrorCode::CngTemplateError,
+                "plist values must not be null",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn render_android_nodes(output: &mut String, nodes: &JsonMap, indent: usize) -> AtomResult<()> {
+    for (name, value) in nodes {
+        render_android_node(output, name, value, indent)?;
+    }
+    Ok(())
+}
+
+fn render_android_node(
+    output: &mut String,
+    name: &str,
+    value: &Value,
+    indent: usize,
+) -> AtomResult<()> {
+    if let Value::Array(values) = value {
+        for entry in values {
+            render_android_node(output, name, entry, indent)?;
+        }
+        return Ok(());
+    }
+
+    let prefix = "  ".repeat(indent);
+    match value {
+        Value::Object(map) => {
+            let mut attributes = Vec::new();
+            let mut children = JsonMap::new();
+            let mut text = None;
+            for (key, entry) in map {
+                if let Some(attribute) = key.strip_prefix('@') {
+                    attributes.push((attribute, entry));
+                } else if key == "#text" {
+                    text = Some(entry);
+                } else {
+                    children.insert(key.clone(), entry.clone());
+                }
+            }
+
+            write!(output, "{prefix}<{name}").expect("write");
+            for (attribute, entry) in attributes {
+                write!(
+                    output,
+                    " {attribute}=\"{}\"",
+                    xml_escape(&render_xml_scalar(entry)?)
+                )
+                .expect("write");
+            }
+
+            if children.is_empty() && text.is_none() {
+                output.push_str(" />\n");
+                return Ok(());
+            }
+
+            output.push('>');
+            if let Some(text) = text {
+                write!(output, "{}", xml_escape(&render_xml_scalar(text)?)).expect("write");
+            }
+            if !children.is_empty() {
+                output.push('\n');
+                render_android_nodes(output, &children, indent + 1)?;
+                write!(output, "{prefix}").expect("write");
+            }
+            writeln!(output, "</{name}>").expect("write");
+        }
+        Value::String(_) | Value::Bool(_) | Value::Number(_) => {
+            writeln!(
+                output,
+                "{prefix}<{name}>{}</{name}>",
+                xml_escape(&render_xml_scalar(value)?)
+            )
+            .expect("write");
+        }
+        Value::Null => {
+            return Err(AtomError::new(
+                AtomErrorCode::CngTemplateError,
+                "android manifest values must not be null",
+            ));
+        }
+        Value::Array(_) => unreachable!("arrays are handled above"),
+    }
+    Ok(())
+}
+
+fn render_xml_scalar(value: &Value) -> AtomResult<String> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        _ => Err(AtomError::new(
+            AtomErrorCode::CngTemplateError,
+            "android manifest attribute values must be scalar",
+        )),
+    }
+}
+
 fn render_aggregate_schema(plan: &GenerationPlan) -> AtomResult<String> {
     let schema_includes: Vec<&str> = plan
         .schema
@@ -333,18 +858,96 @@ fn render_aggregate_schema(plan: &GenerationPlan) -> AtomResult<String> {
     )
 }
 
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use atom_manifest::{
-        AndroidConfig, AppConfig, BuildConfig, IosConfig, ModuleRequest, NormalizedManifest,
+        AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, JsonMap,
+        ModuleRequest, NormalizedManifest,
     };
-    use atom_modules::{JsonMap, MethodSpec, ModuleKind, ModuleManifest, ResolvedModule};
+    use atom_modules::{MethodSpec, ModuleKind, ModuleManifest, ResolvedModule};
     use camino::Utf8PathBuf;
+    use serde_json::json;
     use tempfile::tempdir;
 
-    use super::{build_generation_plan, emit_host_tree, render_prebuild_plan};
+    use super::{
+        ConfigPlugin, ConfigPluginContext, ConfigPluginRegistry, ContributedFile, FileSource,
+        PlatformContribution, build_generation_plan, emit_host_tree, object_from_value,
+        render_prebuild_plan,
+    };
+
+    struct FixturePlugin;
+
+    impl ConfigPlugin for FixturePlugin {
+        fn id(&self) -> &str {
+            "fixture_plugin"
+        }
+
+        fn validate(&self) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn contribute_ios(
+            &self,
+            ctx: &ConfigPluginContext<'_>,
+        ) -> atom_ffi::AtomResult<PlatformContribution> {
+            Ok(PlatformContribution {
+                files: vec![ContributedFile {
+                    source: FileSource::Copy(Utf8PathBuf::from("assets/AppIcon.icon")),
+                    output: ctx
+                        .generated_root
+                        .join("ios")
+                        .join(&ctx.app.slug)
+                        .join("resources")
+                        .join("AppIcon.icon"),
+                }],
+                plist_entries: object_from_value(json!({
+                    "CFBundleIconName": "AppIcon"
+                })),
+                android_manifest_entries: JsonMap::new(),
+                bazel_resources: Vec::new(),
+                bazel_resource_globs: vec!["resources/AppIcon.icon/**".to_owned()],
+            })
+        }
+
+        fn contribute_android(
+            &self,
+            ctx: &ConfigPluginContext<'_>,
+        ) -> atom_ffi::AtomResult<PlatformContribution> {
+            Ok(PlatformContribution {
+                files: vec![ContributedFile {
+                    source: FileSource::Copy(Utf8PathBuf::from("assets/ic_launcher.png")),
+                    output: ctx
+                        .generated_root
+                        .join("android")
+                        .join(&ctx.app.slug)
+                        .join("src/main/res/mipmap-xxxhdpi/ic_launcher.png"),
+                }],
+                plist_entries: JsonMap::new(),
+                android_manifest_entries: object_from_value(json!({
+                    "application": {
+                        "@android:icon": "@mipmap/ic_launcher"
+                    }
+                })),
+                bazel_resources: vec!["src/main/res/mipmap-xxxhdpi/ic_launcher.png".to_owned()],
+                bazel_resource_globs: Vec::new(),
+            })
+        }
+    }
+
+    fn register_fixture_plugin(registry: &mut ConfigPluginRegistry) {
+        registry.register("fixture_plugin", |_entry| Ok(Box::new(FixturePlugin)));
+    }
 
     fn write_fixture(root: &Utf8PathBuf) -> (NormalizedManifest, Vec<ResolvedModule>) {
         fs::create_dir_all(root.join("modules/device_info/schema")).expect("module dir");
@@ -382,6 +985,7 @@ mod tests {
             modules: vec![ModuleRequest {
                 target_label: "//modules/device_info:device_info".to_owned(),
             }],
+            config_plugins: Vec::new(),
         };
 
         let modules = vec![ResolvedModule {
@@ -393,6 +997,10 @@ mod tests {
                 kind: ModuleKind::Rust,
                 target_label: "//modules/device_info:device_info".to_owned(),
                 id: "device_info".to_owned(),
+                atom_api_level: 1,
+                min_atom_version: Some("0.1.0".to_owned()),
+                ios_min_deployment_target: Some("17.0".to_owned()),
+                android_min_sdk: Some(28),
                 depends_on: Vec::new(),
                 schema_files: vec![Utf8PathBuf::from(
                     "modules/device_info/schema/device_info.fbs",
@@ -423,13 +1031,17 @@ mod tests {
         (manifest, modules)
     }
 
+    fn fixture_registry() -> ConfigPluginRegistry {
+        ConfigPluginRegistry::default()
+    }
+
     #[test]
     fn plan_contains_required_generated_files() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let (manifest, modules) = write_fixture(&root);
 
-        let plan = build_generation_plan(&manifest, &modules).expect("plan");
+        let plan = build_generation_plan(&manifest, &modules, &fixture_registry()).expect("plan");
 
         assert!(
             plan.generated_files
@@ -457,7 +1069,7 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let (manifest, modules) = write_fixture(&root);
 
-        let plan = build_generation_plan(&manifest, &modules).expect("plan");
+        let plan = build_generation_plan(&manifest, &modules, &fixture_registry()).expect("plan");
 
         emit_host_tree(&root, &plan).expect("host tree");
 
@@ -470,12 +1082,12 @@ mod tests {
     }
 
     #[test]
-    fn emit_host_tree_writes_phase_three_build_targets() {
+    fn emit_host_tree_writes_phase_five_build_targets() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let (manifest, modules) = write_fixture(&root);
 
-        let plan = build_generation_plan(&manifest, &modules).expect("plan");
+        let plan = build_generation_plan(&manifest, &modules, &fixture_registry()).expect("plan");
         emit_host_tree(&root, &plan).expect("host tree");
 
         let ios_build =
@@ -503,6 +1115,9 @@ mod tests {
         let android_build =
             fs::read_to_string(root.join("generated/android/hello-atom/BUILD.bazel"))
                 .expect("android build");
+        let android_manifest =
+            fs::read_to_string(root.join("generated/android/hello-atom/AndroidManifest.generated.xml"))
+                .expect("android manifest");
         let android_runtime_bridge =
             fs::read_to_string(root.join("generated/android/hello-atom/atom_runtime_jni.rs"))
                 .expect("android runtime bridge");
@@ -520,7 +1135,8 @@ mod tests {
         assert!(ios_build.contains("hdrs = [\"atom_runtime.h\"]"));
         assert!(ios_build.contains("\":atom_runtime_swift_bridge\""));
         assert!(!ios_build.contains("swift_binary("));
-        assert!(ios_build.contains("resources = [\"LaunchScreen.storyboard\"]"));
+        assert!(ios_build.contains("resources = ["));
+        assert!(ios_build.contains("\"LaunchScreen.storyboard\""));
         assert!(ios_plist.contains("<key>CFBundleShortVersionString</key>"));
         assert!(ios_plist.contains("<string>1.0</string>"));
         assert!(ios_plist.contains("<key>CFBundleVersion</key>"));
@@ -548,6 +1164,8 @@ mod tests {
         assert!(android_build.contains("srcs = [\"atom_runtime_jni.rs\"]"));
         assert!(!android_build.contains("java_binary("));
         assert!(!android_build.contains("AppEntry.kt"));
+        assert!(android_manifest.contains("android:minSdkVersion=\"28\""));
+        assert!(android_manifest.contains("android:targetSdkVersion=\"35\""));
         assert!(android_runtime_bridge.contains("hello_atom::atom_runtime_config()"));
 
         let android_app = fs::read_to_string(root.join(
@@ -567,5 +1185,64 @@ mod tests {
                 .join("generated/android/hello-atom/src/main/kotlin/build/atom/hello/AppEntry.kt")
                 .exists()
         );
+    }
+
+    #[test]
+    fn config_plugins_can_contribute_files_and_resources() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let (mut manifest, modules) = write_fixture(&root);
+        fs::create_dir_all(root.join("assets/AppIcon.icon")).expect("icon dir");
+        fs::write(root.join("assets/AppIcon.icon/icon.json"), "{\"name\":\"AppIcon\"}")
+            .expect("icon json");
+        fs::write(root.join("assets/ic_launcher.png"), "png").expect("png");
+        manifest.config_plugins.push(ConfigPluginRequest {
+            target_label: "//tests:fixture_plugin".to_owned(),
+            id: "fixture_plugin".to_owned(),
+            atom_api_level: 1,
+            min_atom_version: Some("0.1.0".to_owned()),
+            ios_min_deployment_target: Some("17.0".to_owned()),
+            android_min_sdk: Some(28),
+            config: JsonMap::new(),
+        });
+
+        let mut registry = fixture_registry();
+        register_fixture_plugin(&mut registry);
+        let plan = build_generation_plan(&manifest, &modules, &registry).expect("plan");
+        emit_host_tree(&root, &plan).expect("host tree");
+
+        let ios_plist =
+            fs::read_to_string(root.join("generated/ios/hello-atom/Info.generated.plist"))
+                .expect("ios plist");
+        let ios_build =
+            fs::read_to_string(root.join("generated/ios/hello-atom/BUILD.bazel")).expect("ios");
+        let android_manifest =
+            fs::read_to_string(root.join("generated/android/hello-atom/AndroidManifest.generated.xml"))
+                .expect("android manifest");
+        let android_build =
+            fs::read_to_string(root.join("generated/android/hello-atom/BUILD.bazel"))
+                .expect("android build");
+
+        assert!(root.join("generated/ios/hello-atom/resources/AppIcon.icon/icon.json").exists());
+        assert!(root.join("generated/android/hello-atom/src/main/res/mipmap-xxxhdpi/ic_launcher.png").exists());
+        assert!(ios_plist.contains("<key>CFBundleIconName</key>"));
+        assert!(ios_plist.contains("<string>AppIcon</string>"));
+        assert!(ios_build.contains("glob(["));
+        assert!(ios_build.contains("\"resources/AppIcon.icon/**\""));
+        assert!(android_manifest.contains("android:icon=\"@mipmap/ic_launcher\""));
+        assert!(android_build.contains("resource_files = ["));
+        assert!(android_build.contains("\"src/main/res/mipmap-xxxhdpi/ic_launcher.png\""));
+    }
+
+    #[test]
+    fn incompatible_module_metadata_fails_before_generation() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let (manifest, mut modules) = write_fixture(&root);
+        modules[0].manifest.atom_api_level = 2;
+
+        let error = build_generation_plan(&manifest, &modules, &fixture_registry())
+            .expect_err("incompatible module should fail");
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::ExtensionIncompatible);
     }
 }

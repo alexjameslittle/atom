@@ -9,6 +9,7 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//crates/atom-cng",
+        "//crates/atom-cng-app-icon",
         "//crates/atom-deploy",
         "//crates/atom-ffi",
         "//crates/atom-manifest",

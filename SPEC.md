@@ -242,11 +242,12 @@ Unknown keys MUST fail validation with `MANIFEST_UNKNOWN_KEY`.
 | `min_sdk`           | integer       | yes when enabled | none                      | `>= 24`                                          |
 | `target_sdk`        | integer       | yes when enabled | none                      | `>= min_sdk`                                     |
 | `modules`           | array<string> | no               | `[]`                      | absolute Bazel labels, unique                    |
-| `config_plugins`    | array<object> | no               | `[]`                      | entries require unique `id` plus object `config` |
+| `config_plugins`    | array<object> | no               | `[]`                      | entries require unique `id`, `target_label`, and object `config` |
 
 Each `config_plugins` entry MUST support these fields:
 
 - `id: String`
+- `target_label: String`
 - `atom_api_level: u32`
 - `min_atom_version: Option<String>`
 - `ios_min_deployment_target: Option<String>`
@@ -743,6 +744,7 @@ Config/CNG plugins MUST be declared in Bazel through plugin-specific Starlark ma
 Each serialized `config_plugins` entry MUST include:
 
 - `id`
+- `target_label`
 - `atom_api_level`
 - `min_atom_version`
 - `ios_min_deployment_target`
@@ -1474,11 +1476,11 @@ atom_app(
 ```
 
 Each plugin macro MUST return at least
-`{"id": "<plugin_id>", "atom_api_level": <n>, "config": {...}}`. It MAY also include
-`min_atom_version`, `ios_min_deployment_target`, and `android_min_sdk`. `atom_app` MUST serialize
-the list into a `config_plugins` array in the metadata JSON. CNG MUST validate compatibility fields,
-instantiate plugins by `id`, pass the opaque `config` to the plugin for parsing and validation, then
-call contribution methods.
+`{"id": "<plugin_id>", "target_label": "<bazel_label>", "atom_api_level": <n>, "config": {...}}`.
+It MAY also include `min_atom_version`, `ios_min_deployment_target`, and `android_min_sdk`.
+`atom_app` MUST serialize the list into a `config_plugins` array in the metadata JSON. CNG MUST
+validate compatibility fields, instantiate plugins by `id`, pass the opaque `config` to the plugin
+for parsing and validation, then call contribution methods.
 
 #### 11.8.3 App Icon Config Plugin (`atom-cng-app-icon`)
 
@@ -1490,8 +1492,8 @@ The plugin owns its config shape. `atom-cng` knows nothing about icon formats.
 Per-destination behavior:
 
 - **iOS**: validate the path references a `.icon` bundle containing `icon.json`, copy the bundle
-  into `generated/ios/{slug}/AppIcon.icon/`, contribute `CFBundleIconFile = "AppIcon"` to plist, add
-  the bundle to `ios_application` resources
+  files into `generated/ios/{slug}/AppIcon.icon/`, contribute `CFBundleIconName = "AppIcon"` to
+  plist, add the bundle files to `ios_application` resources, and require iOS 18.0 or newer
 - **Android**: validate the source path exists, copy into
   `generated/android/{slug}/src/main/res/mipmap-xxxhdpi/ic_launcher.png`, contribute
   `android:icon="@mipmap/ic_launcher"` to the manifest `<application>` element, add the res
