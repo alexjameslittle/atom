@@ -1,35 +1,62 @@
 # Hello World
 
-This is the canonical Phase 3 consumer fixture for Bazel-first Atom mobile hosts. It includes one
-Rust-backed module, one native-only module, and one runtime plugin crate outside `atom-runtime` so
-the metadata pipeline and generated hosts exercise `atom_module(...)`, `atom_native_module(...)`,
-and app-owned `atom_runtime_config()` registration.
+This is the canonical Phase 4 consumer fixture for Bazel-first Atom mobile hosts. It includes one
+Rust-backed module, one native-only module, and two first-party runtime plugin crates outside
+`atom-runtime` so the metadata pipeline and generated hosts exercise `atom_module(...)`,
+`atom_native_module(...)`, and app-owned `atom_runtime_config()` registration.
 
-`apps/hello_atom` consumes the plugin as a normal Bazel Rust dependency:
+`apps/hello_atom` consumes the Rust-backed module and plugins as normal Bazel Rust dependencies:
 
 ```starlark
 atom_app(
     name = "hello_atom",
     deps = [
+        "//crates/atom-analytics",
+        "//crates/atom-navigation",
         "//crates/atom-runtime",
+        "//examples/hello-world/modules/device_info",
         "//examples/hello-world/plugins/lifecycle_logger",
     ],
 )
 ```
 
-The app crate opts into the plugin in Rust:
+The app crate opts into runtime modules and plugins in Rust:
 
 ```rust
 pub fn atom_runtime_config() -> atom_runtime::RuntimeConfig {
+    let navigation = atom_navigation::NavigationPlugin::new("home");
+    navigation.handle().push("device_info");
+
+    let analytics = atom_analytics::AnalyticsPlugin::new("hello_atom");
+    analytics.handle().track("runtime_configured");
+
     atom_runtime::RuntimeConfig::builder()
+        .module(device_info::runtime_module())
         .plugin(hello_world_lifecycle_logger::LifecycleLoggerPlugin::new())
+        .plugin(navigation)
+        .plugin(analytics)
         .build()
 }
 ```
 
+`device_info::runtime_module()` registers a Rust-backed module method with the runtime kernel, and
+the example `plugins/lifecycle_logger` crate uses the shared `PluginContext` API to:
+
+- write runtime state
+- run an async warmup task once the runtime reaches `Running`
+- call the `device_info.get` module method through the runtime
+
+That keeps the proof of state changes, async work, and module calls inside the same public runtime
+API surface used by first-party and third-party plugins.
+
 Run it from the repository root:
 
 ```sh
+mise run ios
+mise run android
+mise run ios -- --device 00008130-001431E90A78001C
+mise run android -- --device emulator-5554
+
 bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/tmp/hello-atom.plan
 bazelisk run //:atom -- run ios --target //examples/hello-world/apps/hello_atom:hello_atom
 bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom

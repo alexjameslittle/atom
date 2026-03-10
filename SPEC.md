@@ -537,6 +537,12 @@ function start_runtime(normalized_manifest, resolved_modules):
   NOT introduce a second lifecycle model or direct generated-host customization path.
 - The runtime kernel MUST remain the single authority for lifecycle transitions, effect completion,
   and dispatch ordering even when higher-level state-management libraries layer on top of it.
+- The runtime plugin context SHOULD expose kernel-owned hooks for shared state writes, event
+  recording, effect recording, async task execution, and runtime module calls.
+- Runtime plugins MAY use an `on_running`-style callback after the runtime reaches `Running` to
+  begin work that requires module-call availability.
+- Runtime module methods registered through app-owned runtime config MUST only be callable while the
+  runtime is in the `Running` state.
 - `atom-runtime` MUST expose only destination-agnostic plugin host types. Its public plugin API MUST
   NOT mention iOS, Android, simulator, emulator, device, route-stack, or renderer-specific types.
 - Apps MUST opt into runtime plugins in app code by constructing the runtime configuration passed to
@@ -1376,11 +1382,14 @@ Required behavior:
 - module init in resolved order
 - runtime lifecycle follows Section 7.2
 - invalid transitions return `RUNTIME_TRANSITION_INVALID`
+- the runtime exposes kernel-owned state/event/effect inspection and runtime-side module call
+  plumbing for Rust-backed modules
 
 Conformance example:
 
-- Input sequence: `init -> background -> resume -> terminate`
-- Expected state sequence:
+- Input: canonical app startup plus lifecycle sequence `init -> background -> resume -> terminate`
+- Expected output: the runtime records shared state updates, completes at least one async task,
+  successfully performs a `device_info.get` module call while `Running`, and transitions through
   `Created -> Initializing -> Running -> Backgrounded -> Running -> Terminating -> Terminated`
 
 ### 11.6 Phase 4B: Runtime Plugin SDK and Registration

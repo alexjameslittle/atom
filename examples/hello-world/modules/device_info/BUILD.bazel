@@ -12,4 +12,8 @@ atom_module(
         },
     ],
     schema_files = ["schema/device_info.fbs"],
+    deps = [
+        "//crates/atom-runtime",
+        "@crates//:flatbuffers",
+    ],
 )

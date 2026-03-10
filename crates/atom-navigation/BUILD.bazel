@@ -1,17 +1,20 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
-    name = "lifecycle_logger",
+    name = "atom-navigation",
     srcs = ["src/lib.rs"],
-    crate_name = "hello_world_lifecycle_logger",
+    crate_name = "atom_navigation",
     crate_root = "src/lib.rs",
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
         "//crates/atom-ffi",
         "//crates/atom-runtime",
-        "//examples/hello-world/modules/device_info",
-        "@crates//:tokio",
         "@crates//:tracing",
     ],
+)
+
+rust_test(
+    name = "atom-navigation-test",
+    crate = ":atom-navigation",
 )

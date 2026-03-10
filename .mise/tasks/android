@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+set -eu
+exec bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom "$@"

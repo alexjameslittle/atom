@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use atom_ffi::AtomResult;
 
 use crate::plugin::{PluginContext, RuntimePlugin};
@@ -5,13 +7,35 @@ use crate::plugin::{PluginContext, RuntimePlugin};
 /// Module init function type.
 pub type ModuleInitFn = Box<dyn FnOnce(&PluginContext) -> AtomResult<()> + Send>;
 
-/// Registration for a module's lifecycle (init/shutdown). Method dispatch is
-/// handled by CNG-generated per-method FFI exports, not the runtime kernel.
+pub type ModuleMethodHandler =
+    Arc<dyn Fn(&PluginContext, &[u8]) -> AtomResult<Vec<u8>> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct ModuleMethodRegistration {
+    pub name: String,
+    pub handler: ModuleMethodHandler,
+}
+
+impl ModuleMethodRegistration {
+    #[must_use]
+    pub fn new<F>(name: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(&PluginContext, &[u8]) -> AtomResult<Vec<u8>> + Send + Sync + 'static,
+    {
+        Self {
+            name: name.into(),
+            handler: Arc::new(handler),
+        }
+    }
+}
+
+/// Registration for a module's lifecycle and runtime-call surface.
 pub struct ModuleRegistration {
     pub id: String,
     pub init_order: usize,
     pub init_fn: ModuleInitFn,
     pub shutdown_fn: Option<Box<dyn FnOnce() + Send>>,
+    pub methods: Vec<ModuleMethodRegistration>,
 }
 
 #[derive(Default)]
