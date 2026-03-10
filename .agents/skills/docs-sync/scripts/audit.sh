@@ -1,21 +1,38 @@
 #!/usr/bin/env sh
 set -eu
 
-repo_root=$(cd -- "$(dirname "$0")/../../.." && pwd)
+repo_root=$(cd -- "$(dirname "$0")/../../../.." && pwd)
 cd "$repo_root"
 
 echo "==> Checking doc links"
-for f in docs/*.md docs/**/*.md AGENTS.md README.md; do
-  [ -f "$f" ] || continue
-  # Extract markdown link targets (relative paths only)
+find docs -type f -name '*.md' | sort | while read -r f; do
+  # Extract markdown link targets (relative paths only).
   grep -oE '\]\([^)]+\)' "$f" 2>/dev/null | sed 's/\](//' | sed 's/)//' | while read -r target; do
-    # Skip URLs and anchors
-    if echo "$target" | grep -qE '^(http|#)'; then
+    clean_target=${target%%#*}
+
+    # Skip URLs and anchors.
+    if [ -z "$clean_target" ] || echo "$clean_target" | grep -qE '^(http|#)'; then
       continue
     fi
-    # Resolve relative to file's directory
+
+    # Resolve relative to the markdown file's directory.
     dir=$(dirname "$f")
-    resolved="$dir/$target"
+    resolved="$dir/$clean_target"
+    if [ ! -e "$resolved" ]; then
+      echo "  BROKEN: $f -> $target"
+    fi
+  done
+done
+
+for f in AGENTS.md README.md SPEC.md; do
+  [ -f "$f" ] || continue
+  grep -oE '\]\([^)]+\)' "$f" 2>/dev/null | sed 's/\](//' | sed 's/)//' | while read -r target; do
+    clean_target=${target%%#*}
+    if [ -z "$clean_target" ] || echo "$clean_target" | grep -qE '^(http|#)'; then
+      continue
+    fi
+    dir=$(dirname "$f")
+    resolved="$dir/$clean_target"
     if [ ! -e "$resolved" ]; then
       echo "  BROKEN: $f -> $target"
     fi

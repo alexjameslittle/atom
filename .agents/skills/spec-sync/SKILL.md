@@ -1,3 +1,10 @@
+---
+name: spec-sync
+description:
+  Compare implementation facts against SPEC.md so behavior, error codes, lifecycle states, and
+  metadata remain documented accurately.
+---
+
 # spec-sync
 
 Audit SPEC.md against the current implementation to find contradictions, missing coverage, or
@@ -13,7 +20,7 @@ Use this skill when:
 
 ## Steps
 
-1. Run `./scripts/spec-sync/extract.sh` to collect implementation facts.
+1. Run `scripts/extract.sh`.
 2. Compare extracted data against SPEC.md sections.
 3. Report contradictions (spec says X, code does Y) and gaps (code does Z, spec is silent).
 

@@ -20,6 +20,14 @@ Start here, then read [docs/README.md](docs/README.md).
 Skills live in `.agents/skills/`. Each skill has a `SKILL.md` manifest and optional `scripts/` that
 handle deterministic work. Read a skill's `SKILL.md` before using it.
 
+Skill manifests should start with YAML frontmatter that includes:
+
+- `name`: the stable skill identifier.
+- `description`: a sharp routing hint that says when the skill is useful.
+
+Paths inside `SKILL.md` should be relative to the skill directory (`scripts/...`, `references/...`),
+not repo-root wrapper paths.
+
 ### Mandatory skill triggers
 
 | Skill                                                              | Trigger                                                                                                                                        |
@@ -30,6 +38,16 @@ handle deterministic work. Read a skill's `SKILL.md` before using it.
 | [prebuild-validation](.agents/skills/prebuild-validation/SKILL.md) | Changes to `crates/atom-cng/`, `templates/`, `bzl/atom/`, or module metadata attributes.                                                       |
 | [spec-sync](.agents/skills/spec-sync/SKILL.md)                     | Behavior changes, new error codes, lifecycle states, metadata fields, or release candidates.                                                   |
 
+### Reusable workflow skills
+
+| Skill                                                                      | Use when                                                                                             |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [implementation-strategy](.agents/skills/implementation-strategy/SKILL.md) | A task is multi-file, architectural, or high-risk and needs a concrete edit plan before coding.      |
+| [pr-summary](.agents/skills/pr-summary/SKILL.md)                           | A branch is ready for user handoff or PR drafting and needs a clean summary plus verification block. |
+| [release-review](.agents/skills/release-review/SKILL.md)                   | A release candidate or release-critical branch needs one final pass across spec, docs, and examples. |
+| [test-coverage-improver](.agents/skills/test-coverage-improver/SKILL.md)   | A diff changes behavior but the right test additions are not obvious yet.                            |
+| [examples-auto-run](.agents/skills/examples-auto-run/SKILL.md)             | Framework or example changes need proof through the hello-world consumer app.                        |
+
 ### How skills work
 
 Skills follow a **model vs. script split**:
@@ -37,8 +55,18 @@ Skills follow a **model vs. script split**:
 - **Scripts** handle deterministic shell work: running commands, collecting output, hashing files.
 - **Model** handles interpretation: judging failures, suggesting fixes, drafting updates.
 
-Skills use **progressive disclosure**: metadata loads first, full SKILL.md loads when the skill is
-selected, scripts run only when needed. This prevents bloating agent context.
+Skills use **progressive disclosure**: routing should start from frontmatter metadata, full
+`SKILL.md` loads when the skill is selected, and scripts run only when needed. This prevents
+bloating agent context.
+
+## Review And Handoff
+
+- Review for correctness, regressions, missing tests, and contract drift before style issues.
+- Cite file and line evidence for findings whenever possible.
+- If no findings remain, say so explicitly and note any skipped checks or residual risk.
+- Before handing work back or drafting a PR, run `pr-summary` and follow
+  [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).
+- Before calling a branch release-ready, run `release-review` and make any skipped checks explicit.
 
 ## Verify First
 

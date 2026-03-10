@@ -11,8 +11,8 @@ Run:
 ```
 
 This expects `mise` to already be installed, then installs the pinned toolchain from
-[mise.toml](/Users/alexlittle/conductor/workspaces/atom/tehran/mise.toml) and configures Git to use
-the tracked hooks in [.githooks](/Users/alexlittle/conductor/workspaces/atom/tehran/.githooks).
+[../mise.toml](../mise.toml) and configures Git to use the tracked hooks in
+[../.githooks](../.githooks).
 
 ## Local Guardrails
 
@@ -43,9 +43,7 @@ CI runs five parallel job executions sharing a BuildBuddy remote cache:
 
 All jobs must pass before merge.
 
-- [ci.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/workflows/ci.yml) defines the
-  CI matrix.
-- [dependabot.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/dependabot.yml) keeps
-  workflow dependencies moving.
-- [settings.yml](/Users/alexlittle/conductor/workspaces/atom/tehran/.github/settings.yml) captures
-  the intended branch protection policy for repositories that apply GitHub settings from code.
+- [../.github/workflows/ci.yml](../.github/workflows/ci.yml) defines the CI matrix.
+- [../.github/dependabot.yml](../.github/dependabot.yml) keeps workflow dependencies moving.
+- [../.github/settings.yml](../.github/settings.yml) captures the intended branch protection policy
+  for repositories that apply GitHub settings from code.

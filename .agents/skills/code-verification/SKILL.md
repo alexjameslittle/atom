@@ -1,3 +1,10 @@
+---
+name: code-verification
+description:
+  Run Atom's verification harness and surface the first failing lint, test, or prebuild step after
+  repository changes.
+---
+
 # code-verification
 
 Run the full verification stack when changes affect runtime code, tests, build rules, or generated
@@ -16,7 +23,7 @@ This skill is **mandatory** when a change touches any of:
 
 ## Steps
 
-1. Run `./scripts/code-verification/run.sh` from the repo root.
+1. Run `scripts/run.sh`.
 2. If any step fails, report the failing step and its output.
 3. Do not proceed with a PR or commit until all steps pass.
 
