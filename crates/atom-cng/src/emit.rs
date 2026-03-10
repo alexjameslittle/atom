@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, io};
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -222,6 +222,7 @@ fn copy_path(source: &Utf8Path, destination: &Utf8Path) -> AtomResult<()> {
     })?;
 
     if metadata.is_dir() {
+        remove_existing_path(destination)?;
         fs::create_dir_all(destination).map_err(|error| {
             AtomError::with_path(
                 AtomErrorCode::CngWriteError,
@@ -256,6 +257,7 @@ fn copy_path(source: &Utf8Path, destination: &Utf8Path) -> AtomResult<()> {
         return Ok(());
     }
 
+    remove_existing_path(destination)?;
     write_parent_dir(destination)?;
     fs::copy(source, destination).map_err(|error| {
         AtomError::with_path(
@@ -265,4 +267,35 @@ fn copy_path(source: &Utf8Path, destination: &Utf8Path) -> AtomResult<()> {
         )
     })?;
     Ok(())
+}
+
+fn remove_existing_path(path: &Utf8Path) -> AtomResult<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.is_dir() {
+                fs::remove_dir_all(path).map_err(|error| {
+                    AtomError::with_path(
+                        AtomErrorCode::CngWriteError,
+                        format!("failed to remove stale contributed directory: {error}"),
+                        path.as_str(),
+                    )
+                })?;
+            } else {
+                fs::remove_file(path).map_err(|error| {
+                    AtomError::with_path(
+                        AtomErrorCode::CngWriteError,
+                        format!("failed to remove stale contributed file: {error}"),
+                        path.as_str(),
+                    )
+                })?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AtomError::with_path(
+            AtomErrorCode::CngWriteError,
+            format!("failed to stat contributed destination: {error}"),
+            path.as_str(),
+        )),
+    }
 }

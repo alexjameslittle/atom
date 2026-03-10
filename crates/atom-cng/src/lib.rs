@@ -1252,6 +1252,53 @@ mod tests {
     }
 
     #[test]
+    fn config_plugin_directory_copies_do_not_leave_stale_files() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let (mut manifest, modules) = write_fixture(&root);
+        manifest.build.generated_root = Utf8PathBuf::from("cng-output");
+
+        fs::create_dir_all(root.join("assets/AppIcon.icon/Assets")).expect("assets dir");
+        fs::write(
+            root.join("assets/AppIcon.icon/icon.json"),
+            "{\"name\":\"AppIcon\"}",
+        )
+        .expect("icon json");
+        fs::write(root.join("assets/AppIcon.icon/Assets/atom.svg"), "<svg />").expect("atom svg");
+        fs::write(root.join("assets/ic_launcher.png"), "png").expect("png");
+        manifest.config_plugins.push(ConfigPluginRequest {
+            target_label: "//tests:fixture_plugin".to_owned(),
+            id: "fixture_plugin".to_owned(),
+            atom_api_level: 1,
+            min_atom_version: Some("0.1.0".to_owned()),
+            ios_min_deployment_target: Some("17.0".to_owned()),
+            android_min_sdk: Some(28),
+            config: JsonMap::new(),
+        });
+
+        let mut registry = fixture_registry();
+        register_fixture_plugin(&mut registry);
+
+        let initial_plan = build_generation_plan(&manifest, &modules, &registry).expect("plan");
+        emit_host_tree(&root, &initial_plan).expect("host tree");
+
+        let generated_svg =
+            root.join("cng-output/ios/hello-atom/resources/AppIcon.icon/Assets/atom.svg");
+        assert!(generated_svg.exists());
+
+        fs::remove_file(root.join("assets/AppIcon.icon/Assets/atom.svg")).expect("remove svg");
+
+        let second_plan = build_generation_plan(&manifest, &modules, &registry).expect("plan");
+        emit_host_tree(&root, &second_plan).expect("host tree");
+
+        assert!(!generated_svg.exists());
+        assert!(
+            root.join("cng-output/ios/hello-atom/resources/AppIcon.icon/Assets")
+                .exists()
+        );
+    }
+
+    #[test]
     fn incompatible_module_metadata_fails_before_generation() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
