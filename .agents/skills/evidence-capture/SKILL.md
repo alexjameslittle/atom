@@ -26,7 +26,10 @@ Use this skill when:
    `atom run ios|android --detach` instead of keeping a log-streaming session open.
 3. Run `scripts/run.sh screenshot`, `logs`, `video`, or `inspect-ui` with the chosen destination.
    These commands should reuse the current foreground app state when the selected target is already
-   running.
+   running. Prefer the focused log output these commands produce over raw device-wide syslog or
+   logcat when you are validating app behavior. On iOS simulators, screenshot capture may fall back
+   to `simctl io screenshot` when `idb` cannot encode an image. On iOS, prefer `.mov` output paths
+   for video capture; on Android, prefer `.mp4`.
 4. Use `atom stop ios|android` for cleanup only when the workflow explicitly launched a disposable
    detached session.
 5. Keep the output paths stable so the evidence can be referenced in follow-on analysis.

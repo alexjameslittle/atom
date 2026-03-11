@@ -549,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn ios_detached_deploy_launches_without_wait_flag() {
+    fn ios_detached_deploy_waits_for_ui_readiness_before_returning() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let manifest = runnable_manifest(&root);
@@ -558,6 +558,8 @@ mod tests {
             captures: VecDeque::from([
                 idb_targets_json("Shutdown"),
                 "bazel-bin/generated/ios/hello-atom/app.app\n".to_owned(),
+                r#"{"elements":[{"AXUniqueId":"idb-node-0","type":"Application","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":0,"y":0,"width":402,"height":874}},{"AXUniqueId":"atom.demo.title","type":"StaticText","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":24,"y":96,"width":140,"height":28}}]}"#
+                    .to_owned(),
             ]),
         };
 
@@ -570,19 +572,25 @@ mod tests {
         )
         .expect("ios deploy");
 
-        assert_eq!(
-            runner.calls.last(),
-            Some(&(
-                "idb".to_owned(),
-                vec![
-                    "launch".to_owned(),
-                    "-f".to_owned(),
-                    "--udid".to_owned(),
-                    "SIM-123".to_owned(),
-                    "build.atom.hello".to_owned(),
-                ],
-            ))
-        );
+        assert!(runner.calls.contains(&(
+            "idb".to_owned(),
+            vec![
+                "launch".to_owned(),
+                "-f".to_owned(),
+                "--udid".to_owned(),
+                "SIM-123".to_owned(),
+                "build.atom.hello".to_owned(),
+            ],
+        )));
+        assert!(runner.calls.contains(&(
+            "idb".to_owned(),
+            vec![
+                "ui".to_owned(),
+                "describe-all".to_owned(),
+                "--udid".to_owned(),
+                "SIM-123".to_owned(),
+            ],
+        )));
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::devices::android::{prepare_android_emulator, resolve_android_device};
 use crate::devices::ios::{
     IosDestination, IosDestinationKind, prepare_ios_simulator, resolve_ios_destination,
 };
+use crate::evaluate::wait_for_ios_launch_ready;
 use crate::progress::run_step;
 use crate::tools::{
     ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool, stream_tool,
@@ -65,6 +66,7 @@ pub fn deploy_ios(
     match destination.kind {
         IosDestinationKind::Simulator => install_and_launch_simulator(
             repo_root,
+            manifest,
             runner,
             &destination,
             &installable_app,
@@ -73,6 +75,7 @@ pub fn deploy_ios(
         ),
         IosDestinationKind::Device => install_and_launch_device(
             repo_root,
+            manifest,
             runner,
             &destination.id,
             &installable_app,
@@ -84,6 +87,7 @@ pub fn deploy_ios(
 
 fn install_and_launch_simulator(
     repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
     runner: &mut impl ToolRunner,
     destination: &crate::devices::ios::IosDestination,
     installable_app: &Utf8Path,
@@ -98,6 +102,7 @@ fn install_and_launch_simulator(
     )?;
     install_and_launch_with_idb(
         repo_root,
+        manifest,
         runner,
         &target_id,
         installable_app,
@@ -108,6 +113,7 @@ fn install_and_launch_simulator(
 
 fn install_and_launch_with_idb(
     repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
     runner: &mut impl ToolRunner,
     destination_id: &str,
     installable_app: &Utf8Path,
@@ -155,7 +161,8 @@ fn install_and_launch_with_idb(
                     repo_root,
                     "idb",
                     &["launch", "-f", "--udid", destination_id, bundle_id],
-                )
+                )?;
+                wait_for_ios_launch_ready(repo_root, manifest, destination_id, runner)
             })
         }
     }
@@ -163,6 +170,7 @@ fn install_and_launch_with_idb(
 
 fn install_and_launch_device(
     repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
     runner: &mut impl ToolRunner,
     device_id: &str,
     installable_app: &Utf8Path,
@@ -171,6 +179,7 @@ fn install_and_launch_device(
 ) -> AtomResult<()> {
     install_and_launch_with_idb(
         repo_root,
+        manifest,
         runner,
         device_id,
         installable_app,

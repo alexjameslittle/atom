@@ -107,5 +107,10 @@ current foreground app state when the selected target is already running, so ad 
 not force a relaunch before collecting artifacts.
 
 `atom run ios|android` streams logs by default for manual debugging. Use `--detach` when you want
-the app to keep running without a live terminal session, and use `atom stop ios|android` to stop a
-disposable session without uninstalling the app or shutting down the simulator/emulator.
+the app to keep running without a live terminal session. Detached launch now returns only after the
+app is inspectable for follow-on `inspect`, `interact`, or `evidence` commands. Use
+`atom stop ios|android` to stop a disposable session without uninstalling the app or shutting down
+the simulator/emulator.
+
+For standalone video capture, prefer `.mov` output paths on iOS and `.mp4` output paths on Android.
+Proof bundles normalize their own artifact names automatically.

@@ -276,6 +276,9 @@ Backend direction:
 - iOS should use a framework-owned `idb`-backed semantic backend. The underlying implementation may
   still rely on XCTest-compatible primitives, but `simctl` is not sufficient as the primary
   interaction backend.
+- For raw simulator screenshots, `simctl io screenshot` is an acceptable fallback when `idb` cannot
+  encode an image, because the semantic inspection/interaction path still stays in the
+  framework-owned backend.
 - iOS log capture should combine Atom runtime logs with simulator or device log collection so one
   evaluation run can correlate app behavior with visible UI evidence.
 - Android should use a framework-owned UI Automator-based backend for semantic hierarchy and
@@ -293,8 +296,11 @@ Output expectations:
   running foreground app when possible so ad hoc debugging does not lose the state a human or agent
   has already reached.
 - Launch and cleanup should be explicit for agent workflows: `atom run ... --detach` starts a
-  reusable app session without tying it to a live PTY, while `atom stop ...` ends that app session
-  without uninstalling the app or shutting down the simulator/emulator.
+  reusable app session without tying it to a live PTY, returns only after the app is inspectable,
+  and `atom stop ...` ends that app session without uninstalling the app or shutting down the
+  simulator/emulator.
+- iOS evidence capture should default proof-bundle videos to `.mov` artifacts and keep log output
+  focused on the selected app rather than full-device simulator noise when possible.
 - Every evaluation run produces a proof bundle with logs, screenshots, video, UI snapshots, and a
   step-by-step manifest of what the agent attempted.
 - UI inspection should emit machine-readable data with bounds, labels or text, and stable target
@@ -528,7 +534,8 @@ Deliverables:
 - Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
 - `atom run ios` builds, installs, and launches on iOS simulator via `idb`
 - `atom run android` builds, installs, and launches on Android emulator via `adb`
-- `atom run ios|android --detach` launches without holding the terminal open for log streaming
+- `atom run ios|android --detach` launches, waits for an inspectable app session, and then returns
+  without holding the terminal open for log streaming
 - `atom stop ios|android` stops the selected app without uninstalling it
 - Ad-hoc code signing for simulator builds
 

@@ -29,6 +29,8 @@ use crate::tools::{ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_
 
 const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const IOS_SCREENSHOT_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const IOS_SCREENSHOT_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -618,7 +620,8 @@ fn execute_start_video_step<R: ToolRunner>(
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
-    let artifact_name = artifact_name(name, index, "video", "mp4");
+    let launch = session.active_launch()?;
+    let artifact_name = video_artifact_name(name, index, &launch);
     let output_path = artifacts_dir.join(&artifact_name);
     session.start_video(&output_path)?;
     Ok(step_with_artifacts(
@@ -638,7 +641,7 @@ fn execute_stop_video_step<R: ToolRunner>(
     let output_path = session.stop_video()?;
     let artifact_name = output_path
         .file_name()
-        .map_or_else(|| "video.mp4".to_owned(), ToOwned::to_owned);
+        .map_or_else(|| output_path.as_str().to_owned(), ToOwned::to_owned);
     artifacts.push(ArtifactRecord {
         name: artifact_name.clone(),
         kind: "video".to_owned(),
@@ -756,6 +759,21 @@ fn wait_for_idb_launch_ready(
         AtomErrorCode::AutomationUnavailable,
         "app did not become responsive after launch",
     ))
+}
+
+pub(crate) fn wait_for_ios_launch_ready(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination_id: &str,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    wait_for_idb_launch_ready(
+        repo_root,
+        destination_id,
+        &manifest.app.name,
+        &manifest.app.slug,
+        runner,
+    )
 }
 
 fn wait_for_android_launch_ready(
@@ -1003,6 +1021,29 @@ fn step_kind(step: &EvaluationStep) -> &'static str {
 
 fn artifact_name(requested: Option<String>, index: usize, prefix: &str, extension: &str) -> String {
     requested.unwrap_or_else(|| format!("{index:02}-{prefix}.{extension}"))
+}
+
+fn video_artifact_name(requested: Option<String>, index: usize, launch: &AppLaunch) -> String {
+    let extension = match launch {
+        AppLaunch::IosSimulator { .. } | AppLaunch::IosDevice { .. } => "mov",
+        AppLaunch::Android { .. } => "mp4",
+    };
+    match requested {
+        Some(name) => {
+            let path = Utf8PathBuf::from(name);
+            if path
+                .extension()
+                .is_some_and(|existing| existing.eq_ignore_ascii_case(extension))
+            {
+                path.into_string()
+            } else if path.extension().is_some() {
+                path.with_extension(extension).into_string()
+            } else {
+                format!("{path}.{extension}")
+            }
+        }
+        None => format!("{index:02}-video.{extension}"),
+    }
 }
 
 fn load_evaluation_plan(path: &Utf8Path) -> AtomResult<EvaluationPlan> {
@@ -1430,9 +1471,15 @@ fn idb_args(destination_id: &str, subcommand: &[String]) -> Vec<String> {
 enum AppLaunch {
     IosSimulator {
         destination_id: String,
+        bundle_id: String,
+        app_name: String,
+        app_slug: String,
     },
     IosDevice {
         destination_id: String,
+        bundle_id: String,
+        app_name: String,
+        app_slug: String,
     },
     Android {
         serial: String,
@@ -1516,6 +1563,9 @@ fn launch_ios_app(
             )?;
             Ok(AppLaunch::IosSimulator {
                 destination_id: destination.id,
+                bundle_id,
+                app_name: manifest.app.name.clone(),
+                app_slug: manifest.app.slug.clone(),
             })
         }
         IosDestinationKind::Device => {
@@ -1539,6 +1589,9 @@ fn launch_ios_app(
             )?;
             Ok(AppLaunch::IosDevice {
                 destination_id: destination.id,
+                bundle_id,
+                app_name: manifest.app.name.clone(),
+                app_slug: manifest.app.slug.clone(),
             })
         }
     }
@@ -1553,6 +1606,9 @@ fn attach_ios_app(
     if !manifest.ios.enabled {
         return Ok(None);
     }
+    let Some(bundle_id) = manifest.ios.bundle_id.clone() else {
+        return Ok(None);
+    };
     let snapshot = inspect_ui_with_idb(repo_root, destination_id, runner)?;
     if !snapshot_matches_ios_app(&snapshot, &manifest.app.name, &manifest.app.slug)
         || !snapshot_is_launch_ready(&snapshot)
@@ -1561,6 +1617,9 @@ fn attach_ios_app(
     }
     Ok(Some(AppLaunch::IosSimulator {
         destination_id: destination_id.to_owned(),
+        bundle_id,
+        app_name: manifest.app.name.clone(),
+        app_slug: manifest.app.slug.clone(),
     }))
 }
 
@@ -1663,12 +1722,15 @@ fn capture_screenshot_for_launch(
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     match launch {
-        AppLaunch::IosSimulator { destination_id, .. }
-        | AppLaunch::IosDevice { destination_id, .. } => run_idb(
+        AppLaunch::IosSimulator { destination_id, .. } => {
+            capture_ios_simulator_screenshot(repo_root, destination_id, output_path, runner)
+        }
+        AppLaunch::IosDevice { destination_id, .. } => run_idb_screenshot_with_retry(
             runner,
             repo_root,
             destination_id,
-            &["screenshot".to_owned(), output_path.as_str().to_owned()],
+            output_path,
+            IOS_SCREENSHOT_READY_TIMEOUT,
         ),
         AppLaunch::Android { serial, .. } => {
             let remote = format!("/sdcard/atom-screenshot-{}.png", timestamp_suffix());
@@ -1695,6 +1757,105 @@ fn capture_screenshot_for_launch(
     }
 }
 
+fn capture_ios_simulator_screenshot(
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    output_path: &Utf8Path,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    match run_idb(
+        runner,
+        repo_root,
+        destination_id,
+        &["screenshot".to_owned(), output_path.as_str().to_owned()],
+    ) {
+        Ok(()) => Ok(()),
+        Err(idb_error) => run_simctl_screenshot_with_retry(
+            runner,
+            repo_root,
+            destination_id,
+            output_path,
+            IOS_SCREENSHOT_READY_TIMEOUT,
+        )
+        .map_err(|simctl_error| {
+            AtomError::with_path(
+                AtomErrorCode::ExternalToolFailed,
+                format!(
+                    "failed to capture iOS simulator screenshot via idb ({}) or simctl ({})",
+                    idb_error.message, simctl_error.message
+                ),
+                output_path.as_str(),
+            )
+        }),
+    }
+}
+
+fn run_idb_screenshot_with_retry(
+    runner: &mut impl ToolRunner,
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    output_path: &Utf8Path,
+    timeout: Duration,
+) -> AtomResult<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match run_idb(
+            runner,
+            repo_root,
+            destination_id,
+            &["screenshot".to_owned(), output_path.as_str().to_owned()],
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(IOS_SCREENSHOT_READY_POLL_INTERVAL);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AtomError::with_path(
+            AtomErrorCode::ExternalToolFailed,
+            "failed to capture iOS screenshot after launch readiness wait",
+            output_path.as_str(),
+        )
+    }))
+}
+
+fn run_simctl_screenshot_with_retry(
+    runner: &mut impl ToolRunner,
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    output_path: &Utf8Path,
+    timeout: Duration,
+) -> AtomResult<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        let args = vec![
+            "simctl".to_owned(),
+            "io".to_owned(),
+            destination_id.to_owned(),
+            "screenshot".to_owned(),
+            output_path.as_str().to_owned(),
+        ];
+        match runner.run(repo_root, "xcrun", &args) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(IOS_SCREENSHOT_READY_POLL_INTERVAL);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AtomError::with_path(
+            AtomErrorCode::ExternalToolFailed,
+            "failed to capture iOS simulator screenshot via simctl",
+            output_path.as_str(),
+        )
+    }))
+}
+
 fn capture_logs_for_launch(
     repo_root: &Utf8Path,
     launch: &AppLaunch,
@@ -1704,19 +1865,25 @@ fn capture_logs_for_launch(
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     let contents = match launch {
-        AppLaunch::IosSimulator { destination_id, .. }
-        | AppLaunch::IosDevice { destination_id, .. } => capture_idb(
+        AppLaunch::IosSimulator {
+            destination_id,
+            bundle_id,
+            app_name,
+            app_slug,
+        }
+        | AppLaunch::IosDevice {
+            destination_id,
+            bundle_id,
+            app_name,
+            app_slug,
+        } => capture_ios_logs_for_launch(
             runner,
             repo_root,
             destination_id,
-            &[
-                "log".to_owned(),
-                "--".to_owned(),
-                "--style".to_owned(),
-                "syslog".to_owned(),
-                "--timeout".to_owned(),
-                format!("{seconds}s"),
-            ],
+            bundle_id,
+            app_name,
+            app_slug,
+            seconds,
         ),
         AppLaunch::Android {
             serial,
@@ -1745,6 +1912,83 @@ fn capture_logs_for_launch(
             output_path.as_str(),
         )
     })
+}
+
+fn capture_ios_logs_for_launch(
+    runner: &mut impl ToolRunner,
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    bundle_id: &str,
+    app_name: &str,
+    app_slug: &str,
+    seconds: u64,
+) -> AtomResult<String> {
+    let timeout = format!("{seconds}s");
+    let process_scoped = capture_idb(
+        runner,
+        repo_root,
+        destination_id,
+        &[
+            "log".to_owned(),
+            "--".to_owned(),
+            "--style".to_owned(),
+            "syslog".to_owned(),
+            "--process".to_owned(),
+            app_slug.to_owned(),
+            "--timeout".to_owned(),
+            timeout.clone(),
+        ],
+    );
+
+    let contents = match process_scoped {
+        Ok(contents) => contents,
+        Err(_) => capture_idb(
+            runner,
+            repo_root,
+            destination_id,
+            &[
+                "log".to_owned(),
+                "--".to_owned(),
+                "--style".to_owned(),
+                "syslog".to_owned(),
+                "--timeout".to_owned(),
+                timeout,
+            ],
+        )?,
+    };
+
+    let filtered = filter_ios_log_lines(
+        &contents,
+        &[bundle_id, app_name, app_slug, "AtomRuntime", "atom_runtime"],
+    );
+    Ok(if filtered.is_empty() {
+        contents
+    } else {
+        filtered
+    })
+}
+
+fn filter_ios_log_lines(contents: &str, tokens: &[&str]) -> String {
+    let tokens = tokens
+        .iter()
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    let filtered = contents
+        .lines()
+        .filter(|line| {
+            let lowered = line.to_ascii_lowercase();
+            tokens.iter().any(|token| lowered.contains(token))
+        })
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        String::new()
+    } else {
+        let mut joined = filtered.join("\n");
+        joined.push('\n');
+        joined
+    }
 }
 
 fn capture_video_for_launch(
@@ -1956,8 +2200,7 @@ fn stop_recording_process(
     }
 
     let (primary_signal, secondary_signal) = match platform {
-        DestinationPlatform::Ios => ("TERM", "INT"),
-        DestinationPlatform::Android => ("INT", "TERM"),
+        DestinationPlatform::Ios | DestinationPlatform::Android => ("INT", "TERM"),
     };
 
     let _ = signal_child(repo_root, child, primary_signal);
@@ -2093,16 +2336,17 @@ mod tests {
     use super::{
         AppLaunch, DestinationCapability, DestinationDescriptor, DestinationPlatform,
         EvaluationPlan, EvaluationStep, InteractionRequest, ScreenInfo, UiBounds, UiNode,
-        UiSnapshot, attach_ios_app, capture_logs_for_launch, interact_with_idb,
-        load_evaluation_plan, require_plan_capabilities, snapshot_is_launch_ready,
-        snapshot_matches_ios_app,
+        UiSnapshot, attach_ios_app, capture_logs_for_launch, capture_screenshot_for_launch,
+        interact_with_idb, load_evaluation_plan, require_plan_capabilities,
+        snapshot_is_launch_ready, snapshot_matches_ios_app, video_artifact_name,
     };
 
     #[derive(Default)]
     struct FakeToolRunner {
         calls: Vec<(String, Vec<String>)>,
         captures: VecDeque<String>,
-        capture_error: Option<AtomError>,
+        capture_errors: VecDeque<AtomError>,
+        run_errors: VecDeque<AtomError>,
     }
 
     impl ToolRunner for FakeToolRunner {
@@ -2113,6 +2357,9 @@ mod tests {
             args: &[String],
         ) -> atom_ffi::AtomResult<()> {
             self.calls.push((tool.to_owned(), args.to_vec()));
+            if let Some(error) = self.run_errors.pop_front() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -2123,7 +2370,7 @@ mod tests {
             args: &[String],
         ) -> atom_ffi::AtomResult<String> {
             self.calls.push((tool.to_owned(), args.to_vec()));
-            if let Some(error) = self.capture_error.take() {
+            if let Some(error) = self.capture_errors.pop_front() {
                 return Err(error);
             }
             Ok(self
@@ -2139,6 +2386,9 @@ mod tests {
             args: &[String],
         ) -> atom_ffi::AtomResult<String> {
             self.calls.push((tool.to_owned(), args.to_vec()));
+            if let Some(error) = self.capture_errors.pop_front() {
+                return Err(error);
+            }
             Ok(self
                 .captures
                 .pop_front()
@@ -2251,7 +2501,8 @@ mod tests {
                     .to_owned(),
                 r#"{"elements":[]}"#.to_owned(),
             ]),
-            capture_error: None,
+            capture_errors: VecDeque::new(),
+            run_errors: VecDeque::new(),
         };
 
         interact_with_idb(
@@ -2335,16 +2586,20 @@ mod tests {
         let mut runner = FakeToolRunner {
             calls: Vec::new(),
             captures: VecDeque::new(),
-            capture_error: Some(AtomError::new(
-                AtomErrorCode::ExternalToolFailed,
-                "idb log failed",
-            )),
+            capture_errors: VecDeque::from([
+                AtomError::new(AtomErrorCode::ExternalToolFailed, "idb log failed"),
+                AtomError::new(AtomErrorCode::ExternalToolFailed, "idb log failed"),
+            ]),
+            run_errors: VecDeque::new(),
         };
 
         let error = capture_logs_for_launch(
             &root,
             &AppLaunch::IosSimulator {
                 destination_id: "SIM-123".to_owned(),
+                bundle_id: "build.atom.hello".to_owned(),
+                app_name: "Hello Atom".to_owned(),
+                app_slug: "hello-atom".to_owned(),
             },
             &output,
             5,
@@ -2357,6 +2612,190 @@ mod tests {
     }
 
     #[test]
+    fn ios_log_capture_falls_back_to_filtered_syslog_when_process_scope_fails() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let output = root.join("logs.txt");
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([concat!(
+                "Mar 11 10:48:12 simulatord Noise line\n",
+                "Mar 11 10:48:13 hello-atom AtomRuntime: app line\n",
+                "Mar 11 10:48:14 launchd build.atom.hello foreground transition\n"
+            )
+            .to_owned()]),
+            capture_errors: VecDeque::from([AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "idb log --process failed",
+            )]),
+            run_errors: VecDeque::new(),
+        };
+
+        capture_logs_for_launch(
+            &root,
+            &AppLaunch::IosSimulator {
+                destination_id: "SIM-123".to_owned(),
+                bundle_id: "build.atom.hello".to_owned(),
+                app_name: "Hello Atom".to_owned(),
+                app_slug: "hello-atom".to_owned(),
+            },
+            &output,
+            5,
+            &mut runner,
+        )
+        .expect("log capture should succeed");
+
+        let contents = std::fs::read_to_string(&output).expect("captured logs");
+        assert!(!contents.contains("simulatord Noise line"));
+        assert!(contents.contains("hello-atom AtomRuntime: app line"));
+        assert!(contents.contains("build.atom.hello foreground transition"));
+        assert_eq!(
+            runner.calls[0],
+            (
+                "idb".to_owned(),
+                vec![
+                    "log".to_owned(),
+                    "--udid".to_owned(),
+                    "SIM-123".to_owned(),
+                    "--".to_owned(),
+                    "--style".to_owned(),
+                    "syslog".to_owned(),
+                    "--process".to_owned(),
+                    "hello-atom".to_owned(),
+                    "--timeout".to_owned(),
+                    "5s".to_owned(),
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn ios_simulator_screenshot_falls_back_to_simctl_when_idb_fails() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let output = root.join("screenshot.png");
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::new(),
+            capture_errors: VecDeque::new(),
+            run_errors: VecDeque::from([AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "No Image available to encode",
+            )]),
+        };
+
+        capture_screenshot_for_launch(
+            &root,
+            &AppLaunch::IosSimulator {
+                destination_id: "SIM-123".to_owned(),
+                bundle_id: "build.atom.hello".to_owned(),
+                app_name: "Hello Atom".to_owned(),
+                app_slug: "hello-atom".to_owned(),
+            },
+            &output,
+            &mut runner,
+        )
+        .expect("simctl fallback should succeed");
+
+        assert_eq!(
+            runner.calls,
+            vec![
+                (
+                    "idb".to_owned(),
+                    vec![
+                        "screenshot".to_owned(),
+                        "--udid".to_owned(),
+                        "SIM-123".to_owned(),
+                        output.as_str().to_owned(),
+                    ],
+                ),
+                (
+                    "xcrun".to_owned(),
+                    vec![
+                        "simctl".to_owned(),
+                        "io".to_owned(),
+                        "SIM-123".to_owned(),
+                        "screenshot".to_owned(),
+                        output.as_str().to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn ios_device_screenshot_retries_idb_until_the_surface_is_ready() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let output = root.join("device-screenshot.png");
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::new(),
+            capture_errors: VecDeque::new(),
+            run_errors: VecDeque::from([
+                AtomError::new(
+                    AtomErrorCode::ExternalToolFailed,
+                    "No Image available to encode",
+                ),
+                AtomError::new(
+                    AtomErrorCode::ExternalToolFailed,
+                    "No Image available to encode",
+                ),
+            ]),
+        };
+
+        capture_screenshot_for_launch(
+            &root,
+            &AppLaunch::IosDevice {
+                destination_id: "DEVICE-123".to_owned(),
+                bundle_id: "build.atom.hello".to_owned(),
+                app_name: "Hello Atom".to_owned(),
+                app_slug: "hello-atom".to_owned(),
+            },
+            &output,
+            &mut runner,
+        )
+        .expect("device screenshot should eventually succeed");
+
+        let screenshot_calls = runner
+            .calls
+            .iter()
+            .filter(|(tool, args)| {
+                tool == "idb"
+                    && args
+                        .first()
+                        .is_some_and(|subcommand| subcommand == "screenshot")
+            })
+            .count();
+        assert_eq!(screenshot_calls, 3);
+    }
+
+    #[test]
+    fn video_artifact_name_uses_platform_specific_extensions() {
+        let ios_name = video_artifact_name(
+            Some("session.mp4".to_owned()),
+            2,
+            &AppLaunch::IosSimulator {
+                destination_id: "SIM-123".to_owned(),
+                bundle_id: "build.atom.hello".to_owned(),
+                app_name: "Hello Atom".to_owned(),
+                app_slug: "hello-atom".to_owned(),
+            },
+        );
+        let android_name = video_artifact_name(
+            Some("session".to_owned()),
+            2,
+            &AppLaunch::Android {
+                serial: "emulator-5554".to_owned(),
+                application_id: "build.atom.hello".to_owned(),
+            },
+        );
+
+        assert_eq!(ios_name, "session.mov");
+        assert_eq!(android_name, "session.mp4");
+    }
+
+    #[test]
     fn attach_ios_app_reuses_the_foreground_snapshot() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
@@ -2364,7 +2803,8 @@ mod tests {
         let mut runner = FakeToolRunner {
             calls: Vec::new(),
             captures: VecDeque::from([r#"{"elements":[{"AXUniqueId":"idb-node-0","type":"Application","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":0,"y":0,"width":402,"height":874}},{"AXUniqueId":"atom.demo.title","type":"StaticText","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":24,"y":96,"width":140,"height":28}}]}"#.to_owned()]),
-            capture_error: None,
+            capture_errors: VecDeque::new(),
+            run_errors: VecDeque::new(),
         };
 
         let launch =
@@ -2372,7 +2812,7 @@ mod tests {
 
         assert!(matches!(
             launch,
-            Some(AppLaunch::IosSimulator { destination_id }) if destination_id == "SIM-123"
+            Some(AppLaunch::IosSimulator { destination_id, .. }) if destination_id == "SIM-123"
         ));
         assert!(
             runner.calls.iter().all(|(tool, _args)| tool != "bazelisk"),

@@ -1083,7 +1083,8 @@ Rules:
 - Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`idb`, `adb`)
   are not available.
 - Both commands MUST stream build output to stderr.
-- `atom run ios|android --detach` MUST launch the selected app and return without waiting on
+- `atom run ios|android --detach` MUST launch the selected app, wait until the app is
+  automation-ready for follow-on inspection or evidence capture, and then return without waiting on
   long-lived log streaming.
 - `atom run ios|android` without `--detach` MAY stay attached to the launched app and stream app
   logs until interruption or process exit.
@@ -1145,6 +1146,9 @@ Rules:
 - Artifact-producing commands MUST allow caller-selected repo-relative or absolute output paths.
 - Video capture SHOULD be startable before the first interaction step and stoppable after the last
   required step so one artifact can prove the full interaction flow.
+- iOS simulator screenshot capture MAY fall back to `xcrun simctl io <udid> screenshot` when the
+  semantic `idb` backend is unavailable for image encoding. This fallback does not change the
+  requirement that semantic inspection and interaction stay framework-owned.
 - The primary automation backend MUST be semantic, not pixel-only.
 - iOS automation MUST use a framework-owned `idb`-backed semantic backend. Implementations MAY
   satisfy this through XCTest-compatible primitives under the hood, but coordinate-only `simctl`
@@ -1252,6 +1256,8 @@ consumes Atom via `bzlmod`.
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the video to the requested output path
+- iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because `idb video` emits
+  a QuickTime movie container even when the caller provides an `.mp4` suffix
 
 `atom evidence logs`:
 
@@ -1260,6 +1266,8 @@ consumes Atom via `bzlmod`.
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the logs to the requested output path
 - SHOULD preserve timestamps and stream ordering when the backend can provide them
+- SHOULD prefer app-focused log output over full-device syslog noise when the backend can scope or
+  post-filter the stream
 
 `atom inspect ui`:
 
