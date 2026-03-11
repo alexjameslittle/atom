@@ -4,8 +4,8 @@ use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 use minijinja::context;
 
-use crate::PlatformPlan;
 use crate::templates::render;
+use crate::{GenerationPlan, PlatformPlan};
 
 pub(crate) fn build_android_plan(
     app: &AppConfig,
@@ -151,4 +151,60 @@ fn jni_mangle_segment(value: &str) -> String {
         }
     }
     mangled
+}
+
+pub(crate) fn emit_android_host_tree(
+    repo_root: &Utf8Path,
+    plan: &GenerationPlan,
+) -> AtomResult<()> {
+    let Some(android) = &plan.android else {
+        return Ok(());
+    };
+    let android_config = plan
+        .android_config
+        .as_ref()
+        .expect("android config should exist when android output exists");
+    crate::emit::write_file(
+        &repo_root.join(&android.generated_root).join("BUILD.bazel"),
+        &render_android_build_file(
+            &plan.app,
+            &plan.modules,
+            android_config,
+            &plan.android_resources,
+        )?,
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&android.generated_root)
+            .join("AndroidManifest.generated.xml"),
+        &render_android_manifest_xml(android_config, &plan.android_manifest)?,
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&android.generated_root)
+            .join("atom_runtime_jni.rs"),
+        &render_android_runtime_jni(&plan.app, android_config)?,
+    )?;
+    let package_dir = android
+        .generated_root
+        .join("src/main/kotlin")
+        .join(kotlin_package_dir(
+            android_config
+                .application_id
+                .as_deref()
+                .expect("android application id should exist when enabled"),
+        ));
+    crate::emit::write_file(
+        &repo_root.join(&package_dir).join("AtomApplication.kt"),
+        &render_kotlin_application(&plan.app, android_config)?,
+    )?;
+    crate::emit::write_file(
+        &repo_root.join(&package_dir).join("AtomBindings.kt"),
+        &render_kotlin_bindings(&plan.modules, android_config)?,
+    )?;
+    crate::emit::write_file(
+        &repo_root.join(&package_dir).join("MainActivity.kt"),
+        &render_kotlin_main_activity(&plan.app, &android.generated_root, android_config)?,
+    )?;
+    Ok(())
 }

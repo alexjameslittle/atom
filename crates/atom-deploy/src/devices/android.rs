@@ -58,7 +58,7 @@ impl AndroidDestination {
 
 pub(crate) fn find_android_destination(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     requested: &str,
 ) -> AtomResult<Option<AndroidDestination>> {
     let running_devices = list_android_devices(repo_root, runner)?;
@@ -93,7 +93,7 @@ pub(crate) fn find_android_destination(
 /// Returns an error if no devices or AVDs are available.
 pub fn resolve_android_device(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     requested_device: Option<&str>,
 ) -> AtomResult<AndroidDestination> {
     if let Some(requested) = requested_device {
@@ -164,7 +164,7 @@ pub fn resolve_android_device(
 /// Returns an error if `adb devices` cannot be read or parsed.
 pub fn list_android_destinations(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Vec<AndroidDestination>> {
     let mut destinations = list_android_devices(repo_root, runner)?;
     let running_avds = destinations
@@ -214,7 +214,7 @@ fn select_default_android_destination(
 /// Returns an error if the emulator cannot be launched or fails to boot.
 pub fn prepare_android_emulator(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     destination: &AndroidDestination,
 ) -> AtomResult<String> {
     if destination.state == "device" {
@@ -256,7 +256,7 @@ pub fn prepare_android_emulator(
 
 pub(crate) fn list_android_devices(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Vec<AndroidDestination>> {
     let mut destinations =
         parse_android_devices(&capture_tool(runner, repo_root, "adb", &["devices", "-l"])?)
@@ -305,7 +305,7 @@ pub fn parse_android_devices(output: &str) -> Vec<AndroidDestination> {
 
 pub(crate) fn list_avds(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Vec<String>> {
     let output = capture_tool(runner, repo_root, "emulator", &["-list-avds"])?;
     Ok(output
@@ -318,7 +318,7 @@ pub(crate) fn list_avds(
 
 fn running_emulator_serial_for_avd(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     avd_name: &str,
 ) -> AtomResult<Option<String>> {
     Ok(list_android_devices(repo_root, runner)?
@@ -331,7 +331,7 @@ fn running_emulator_serial_for_avd(
 
 fn wait_for_android_emulator_serial(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     avd_name: &str,
 ) -> AtomResult<String> {
     for _ in 0..ANDROID_BOOT_TIMEOUT_ATTEMPTS {
@@ -348,7 +348,7 @@ fn wait_for_android_emulator_serial(
 
 fn wait_for_android_boot(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     serial: &str,
 ) -> AtomResult<()> {
     for _ in 0..ANDROID_BOOT_TIMEOUT_ATTEMPTS {
@@ -371,7 +371,7 @@ fn wait_for_android_boot(
 
 fn emulator_avd_name(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     serial: &str,
 ) -> Option<String> {
     capture_tool(

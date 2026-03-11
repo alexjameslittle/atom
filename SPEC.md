@@ -1058,8 +1058,8 @@ Rules:
 
 #### 9.8.3 Run and Deploy
 
-`atom run ios` and `atom run android` MUST handle the full build-install-launch cycle, not just
-invoke `bazel run`.
+`atom run --platform ios` and `atom run --platform android` MUST handle the full
+build-install-launch cycle, not just invoke `bazel run`.
 
 iOS deployment sequence:
 
@@ -1083,17 +1083,17 @@ Rules:
 - Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`idb`, `adb`)
   are not available.
 - Both commands MUST stream build output to stderr.
-- `atom run ios|android --detach` MUST launch the selected app, wait until the app is
+- `atom run --platform <platform> --detach` MUST launch the selected app, wait until the app is
   automation-ready for follow-on inspection or evidence capture, and then return without waiting on
   long-lived log streaming.
-- `atom run ios|android` without `--detach` MAY stay attached to the launched app and stream app
-  logs until interruption or process exit.
-- `atom stop ios` and `atom stop android` MUST stop the selected app without uninstalling it or
-  shutting down the selected simulator, device, or emulator.
-- `atom run ios --device <udid>` and `atom run android --device <serial>` MUST support targeting a
-  specific simulator, emulator, or connected device.
-- When attached to an interactive TTY and `--device` is omitted, `atom run ios` and
-  `atom run android` SHOULD offer an interactive destination picker.
+- `atom run --platform <platform>` without `--detach` MAY stay attached to the launched app and
+  stream app logs until interruption or process exit.
+- `atom stop --platform ios` and `atom stop --platform android` MUST stop the selected app without
+  uninstalling it or shutting down the selected simulator, device, or emulator.
+- `atom run --platform ios --device <udid>` and `atom run --platform android --device <serial>` MUST
+  support targeting a specific simulator, emulator, or connected device.
+- When attached to an interactive TTY and `--device` is omitted, `atom run --platform ios` and
+  `atom run --platform android` SHOULD offer an interactive destination picker.
 
 #### 9.8.4 Developer Evaluation, Evidence, and Automation
 
@@ -1167,19 +1167,19 @@ Required commands:
 
 - `atom prebuild`
 - `atom prebuild --dry-run`
-- `atom run ios`
-- `atom run android`
-- `atom stop ios`
-- `atom stop android`
-- `atom destinations`
-- `atom devices ios`
-- `atom devices android`
-- `atom evidence logs`
-- `atom evidence screenshot`
-- `atom evidence video`
-- `atom inspect ui`
-- `atom interact`
-- `atom evaluate run`
+- `atom run --platform ios`
+- `atom run --platform android`
+- `atom stop --platform ios`
+- `atom stop --platform android`
+- `atom destinations --platform <platform>`
+- `atom devices --platform ios`
+- `atom devices --platform android`
+- `atom evidence logs --platform <platform>`
+- `atom evidence screenshot --platform <platform>`
+- `atom evidence video --platform <platform>`
+- `atom inspect ui --platform <platform>`
+- `atom interact --platform <platform>`
+- `atom evaluate run --platform <platform>`
 - `atom test`
 
 ### 10.2 Exit Codes
@@ -1211,30 +1211,30 @@ consumes Atom via `bzlmod`.
 - MUST generate files under `build.generated_root`
 - SHOULD write one summary line per generated platform root
 
-`atom run ios`:
+`atom run --platform ios`:
 
 - MUST follow the iOS deployment sequence defined in Section 9.8.3
 - MUST accept `--detach`
 
-`atom run android`:
+`atom run --platform android`:
 
 - MUST follow the Android deployment sequence defined in Section 9.8.3
 - MUST accept `--detach`
 
-`atom stop ios` and `atom stop android`:
+`atom stop --platform ios` and `atom stop --platform android`:
 
 - MUST resolve the same target manifest and destination identifiers accepted by the corresponding
   `atom run` command
 - MUST stop the selected app process without rebuilding, reinstalling, or uninstalling the app
 - SHOULD be idempotent when the selected app is not currently running
 
-`atom destinations`:
+`atom destinations --platform <platform>`:
 
 - MUST support a machine-readable output mode suitable for agents
 - MUST report stable destination identifiers, platform, destination kind, display name,
   availability, debug state, and capability set
 
-`atom devices ios` and `atom devices android`:
+`atom devices --platform ios` and `atom devices --platform android`:
 
 - MUST be supported as compatibility commands for mobile-specific destination discovery
 - MUST support a machine-readable output mode suitable for agents
@@ -1243,14 +1243,14 @@ consumes Atom via `bzlmod`.
   `emulator-5554`-style serials; connected Android devices continue to use their adb serials
 - MUST only return destinations for the requested mobile platform
 
-`atom evidence screenshot`:
+`atom evidence screenshot --platform <platform>`:
 
 - MUST capture one screenshot from the selected destination
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the image to the requested output path
 
-`atom evidence video`:
+`atom evidence video --platform <platform>`:
 
 - MUST record a screen video from the selected destination
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
@@ -1259,7 +1259,7 @@ consumes Atom via `bzlmod`.
 - iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because `idb video` emits
   a QuickTime movie container even when the caller provides an `.mp4` suffix
 
-`atom evidence logs`:
+`atom evidence logs --platform <platform>`:
 
 - MUST collect logs from the selected destination or launched app process
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
@@ -1269,14 +1269,14 @@ consumes Atom via `bzlmod`.
 - SHOULD prefer app-focused log output over full-device syslog noise when the backend can scope or
   post-filter the stream
 
-`atom inspect ui`:
+`atom inspect ui --platform <platform>`:
 
 - MUST emit a machine-readable UI snapshot for the selected destination
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST include a screenshot reference or explicit screenshot output path in the snapshot payload
 
-`atom interact`:
+`atom interact --platform <platform>`:
 
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
@@ -1286,7 +1286,7 @@ consumes Atom via `bzlmod`.
 - MUST fail with `AUTOMATION_UNAVAILABLE` when the selected destination does not support the
   required backend
 
-`atom evaluate run`:
+`atom evaluate run --platform <platform>`:
 
 - MUST execute a machine-readable evaluation plan against one selected destination
 - MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
@@ -1311,7 +1311,7 @@ Evaluation contract rules:
 
 - Destinations are the canonical debug-target abstraction for evaluation.
 - Evidence and interaction commands MUST accept the same destination identifiers reported by
-  `atom destinations` and `atom devices`.
+  `atom destinations --platform <platform>` and `atom devices --platform <platform>`.
 - Agent workflows SHOULD prefer `atom run ... --detach`, `atom stop ...`, or direct evidence /
   interaction commands rather than depending on one long-lived attached `atom run` session.
 - Implementations MAY expose additional subcommands, but they MUST preserve the required commands
@@ -1405,7 +1405,8 @@ Required behavior:
 Conformance example:
 
 - Input: canonical `hello-atom` app
-- Expected output: file tree from Section 9.5 plus successful `atom run ios` and `atom run android`
+- Expected output: file tree from Section 9.5 plus successful `atom run --platform ios` and
+  `atom run --platform android`
 
 ### 11.4 Phase 3: Runnable Mobile Hosts
 
@@ -1413,16 +1414,17 @@ Required behavior:
 
 - generated iOS `BUILD.bazel` uses `ios_application` from `rules_apple` per Section 9.8.1
 - generated Android `BUILD.bazel` uses `android_binary` per Section 9.8.2
-- `atom run ios` builds, installs, and launches on an iOS simulator per Section 9.8.3
-- `atom run android` builds, installs, and launches on an Android emulator per Section 9.8.3
+- `atom run --platform ios` builds, installs, and launches on an iOS simulator per Section 9.8.3
+- `atom run --platform android` builds, installs, and launches on an Android emulator per Section
+  9.8.3
 - no Xcode project or Gradle project is required
 
 Conformance example:
 
 - Input: canonical `hello-atom` app
-- Expected output: `atom run ios` launches the app on the booted iOS simulator with Rust lifecycle
-  callbacks executing. `atom run android` launches the app on an Android emulator with Rust
-  lifecycle callbacks executing via JNI.
+- Expected output: `atom run --platform ios` launches the app on the booted iOS simulator with Rust
+  lifecycle callbacks executing. `atom run --platform android` launches the app on an Android
+  emulator with Rust lifecycle callbacks executing via JNI.
 
 ### 11.5 Phase 4A: Runtime Kernel
 
@@ -1569,8 +1571,8 @@ Required behavior:
   generated roots
 - destination discovery, log capture, screenshot capture, video capture, UI inspection, and basic UI
   interaction work on runnable iOS and Android destinations
-- `atom evaluate run` can orchestrate launch, waits, inspection, interactions, and artifact capture
-  into one proof bundle
+- `atom evaluate run --platform <platform>` can orchestrate launch, waits, inspection, interactions,
+  and artifact capture into one proof bundle
 - automation backends are framework-owned and semantic-first per Section 9.8.4
 - the canonical example app MAY include an app-owned demo surface through native module sources, but
   framework automation MUST NOT depend on app-specific generated hooks

@@ -1,10 +1,11 @@
 use atom_ffi::AtomResult;
 use atom_manifest::{AppConfig, BuildConfig, IosConfig, metadata_target};
 use atom_modules::{JsonMap, ResolvedModule};
+use camino::Utf8Path;
 use minijinja::context;
 
-use crate::PlatformPlan;
 use crate::templates::render;
+use crate::{GenerationPlan, PlatformPlan};
 
 pub(crate) fn build_ios_plan(
     app: &AppConfig,
@@ -107,4 +108,69 @@ pub(crate) fn render_swift_bindings(modules: &[ResolvedModule]) -> AtomResult<St
 
 pub(crate) fn swift_support_module_name(app: &AppConfig) -> String {
     format!("atom_{}_support", app.slug.replace('-', "_"))
+}
+
+pub(crate) fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
+    let Some(ios) = &plan.ios else {
+        return Ok(());
+    };
+    let ios_config = plan
+        .ios_config
+        .as_ref()
+        .expect("ios config should exist when ios output exists");
+    crate::emit::write_file(
+        &repo_root.join(&ios.generated_root).join("BUILD.bazel"),
+        &render_ios_build_file(
+            &plan.app,
+            &plan.modules,
+            ios_config,
+            &plan.ios_resources,
+            &plan.ios_resource_globs,
+        )?,
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&ios.generated_root)
+            .join("Info.generated.plist"),
+        &render_ios_plist(&plan.plist)?,
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&ios.generated_root)
+            .join("LaunchScreen.storyboard"),
+        &render_ios_launch_storyboard(),
+    )?;
+    crate::emit::write_file(
+        &repo_root.join(&ios.generated_root).join("atom_runtime.h"),
+        &render_ios_runtime_header(),
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&ios.generated_root)
+            .join("atom_runtime_app_bridge.rs"),
+        &render_ios_runtime_bridge(&plan.app)?,
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&ios.generated_root)
+            .join("AtomAppDelegate.swift"),
+        &render_swift_app_delegate(&plan.app),
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&ios.generated_root)
+            .join("SceneDelegate.swift"),
+        &render_swift_scene_delegate(&plan.app)?,
+    )?;
+    crate::emit::write_file(
+        &repo_root
+            .join(&ios.generated_root)
+            .join("AtomBindings.swift"),
+        &render_swift_bindings(&plan.modules)?,
+    )?;
+    crate::emit::write_file(
+        &repo_root.join(&ios.generated_root).join("main.swift"),
+        &render_swift_main(),
+    )?;
+    Ok(())
 }

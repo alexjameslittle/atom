@@ -7,6 +7,7 @@ use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 
+use crate::backends::{DeployBackendRegistry, first_party_deploy_backend_registry};
 use crate::devices::android::{prepare_android_emulator, resolve_android_device};
 use crate::devices::ios::{
     IosDestination, IosDestinationKind, prepare_ios_simulator, resolve_ios_destination,
@@ -28,13 +29,115 @@ pub enum LaunchMode {
 
 /// # Errors
 ///
+/// Returns an error if the backend id is unknown, disabled for the app, or deployment fails.
+pub fn deploy_backend(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    backend_id: &str,
+    requested_device: Option<&str>,
+    launch_mode: LaunchMode,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    let registry = first_party_deploy_backend_registry();
+    deploy_backend_with_registry(
+        repo_root,
+        manifest,
+        &registry,
+        backend_id,
+        requested_device,
+        launch_mode,
+        runner,
+    )
+}
+
+/// # Errors
+///
+/// Returns an error if the backend id is unknown, disabled for the app, or deployment fails.
+pub fn deploy_backend_with_registry(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
+    backend_id: &str,
+    requested_device: Option<&str>,
+    launch_mode: LaunchMode,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    let backend = resolve_backend(registry, backend_id)?;
+    require_enabled_backend(backend.platform(), backend.is_enabled(manifest))?;
+    backend.deploy(repo_root, manifest, requested_device, launch_mode, runner)
+}
+
+/// # Errors
+///
+/// Returns an error if the backend id is unknown, disabled for the app, or stopping fails.
+pub fn stop_backend(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    backend_id: &str,
+    requested_device: Option<&str>,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    let registry = first_party_deploy_backend_registry();
+    stop_backend_with_registry(
+        repo_root,
+        manifest,
+        &registry,
+        backend_id,
+        requested_device,
+        runner,
+    )
+}
+
+/// # Errors
+///
+/// Returns an error if the backend id is unknown, disabled for the app, or stopping fails.
+pub fn stop_backend_with_registry(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
+    backend_id: &str,
+    requested_device: Option<&str>,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    let backend = resolve_backend(registry, backend_id)?;
+    require_enabled_backend(backend.platform(), backend.is_enabled(manifest))?;
+    backend.stop(repo_root, manifest, requested_device, runner)
+}
+
+fn resolve_backend<'a>(
+    registry: &'a DeployBackendRegistry,
+    backend_id: &str,
+) -> AtomResult<&'a dyn crate::backends::DeployBackend> {
+    registry.get(backend_id).map(Box::as_ref).ok_or_else(|| {
+        AtomError::with_path(
+            AtomErrorCode::CliUsageError,
+            format!("unknown backend id: {backend_id}"),
+            backend_id,
+        )
+    })
+}
+
+fn require_enabled_backend(platform: &str, enabled: bool) -> AtomResult<()> {
+    if enabled {
+        Ok(())
+    } else {
+        Err(AtomError::with_path(
+            AtomErrorCode::ManifestInvalidValue,
+            format!("{platform} platform is not enabled"),
+            platform,
+        ))
+    }
+}
+
+/// # Errors
+///
 /// Returns an error if device resolution, building, or installation fails.
 pub fn deploy_ios(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
     launch_mode: LaunchMode,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     let destination = resolve_ios_destination(repo_root, runner, requested_device)?;
     let target = generated_target(manifest, "ios");
@@ -88,7 +191,7 @@ pub fn deploy_ios(
 fn install_and_launch_simulator(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     destination: &crate::devices::ios::IosDestination,
     installable_app: &Utf8Path,
     bundle_id: &str,
@@ -114,7 +217,7 @@ fn install_and_launch_simulator(
 fn install_and_launch_with_idb(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     destination_id: &str,
     installable_app: &Utf8Path,
     bundle_id: &str,
@@ -171,7 +274,7 @@ fn install_and_launch_with_idb(
 fn install_and_launch_device(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     device_id: &str,
     installable_app: &Utf8Path,
     bundle_id: &str,
@@ -195,7 +298,7 @@ pub fn stop_ios(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     let destination = resolve_ios_destination(repo_root, runner, requested_device)?;
     let bundle_id = manifest.ios.bundle_id.as_deref().ok_or_else(|| {
@@ -231,7 +334,7 @@ pub fn deploy_android(
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
     launch_mode: LaunchMode,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     let destination = resolve_android_device(repo_root, runner, requested_device)?;
     let target = generated_target(manifest, "android");
@@ -341,7 +444,7 @@ pub fn stop_android(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     let destination = resolve_android_device(repo_root, runner, requested_device)?;
     let application_id = manifest.android.application_id.as_deref().ok_or_else(|| {
@@ -374,7 +477,7 @@ pub fn stop_android(
 
 fn ios_app_is_running(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     destination_id: &str,
     bundle_id: &str,
 ) -> AtomResult<bool> {
@@ -396,7 +499,7 @@ fn ios_app_is_running(
 }
 
 pub(crate) fn wait_for_app_pid(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     serial: &str,
     application_id: &str,

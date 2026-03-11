@@ -4,18 +4,13 @@ use std::path::PathBuf;
 
 use atom_cng::{ConfigPluginRegistry, build_generation_plan, emit_host_tree, render_prebuild_plan};
 pub use atom_deploy::CommandOutput;
-use atom_deploy::destinations::{
-    DestinationPlatform, list_destinations, list_platform_destinations, render_destination_lines,
-};
+use atom_deploy::destinations::{list_backend_destinations, render_destination_lines};
 use atom_deploy::evaluate::{
     InteractionRequest, capture_logs, capture_screenshot, capture_video, evaluate_run, inspect_ui,
     interact,
 };
 use atom_deploy::progress::run_step;
-use atom_deploy::{
-    LaunchMode, ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel, stop_android,
-    stop_ios,
-};
+use atom_deploy::{LaunchMode, ProcessRunner, ToolRunner, deploy_backend, run_bazel, stop_backend};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::load_manifest;
 use atom_modules::resolve_modules;
@@ -54,8 +49,10 @@ struct PrebuildArgs {
 
 #[derive(Debug, Args)]
 struct RunArgs {
-    #[command(subcommand)]
-    platform: RunPlatform,
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
+    #[command(flatten)]
+    target: TargetArgs,
 }
 
 #[derive(Debug, Args)]
@@ -68,16 +65,12 @@ struct TargetArgs {
     detach: bool,
 }
 
-#[derive(Debug, Subcommand)]
-enum RunPlatform {
-    Ios(TargetArgs),
-    Android(TargetArgs),
-}
-
 #[derive(Debug, Args)]
 struct StopArgs {
-    #[command(subcommand)]
-    platform: StopPlatform,
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
+    #[command(flatten)]
+    target: StopTargetArgs,
 }
 
 #[derive(Debug, Args)]
@@ -88,30 +81,35 @@ struct StopTargetArgs {
     destination: Option<String>,
 }
 
-#[derive(Debug, Subcommand)]
-enum StopPlatform {
-    Ios(StopTargetArgs),
-    Android(StopTargetArgs),
-}
-
 #[derive(Debug, Args)]
 struct ListDestinationsArgs {
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct DevicesArgs {
-    #[arg(value_enum)]
-    platform: DevicePlatform,
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum DevicePlatform {
+enum PlatformArg {
     Ios,
     Android,
+}
+
+impl PlatformArg {
+    fn as_backend_id(self) -> &'static str {
+        match self {
+            Self::Ios => "ios",
+            Self::Android => "android",
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -157,6 +155,8 @@ struct EvidenceVideoArgs {
 
 #[derive(Debug, Args)]
 struct TargetDestinationArgs {
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
     #[arg(long)]
     target: String,
     #[arg(long, alias = "device")]
@@ -336,28 +336,14 @@ fn execute_run(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let (platform, target) = match &args.platform {
-        RunPlatform::Ios(target) => ("ios", target),
-        RunPlatform::Android(target) => ("android", target),
-    };
+    let platform = args.platform.as_backend_id();
+    let target = &args.target;
     let manifest = load_manifest(&repo_root, &target.target)?;
     let launch_mode = if target.detach {
         LaunchMode::Detached
     } else {
         LaunchMode::Attached
     };
-    let enabled = match platform {
-        "ios" => manifest.ios.enabled,
-        "android" => manifest.android.enabled,
-        _ => unreachable!("run platform should be validated by clap"),
-    };
-    if !enabled {
-        return Err(AtomError::with_path(
-            AtomErrorCode::ManifestInvalidValue,
-            format!("{platform} platform is not enabled"),
-            platform,
-        ));
-    }
 
     run_step(
         "Generating build files...",
@@ -371,23 +357,14 @@ fn execute_run(
         },
     )?;
 
-    match platform {
-        "ios" => deploy_ios(
-            &repo_root,
-            &manifest,
-            target.destination.as_deref(),
-            launch_mode,
-            runner,
-        )?,
-        "android" => deploy_android(
-            &repo_root,
-            &manifest,
-            target.destination.as_deref(),
-            launch_mode,
-            runner,
-        )?,
-        _ => unreachable!("run platform should be validated by clap"),
-    }
+    deploy_backend(
+        &repo_root,
+        &manifest,
+        platform,
+        target.destination.as_deref(),
+        launch_mode,
+        runner,
+    )?;
 
     Ok(success_output(Vec::new()))
 }
@@ -398,29 +375,16 @@ fn execute_stop(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let (platform, target) = match &args.platform {
-        StopPlatform::Ios(target) => ("ios", target),
-        StopPlatform::Android(target) => ("android", target),
-    };
+    let platform = args.platform.as_backend_id();
+    let target = &args.target;
     let manifest = load_manifest(&repo_root, &target.target)?;
-    let enabled = match platform {
-        "ios" => manifest.ios.enabled,
-        "android" => manifest.android.enabled,
-        _ => unreachable!("stop platform should be validated by clap"),
-    };
-    if !enabled {
-        return Err(AtomError::with_path(
-            AtomErrorCode::ManifestInvalidValue,
-            format!("{platform} platform is not enabled"),
-            platform,
-        ));
-    }
-
-    match platform {
-        "ios" => stop_ios(&repo_root, &manifest, target.destination.as_deref(), runner)?,
-        "android" => stop_android(&repo_root, &manifest, target.destination.as_deref(), runner)?,
-        _ => unreachable!("stop platform should be validated by clap"),
-    }
+    stop_backend(
+        &repo_root,
+        &manifest,
+        platform,
+        target.destination.as_deref(),
+        runner,
+    )?;
 
     Ok(success_output(Vec::new()))
 }
@@ -439,7 +403,8 @@ fn execute_destinations(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let destinations = list_destinations(&repo_root, runner)?;
+    let destinations =
+        list_backend_destinations(&repo_root, args.platform.as_backend_id(), runner)?;
     if args.json {
         return json_output(&destinations);
     }
@@ -452,11 +417,8 @@ fn execute_devices(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let platform = match args.platform {
-        DevicePlatform::Ios => DestinationPlatform::Ios,
-        DevicePlatform::Android => DestinationPlatform::Android,
-    };
-    let destinations = list_platform_destinations(&repo_root, platform, runner)?;
+    let destinations =
+        list_backend_destinations(&repo_root, args.platform.as_backend_id(), runner)?;
     if args.json {
         return json_output(&destinations);
     }
@@ -476,6 +438,7 @@ fn execute_evidence(
             capture_logs(
                 &repo_root,
                 &manifest,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
                 args.seconds,
@@ -489,6 +452,7 @@ fn execute_evidence(
             capture_screenshot(
                 &repo_root,
                 &manifest,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
                 runner,
@@ -501,6 +465,7 @@ fn execute_evidence(
             capture_video(
                 &repo_root,
                 &manifest,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
                 args.seconds,
@@ -520,7 +485,13 @@ fn execute_inspect(
     match &args.command {
         InspectCommand::Ui(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
-            let snapshot = inspect_ui(&repo_root, &manifest, &args.target.destination, runner)?;
+            let snapshot = inspect_ui(
+                &repo_root,
+                &manifest,
+                args.target.platform.as_backend_id(),
+                &args.target.destination,
+                runner,
+            )?;
             if let Some(output) = args
                 .output
                 .as_ref()
@@ -604,7 +575,14 @@ fn execute_interact(
         ),
     };
     let manifest = load_manifest(&repo_root, &target.target)?;
-    let result = interact(&repo_root, &manifest, &target.destination, request, runner)?;
+    let result = interact(
+        &repo_root,
+        &manifest,
+        target.platform.as_backend_id(),
+        &target.destination,
+        request,
+        runner,
+    )?;
     json_output(&result)
 }
 
@@ -622,6 +600,7 @@ fn execute_evaluate(
             let result = evaluate_run(
                 &repo_root,
                 &manifest,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &plan,
                 &artifacts_dir,
@@ -770,6 +749,7 @@ mod tests {
             [
                 "atom",
                 "run",
+                "--platform",
                 "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
@@ -788,6 +768,7 @@ mod tests {
         parse_cli(&[
             "atom",
             "run",
+            "--platform",
             "android",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
@@ -805,6 +786,7 @@ mod tests {
             [
                 "atom",
                 "stop",
+                "--platform",
                 "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
@@ -820,13 +802,13 @@ mod tests {
 
     #[test]
     fn destinations_command_accepts_json_flag() {
-        parse_cli(&["atom", "destinations", "--json"]);
+        parse_cli(&["atom", "destinations", "--platform", "ios", "--json"]);
     }
 
     #[test]
     fn devices_command_accepts_platform_and_json_flag() {
-        parse_cli(&["atom", "devices", "ios", "--json"]);
-        parse_cli(&["atom", "devices", "android", "--json"]);
+        parse_cli(&["atom", "devices", "--platform", "ios", "--json"]);
+        parse_cli(&["atom", "devices", "--platform", "android", "--json"]);
     }
 
     #[test]
@@ -835,6 +817,8 @@ mod tests {
             "atom",
             "evidence",
             "logs",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -848,6 +832,8 @@ mod tests {
             "atom",
             "evidence",
             "screenshot",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -859,6 +845,8 @@ mod tests {
             "atom",
             "evidence",
             "video",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -881,6 +869,8 @@ mod tests {
                 "atom",
                 "inspect",
                 "ui",
+                "--platform",
+                "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
                 "--destination",
@@ -901,6 +891,8 @@ mod tests {
             "atom",
             "interact",
             "tap",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -912,6 +904,8 @@ mod tests {
             "atom",
             "interact",
             "type-text",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -932,6 +926,8 @@ mod tests {
                 "atom",
                 "evaluate",
                 "run",
+                "--platform",
+                "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
                 "--destination",

@@ -1,3 +1,4 @@
+mod backends;
 mod deploy;
 pub mod destinations;
 pub mod devices;
@@ -6,7 +7,8 @@ pub mod progress;
 mod tools;
 
 pub use crate::deploy::{
-    LaunchMode, deploy_android, deploy_ios, generated_target, stop_android, stop_ios,
+    LaunchMode, deploy_android, deploy_backend, deploy_ios, generated_target, stop_android,
+    stop_backend, stop_ios,
 };
 pub use crate::tools::{
     CommandOutput, ProcessRunner, ToolRunner, capture_bazel, capture_bazel_owned,
@@ -23,13 +25,20 @@ mod tests {
     use camino::{Utf8Path, Utf8PathBuf};
     use tempfile::tempdir;
 
-    use crate::deploy::{LaunchMode, deploy_android, deploy_ios, stop_android, stop_ios};
+    use crate::backends::{BackendAutomationSession, DeployBackend, DeployBackendRegistry};
+    use crate::deploy::{
+        LaunchMode, deploy_android, deploy_backend_with_registry, deploy_ios, stop_android,
+        stop_ios,
+    };
     use crate::destinations::{
-        DestinationCapability, DestinationKind, DestinationPlatform, list_destinations,
+        DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
+        list_destinations, list_destinations_with_registry,
     };
     use crate::devices::android::AndroidDestination;
     use crate::devices::ios::{IosDestination, IosDestinationKind, select_default_ios_destination};
+    use crate::evaluate::SessionLaunchBehavior;
     use crate::tools::ToolRunner;
+    use atom_backends::BackendDefinition;
 
     #[derive(Default)]
     struct FakeToolRunner {
@@ -516,6 +525,7 @@ mod tests {
 
         assert!(destinations.iter().any(|destination| {
             destination.id == "SIM-123"
+                && destination.backend_id == "ios"
                 && destination.platform == DestinationPlatform::Ios
                 && destination.kind == DestinationKind::Simulator
                 && destination
@@ -524,12 +534,14 @@ mod tests {
         }));
         assert!(destinations.iter().any(|destination| {
             destination.id == "00008130-001431E90A78001C"
+                && destination.backend_id == "ios"
                 && destination.platform == DestinationPlatform::Ios
                 && destination.kind == DestinationKind::Device
                 && destination.capabilities == vec![DestinationCapability::Launch]
         }));
         assert!(destinations.iter().any(|destination| {
             destination.id == "avd:atom_35"
+                && destination.backend_id == "android"
                 && destination.platform == DestinationPlatform::Android
                 && destination.kind == DestinationKind::Emulator
                 && destination
@@ -538,14 +550,216 @@ mod tests {
         }));
         assert!(destinations.iter().any(|destination| {
             destination.id == "avd:Pixel_9_API_35"
+                && destination.backend_id == "android"
                 && destination.platform == DestinationPlatform::Android
                 && destination.kind == DestinationKind::Avd
                 && destination.available
         }));
 
         let json = serde_json::to_string(&destinations).expect("destinations json");
+        assert!(json.contains("\"backend_id\":\"ios\""));
         assert!(json.contains("\"platform\":\"ios\""));
         assert!(json.contains("\"capabilities\":[\"launch\""));
+    }
+
+    #[test]
+    fn list_destinations_uses_registered_destination_backends() {
+        struct FixtureBackend {
+            id: &'static str,
+            platform: &'static str,
+            destination_id: &'static str,
+        }
+
+        impl BackendDefinition for FixtureBackend {
+            fn id(&self) -> &'static str {
+                self.id
+            }
+
+            fn platform(&self) -> &'static str {
+                self.platform
+            }
+        }
+
+        impl DeployBackend for FixtureBackend {
+            fn is_enabled(&self, _manifest: &NormalizedManifest) -> bool {
+                true
+            }
+
+            fn list_destinations(
+                &self,
+                _repo_root: &Utf8Path,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<Vec<DestinationDescriptor>> {
+                let platform = match self.platform {
+                    "ios" => DestinationPlatform::Ios,
+                    "android" => DestinationPlatform::Android,
+                    value => panic!("unexpected test platform {value}"),
+                };
+                Ok(vec![DestinationDescriptor {
+                    backend_id: self.id.to_owned(),
+                    id: self.destination_id.to_owned(),
+                    platform,
+                    kind: DestinationKind::Device,
+                    display_name: format!("{} destination", self.id),
+                    available: true,
+                    debug_state: "ready".to_owned(),
+                    capabilities: vec![DestinationCapability::Launch],
+                }])
+            }
+
+            fn deploy(
+                &self,
+                _repo_root: &Utf8Path,
+                _manifest: &NormalizedManifest,
+                _requested_destination: Option<&str>,
+                _launch_mode: LaunchMode,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<()> {
+                panic!("test backend should not deploy")
+            }
+
+            fn stop(
+                &self,
+                _repo_root: &Utf8Path,
+                _manifest: &NormalizedManifest,
+                _requested_destination: Option<&str>,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<()> {
+                panic!("test backend should not stop")
+            }
+
+            fn new_automation_session<'a>(
+                &self,
+                _repo_root: &'a Utf8Path,
+                _manifest: &'a NormalizedManifest,
+                _destination_id: &'a str,
+                _runner: &'a mut dyn ToolRunner,
+                _launch_behavior: SessionLaunchBehavior,
+            ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+                panic!("test backend should not create automation sessions")
+            }
+        }
+
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let mut runner = FakeToolRunner::default();
+        let mut registry = DeployBackendRegistry::new();
+        registry
+            .register(Box::new(FixtureBackend {
+                id: "alpha",
+                platform: "ios",
+                destination_id: "ALPHA-1",
+            }))
+            .expect("alpha backend should register");
+        registry
+            .register(Box::new(FixtureBackend {
+                id: "beta",
+                platform: "android",
+                destination_id: "BETA-1",
+            }))
+            .expect("beta backend should register");
+
+        let destinations =
+            list_destinations_with_registry(&root, &registry, &mut runner).expect("destinations");
+
+        assert_eq!(destinations.len(), 2);
+        assert_eq!(
+            destinations
+                .iter()
+                .map(|destination| destination.backend_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "beta"]
+        );
+    }
+
+    #[test]
+    fn deploy_backend_uses_registered_backend_dispatch() {
+        struct FixtureBackend;
+
+        impl BackendDefinition for FixtureBackend {
+            fn id(&self) -> &'static str {
+                "fixture"
+            }
+
+            fn platform(&self) -> &'static str {
+                "fixture"
+            }
+        }
+
+        impl DeployBackend for FixtureBackend {
+            fn is_enabled(&self, _manifest: &NormalizedManifest) -> bool {
+                true
+            }
+
+            fn list_destinations(
+                &self,
+                _repo_root: &Utf8Path,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<Vec<DestinationDescriptor>> {
+                Ok(Vec::new())
+            }
+
+            fn deploy(
+                &self,
+                repo_root: &Utf8Path,
+                _manifest: &NormalizedManifest,
+                requested_destination: Option<&str>,
+                _launch_mode: LaunchMode,
+                runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<()> {
+                runner.run(
+                    repo_root,
+                    "fixture",
+                    &[requested_destination.unwrap_or("default").to_owned()],
+                )
+            }
+
+            fn stop(
+                &self,
+                _repo_root: &Utf8Path,
+                _manifest: &NormalizedManifest,
+                _requested_destination: Option<&str>,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<()> {
+                panic!("stop should not be used in this test")
+            }
+
+            fn new_automation_session<'a>(
+                &self,
+                _repo_root: &'a Utf8Path,
+                _manifest: &'a NormalizedManifest,
+                _destination_id: &'a str,
+                _runner: &'a mut dyn ToolRunner,
+                _launch_behavior: SessionLaunchBehavior,
+            ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+                panic!("automation session should not be used in this test")
+            }
+        }
+
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner::default();
+        let mut registry = DeployBackendRegistry::new();
+        registry
+            .register(Box::new(FixtureBackend))
+            .expect("fixture backend should register");
+
+        deploy_backend_with_registry(
+            &root,
+            &manifest,
+            &registry,
+            "fixture",
+            Some("DEVICE-123"),
+            LaunchMode::Detached,
+            &mut runner,
+        )
+        .expect("fixture backend deploy");
+
+        assert_eq!(
+            runner.calls,
+            vec![("fixture".to_owned(), vec!["DEVICE-123".to_owned()])]
+        );
     }
 
     #[test]

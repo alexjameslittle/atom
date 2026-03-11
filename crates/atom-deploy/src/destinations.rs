@@ -1,11 +1,11 @@
 use std::fmt::Write as _;
 
-use atom_ffi::AtomResult;
+use atom_backends::BackendDefinition;
+use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 
-use crate::devices::android::{AndroidDestination, list_android_destinations};
-use crate::devices::ios::{IosDestination, IosDestinationKind, list_ios_destinations};
+use crate::backends::{DeployBackendRegistry, first_party_deploy_backend_registry};
 use crate::tools::ToolRunner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +38,7 @@ pub enum DestinationCapability {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DestinationDescriptor {
+    pub backend_id: String,
     pub id: String,
     pub platform: DestinationPlatform,
     pub kind: DestinationKind,
@@ -54,8 +55,22 @@ pub fn list_destinations(
     repo_root: &Utf8Path,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<Vec<DestinationDescriptor>> {
-    let mut destinations = list_ios_destination_descriptors(repo_root, runner)?;
-    destinations.extend(list_android_destination_descriptors(repo_root, runner)?);
+    let registry = first_party_deploy_backend_registry();
+    list_destinations_with_registry(repo_root, &registry, runner)
+}
+
+/// # Errors
+///
+/// Returns an error if destination discovery for any registered backend fails.
+pub(crate) fn list_destinations_with_registry(
+    repo_root: &Utf8Path,
+    registry: &DeployBackendRegistry,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Vec<DestinationDescriptor>> {
+    let mut destinations = Vec::new();
+    for backend in registry.iter() {
+        destinations.extend(backend.list_destinations(repo_root, runner)?);
+    }
     Ok(destinations)
 }
 
@@ -67,10 +82,58 @@ pub fn list_platform_destinations(
     platform: DestinationPlatform,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<Vec<DestinationDescriptor>> {
-    match platform {
-        DestinationPlatform::Ios => list_ios_destination_descriptors(repo_root, runner),
-        DestinationPlatform::Android => list_android_destination_descriptors(repo_root, runner),
+    let registry = first_party_deploy_backend_registry();
+    list_platform_destinations_with_registry(repo_root, &registry, platform, runner)
+}
+
+/// # Errors
+///
+/// Returns an error if destination discovery for a backend on the requested platform fails.
+pub(crate) fn list_platform_destinations_with_registry(
+    repo_root: &Utf8Path,
+    registry: &DeployBackendRegistry,
+    platform: DestinationPlatform,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Vec<DestinationDescriptor>> {
+    let mut destinations = Vec::new();
+    for backend in registry
+        .iter()
+        .filter(|backend| backend.platform() == platform.as_str())
+    {
+        destinations.extend(backend.list_destinations(repo_root, runner)?);
     }
+    Ok(destinations)
+}
+
+/// # Errors
+///
+/// Returns an error if the requested backend id is unknown or destination discovery fails.
+pub fn list_backend_destinations(
+    repo_root: &Utf8Path,
+    backend_id: &str,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Vec<DestinationDescriptor>> {
+    let registry = first_party_deploy_backend_registry();
+    list_backend_destinations_with_registry(repo_root, &registry, backend_id, runner)
+}
+
+/// # Errors
+///
+/// Returns an error if the requested backend id is unknown or destination discovery fails.
+pub(crate) fn list_backend_destinations_with_registry(
+    repo_root: &Utf8Path,
+    registry: &DeployBackendRegistry,
+    backend_id: &str,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Vec<DestinationDescriptor>> {
+    let backend = registry.get(backend_id).ok_or_else(|| {
+        AtomError::with_path(
+            AtomErrorCode::CliUsageError,
+            format!("unknown backend id: {backend_id}"),
+            backend_id,
+        )
+    })?;
+    backend.list_destinations(repo_root, runner)
 }
 
 #[must_use]
@@ -93,10 +156,11 @@ pub fn render_destination_lines(destinations: &[DestinationDescriptor]) -> Strin
             .join(",");
         let _ = writeln!(
             output,
-            "{} [{} {:?}; available={}; state={}; capabilities={}]",
+            "{} [{} {:?}; backend={}; available={}; state={}; capabilities={}]",
             destination.display_name,
             destination.id,
             destination.kind,
+            destination.backend_id,
             destination.available,
             destination.debug_state,
             capabilities
@@ -105,93 +169,12 @@ pub fn render_destination_lines(destinations: &[DestinationDescriptor]) -> Strin
     output
 }
 
-fn list_ios_destination_descriptors(
-    repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
-) -> AtomResult<Vec<DestinationDescriptor>> {
-    Ok(list_ios_destinations(repo_root, runner)?
-        .into_iter()
-        .map(destination_descriptor_from_ios)
-        .collect())
-}
-
-fn list_android_destination_descriptors(
-    repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
-) -> AtomResult<Vec<DestinationDescriptor>> {
-    Ok(list_android_destinations(repo_root, runner)?
-        .into_iter()
-        .map(destination_descriptor_from_android)
-        .collect())
-}
-
-fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDescriptor {
-    let display_name = destination.display_label();
-    let id = destination.id.clone();
-    let kind = match destination.kind {
-        IosDestinationKind::Simulator => DestinationKind::Simulator,
-        IosDestinationKind::Device => DestinationKind::Device,
-    };
-    let capabilities = match destination.kind {
-        IosDestinationKind::Simulator => vec![
-            DestinationCapability::Launch,
-            DestinationCapability::Logs,
-            DestinationCapability::Screenshot,
-            DestinationCapability::Video,
-            DestinationCapability::InspectUi,
-            DestinationCapability::Interact,
-            DestinationCapability::Evaluate,
-        ],
-        IosDestinationKind::Device => vec![DestinationCapability::Launch],
-    };
-
-    DestinationDescriptor {
-        id,
-        platform: DestinationPlatform::Ios,
-        kind,
-        display_name,
-        available: destination.is_available,
-        debug_state: destination.state,
-        capabilities,
+impl DestinationPlatform {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ios => "ios",
+            Self::Android => "android",
+        }
     }
-}
-
-pub(crate) fn android_destination_descriptor(
-    destination: AndroidDestination,
-) -> DestinationDescriptor {
-    let display_name = destination.display_label();
-    let id = destination.destination_id();
-    let kind = if destination.state == "avd" {
-        DestinationKind::Avd
-    } else if destination.is_emulator {
-        DestinationKind::Emulator
-    } else {
-        DestinationKind::Device
-    };
-    let capabilities = match kind {
-        DestinationKind::Avd | DestinationKind::Emulator | DestinationKind::Device => vec![
-            DestinationCapability::Launch,
-            DestinationCapability::Logs,
-            DestinationCapability::Screenshot,
-            DestinationCapability::Video,
-            DestinationCapability::InspectUi,
-            DestinationCapability::Interact,
-            DestinationCapability::Evaluate,
-        ],
-        DestinationKind::Simulator => Vec::new(),
-    };
-
-    DestinationDescriptor {
-        id,
-        platform: DestinationPlatform::Android,
-        kind,
-        display_name,
-        available: destination.state == "device" || destination.state == "avd",
-        debug_state: destination.state,
-        capabilities,
-    }
-}
-
-fn destination_descriptor_from_android(destination: AndroidDestination) -> DestinationDescriptor {
-    android_destination_descriptor(destination)
 }

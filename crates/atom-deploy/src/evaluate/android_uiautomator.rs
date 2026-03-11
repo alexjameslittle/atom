@@ -27,7 +27,7 @@ struct AndroidUiElement {
 pub(crate) fn inspect_ui_with_android_uiautomator(
     repo_root: &Utf8Path,
     serial: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<AndroidUiSnapshot> {
     let remote_path = format!("/sdcard/atom-ui-{}.xml", timestamp_suffix());
     run_tool(
@@ -58,7 +58,7 @@ pub(crate) fn inspect_ui_with_android_uiautomator(
 pub(crate) fn interact_with_android_uiautomator(
     repo_root: &Utf8Path,
     serial: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     request: InteractionRequest,
 ) -> AtomResult<InteractionResult> {
     match request {

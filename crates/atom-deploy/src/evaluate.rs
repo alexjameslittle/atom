@@ -14,12 +14,14 @@ mod android_uiautomator;
 use self::android_uiautomator::{
     inspect_ui_with_android_uiautomator, interact_with_android_uiautomator,
 };
+use crate::backends::{
+    BackendAutomationSession, DeployBackendRegistry, first_party_deploy_backend_registry,
+};
 use crate::deploy::{
     generated_target, ios_bazel_args, resolve_ios_installable_artifact, wait_for_app_pid,
 };
 use crate::destinations::{
-    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
-    android_destination_descriptor, list_destinations,
+    DestinationCapability, DestinationDescriptor, DestinationPlatform, list_backend_destinations,
 };
 use crate::devices::android::{find_android_destination, prepare_android_emulator};
 use crate::devices::ios::{
@@ -226,14 +228,16 @@ pub struct EvaluateCommandOutput {
 pub fn inspect_ui(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    backend_id: &str,
     destination_id: &str,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<UiSnapshot> {
-    let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
+    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::InspectUi)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        backend_id,
         destination_id,
         runner,
         descriptor,
@@ -255,15 +259,17 @@ pub fn inspect_ui(
 pub fn interact(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    backend_id: &str,
     destination_id: &str,
     request: InteractionRequest,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<InteractionResult> {
-    let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
+    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Interact)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        backend_id,
         destination_id,
         runner,
         descriptor,
@@ -281,23 +287,24 @@ pub fn interact(
 pub fn capture_screenshot(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    backend_id: &str,
     destination_id: &str,
     output_path: &Utf8Path,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
+    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Screenshot)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        backend_id,
         destination_id,
         runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
     session.ensure_launched()?;
-    let launch = session.active_launch()?;
-    capture_screenshot_for_launch(repo_root, &launch, output_path, session.runner)
+    session.capture_screenshot(output_path)
 }
 
 /// # Errors
@@ -306,24 +313,25 @@ pub fn capture_screenshot(
 pub fn capture_logs(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    backend_id: &str,
     destination_id: &str,
     output_path: &Utf8Path,
     seconds: u64,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
+    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Logs)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        backend_id,
         destination_id,
         runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
     session.ensure_launched()?;
-    let launch = session.active_launch()?;
-    capture_logs_for_launch(repo_root, &launch, output_path, seconds, session.runner)
+    session.capture_logs(output_path, seconds)
 }
 
 /// # Errors
@@ -332,24 +340,25 @@ pub fn capture_logs(
 pub fn capture_video(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    backend_id: &str,
     destination_id: &str,
     output_path: &Utf8Path,
     seconds: u64,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
+    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Video)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        backend_id,
         destination_id,
         runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
     session.ensure_launched()?;
-    let launch = session.active_launch()?;
-    capture_video_for_launch(repo_root, &launch, output_path, seconds, session.runner)
+    session.capture_video(output_path, seconds)
 }
 
 /// # Errors
@@ -359,6 +368,7 @@ pub fn capture_video(
 pub fn evaluate_run(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    backend_id: &str,
     destination_id: &str,
     plan_path: &Utf8Path,
     artifacts_dir: &Utf8Path,
@@ -367,13 +377,14 @@ pub fn evaluate_run(
     let plan = load_evaluation_plan(plan_path)?;
     write_parent_dir(artifacts_dir)?;
 
-    let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
+    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
     require_plan_capabilities(&descriptor, &plan)?;
 
     let started_at_ms = timestamp_millis();
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        backend_id,
         destination_id,
         runner,
         descriptor,
@@ -425,11 +436,11 @@ pub fn evaluate_run(
     })
 }
 
-fn execute_step<R: ToolRunner>(
+fn execute_step(
     index: usize,
     step: EvaluationStep,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let started_at_ms = timestamp_millis();
@@ -516,19 +527,19 @@ fn execute_step<R: ToolRunner>(
     }
 }
 
-fn execute_launch_step<R: ToolRunner>(
+fn execute_launch_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
     Ok(simple_step(index, "launch", started_at_ms))
 }
 
-fn execute_wait_for_ui_step<R: ToolRunner>(
+fn execute_wait_for_ui_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
@@ -538,11 +549,11 @@ fn execute_wait_for_ui_step<R: ToolRunner>(
     Ok(simple_step(index, "wait_for_ui", started_at_ms))
 }
 
-fn execute_interaction_step<R: ToolRunner>(
+fn execute_interaction_step(
     index: usize,
     kind: &str,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     request: InteractionRequest,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
@@ -550,19 +561,18 @@ fn execute_interaction_step<R: ToolRunner>(
     Ok(simple_step(index, kind, started_at_ms))
 }
 
-fn execute_screenshot_step<R: ToolRunner>(
+fn execute_screenshot_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
     let artifact_name = artifact_name(name, index, "screenshot", "png");
     let output_path = artifacts_dir.join(&artifact_name);
-    let launch = session.active_launch()?;
-    capture_screenshot_for_launch(session.repo_root, &launch, &output_path, session.runner)?;
+    session.capture_screenshot(&output_path)?;
     artifacts.push(ArtifactRecord {
         name: artifact_name.clone(),
         kind: "screenshot".to_owned(),
@@ -576,11 +586,11 @@ fn execute_screenshot_step<R: ToolRunner>(
     ))
 }
 
-fn execute_inspect_ui_step<R: ToolRunner>(
+fn execute_inspect_ui_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
@@ -590,8 +600,7 @@ fn execute_inspect_ui_step<R: ToolRunner>(
     let mut snapshot = session.interact(InteractionRequest::InspectUi)?.snapshot;
     let screenshot_name = artifact_name(None, index, "inspect", "png");
     let screenshot_path = artifacts_dir.join(&screenshot_name);
-    let launch = session.active_launch()?;
-    capture_screenshot_for_launch(session.repo_root, &launch, &screenshot_path, session.runner)?;
+    session.capture_screenshot(&screenshot_path)?;
     snapshot.screenshot_path = Some(screenshot_path.as_str().to_owned());
     write_json(&output_path, &snapshot)?;
     artifacts.push(ArtifactRecord {
@@ -612,16 +621,15 @@ fn execute_inspect_ui_step<R: ToolRunner>(
     ))
 }
 
-fn execute_start_video_step<R: ToolRunner>(
+fn execute_start_video_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
-    let launch = session.active_launch()?;
-    let artifact_name = video_artifact_name(name, index, &launch);
+    let artifact_name = video_artifact_name(name, index, session.video_extension());
     let output_path = artifacts_dir.join(&artifact_name);
     session.start_video(&output_path)?;
     Ok(step_with_artifacts(
@@ -632,10 +640,10 @@ fn execute_start_video_step<R: ToolRunner>(
     ))
 }
 
-fn execute_stop_video_step<R: ToolRunner>(
+fn execute_stop_video_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let output_path = session.stop_video()?;
@@ -655,11 +663,11 @@ fn execute_stop_video_step<R: ToolRunner>(
     ))
 }
 
-fn execute_collect_logs_step<R: ToolRunner>(
+fn execute_collect_logs_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_, R>,
+    session: &mut AutomationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
     seconds: u64,
@@ -667,14 +675,7 @@ fn execute_collect_logs_step<R: ToolRunner>(
     session.ensure_launched()?;
     let artifact_name = artifact_name(name, index, "logs", "txt");
     let output_path = artifacts_dir.join(&artifact_name);
-    let launch = session.active_launch()?;
-    capture_logs_for_launch(
-        session.repo_root,
-        &launch,
-        &output_path,
-        seconds,
-        session.runner,
-    )?;
+    session.capture_logs(&output_path, seconds)?;
     artifacts.push(ArtifactRecord {
         name: artifact_name.clone(),
         kind: "logs".to_owned(),
@@ -688,8 +689,8 @@ fn execute_collect_logs_step<R: ToolRunner>(
     ))
 }
 
-fn wait_for_ui<R: ToolRunner>(
-    session: &mut AutomationSession<'_, R>,
+fn wait_for_ui(
+    session: &mut AutomationSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
@@ -743,7 +744,7 @@ fn wait_for_idb_launch_ready(
     destination_id: &str,
     app_name: &str,
     app_slug: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
     while Instant::now() < deadline {
@@ -765,7 +766,7 @@ pub(crate) fn wait_for_ios_launch_ready(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     destination_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     wait_for_idb_launch_ready(
         repo_root,
@@ -780,7 +781,7 @@ fn wait_for_android_launch_ready(
     repo_root: &Utf8Path,
     serial: &str,
     application_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
     while Instant::now() < deadline {
@@ -799,114 +800,6 @@ fn wait_for_android_launch_ready(
         AtomErrorCode::AutomationUnavailable,
         "app did not become responsive after launch",
     ))
-}
-
-enum AutomationDriver {
-    IosIdb { destination_id: String },
-    AndroidUiAutomator { destination_id: String },
-}
-
-impl AutomationDriver {
-    fn for_descriptor(descriptor: &DestinationDescriptor) -> AtomResult<Self> {
-        match (descriptor.platform, &descriptor.kind) {
-            (DestinationPlatform::Ios, DestinationKind::Simulator) => Ok(Self::IosIdb {
-                destination_id: descriptor.id.clone(),
-            }),
-            (
-                DestinationPlatform::Android,
-                DestinationKind::Avd | DestinationKind::Emulator | DestinationKind::Device,
-            ) => Ok(Self::AndroidUiAutomator {
-                destination_id: descriptor.id.clone(),
-            }),
-            _ => Err(AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                format!("destination {} does not support automation", descriptor.id),
-            )),
-        }
-    }
-
-    fn launch(
-        &self,
-        repo_root: &Utf8Path,
-        manifest: &NormalizedManifest,
-        runner: &mut impl ToolRunner,
-    ) -> AtomResult<AppLaunch> {
-        match self {
-            Self::IosIdb { destination_id } | Self::AndroidUiAutomator { destination_id } => {
-                AppLaunch::launch(repo_root, manifest, destination_id, runner)
-            }
-        }
-    }
-
-    fn attach(
-        &self,
-        repo_root: &Utf8Path,
-        manifest: &NormalizedManifest,
-        runner: &mut impl ToolRunner,
-    ) -> AtomResult<Option<AppLaunch>> {
-        match self {
-            Self::IosIdb { destination_id } => {
-                attach_ios_app(repo_root, manifest, destination_id, runner)
-            }
-            Self::AndroidUiAutomator { destination_id } => {
-                attach_android_app(repo_root, manifest, destination_id, runner)
-            }
-        }
-    }
-
-    fn wait_until_ready(
-        &self,
-        repo_root: &Utf8Path,
-        manifest: &NormalizedManifest,
-        launch: &AppLaunch,
-        runner: &mut impl ToolRunner,
-    ) -> AtomResult<()> {
-        match (self, launch) {
-            (Self::IosIdb { .. }, AppLaunch::IosSimulator { destination_id, .. })
-            | (Self::IosIdb { .. }, AppLaunch::IosDevice { destination_id, .. }) => {
-                wait_for_idb_launch_ready(
-                    repo_root,
-                    destination_id,
-                    &manifest.app.name,
-                    &manifest.app.slug,
-                    runner,
-                )
-            }
-            (
-                Self::AndroidUiAutomator { .. },
-                AppLaunch::Android {
-                    serial,
-                    application_id,
-                },
-            ) => wait_for_android_launch_ready(repo_root, serial, application_id, runner),
-            _ => Err(AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                "launched app does not match the selected automation backend",
-            )),
-        }
-    }
-
-    fn interact(
-        &self,
-        repo_root: &Utf8Path,
-        launch: &AppLaunch,
-        runner: &mut impl ToolRunner,
-        request: InteractionRequest,
-    ) -> AtomResult<InteractionResult> {
-        match (self, launch) {
-            (
-                Self::IosIdb { destination_id },
-                AppLaunch::IosSimulator { .. } | AppLaunch::IosDevice { .. },
-            ) => interact_with_idb(repo_root, destination_id, runner, request),
-            (Self::AndroidUiAutomator { .. }, AppLaunch::Android { serial, .. }) => {
-                interact_with_android_uiautomator(repo_root, serial, runner, request)
-            }
-            _ => Err(AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                "launched app does not match the selected automation backend",
-            )),
-        }
-    }
 }
 
 fn simple_step(index: usize, kind: &str, started_at_ms: u128) -> StepRecord {
@@ -940,17 +833,15 @@ fn step_with_artifacts(
 
 fn resolve_destination_descriptor(
     repo_root: &Utf8Path,
+    backend_id: &str,
     destination_id: &str,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<DestinationDescriptor> {
-    if let Some(destination) = list_destinations(repo_root, runner)?
+    if let Some(destination) = list_backend_destinations(repo_root, backend_id, runner)?
         .into_iter()
         .find(|destination| destination.id == destination_id)
     {
         return Ok(destination);
-    }
-    if let Some(destination) = find_android_destination(repo_root, runner, destination_id)? {
-        return Ok(android_destination_descriptor(destination));
     }
     Err(AtomError::with_path(
         AtomErrorCode::AutomationUnavailable,
@@ -1023,11 +914,7 @@ fn artifact_name(requested: Option<String>, index: usize, prefix: &str, extensio
     requested.unwrap_or_else(|| format!("{index:02}-{prefix}.{extension}"))
 }
 
-fn video_artifact_name(requested: Option<String>, index: usize, launch: &AppLaunch) -> String {
-    let extension = match launch {
-        AppLaunch::IosSimulator { .. } | AppLaunch::IosDevice { .. } => "mov",
-        AppLaunch::Android { .. } => "mp4",
-    };
+fn video_artifact_name(requested: Option<String>, index: usize, extension: &str) -> String {
     match requested {
         Some(name) => {
             let path = Utf8PathBuf::from(name);
@@ -1063,74 +950,158 @@ fn load_evaluation_plan(path: &Utf8Path) -> AtomResult<EvaluationPlan> {
     })
 }
 
-struct AutomationSession<'a, R: ToolRunner> {
+struct AutomationSession<'a> {
+    descriptor: DestinationDescriptor,
+    backend: Box<dyn BackendAutomationSession + 'a>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionLaunchBehavior {
+    LaunchOnly,
+    AttachOrLaunch,
+}
+
+impl<'a> AutomationSession<'a> {
+    fn new(
+        repo_root: &'a Utf8Path,
+        manifest: &'a NormalizedManifest,
+        backend_id: &'a str,
+        destination_id: &'a str,
+        runner: &'a mut dyn ToolRunner,
+        descriptor: DestinationDescriptor,
+        launch_behavior: SessionLaunchBehavior,
+    ) -> AtomResult<Self> {
+        debug_assert_eq!(descriptor.id, destination_id);
+        let registry = first_party_deploy_backend_registry();
+        let backend = automation_session_with_registry(
+            &registry,
+            repo_root,
+            manifest,
+            backend_id,
+            destination_id,
+            runner,
+            launch_behavior,
+        )?;
+        Ok(Self {
+            descriptor,
+            backend,
+        })
+    }
+
+    fn ensure_launched(&mut self) -> AtomResult<()> {
+        self.backend.ensure_launched()
+    }
+
+    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
+        self.backend.interact(request)
+    }
+
+    fn video_extension(&self) -> &'static str {
+        self.backend.video_extension()
+    }
+
+    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
+        self.backend.capture_auto_screenshot()
+    }
+
+    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
+        self.backend.capture_screenshot(output_path)
+    }
+
+    fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
+        self.backend.capture_logs(output_path, seconds)
+    }
+
+    fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
+        self.backend.capture_video(output_path, seconds)
+    }
+
+    fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
+        self.backend.start_video(output_path)
+    }
+
+    fn stop_video(&mut self) -> AtomResult<Utf8PathBuf> {
+        self.backend.stop_video()
+    }
+
+    fn shutdown_video(&mut self) -> AtomResult<()> {
+        self.backend.shutdown_video()
+    }
+}
+
+fn automation_session_with_registry<'a>(
+    registry: &DeployBackendRegistry,
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
-    runner: &'a mut R,
-    descriptor: DestinationDescriptor,
-    driver: AutomationDriver,
+    backend_id: &'a str,
+    destination_id: &'a str,
+    runner: &'a mut dyn ToolRunner,
+    launch_behavior: SessionLaunchBehavior,
+) -> AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+    let backend = registry.get(backend_id).map(Box::as_ref).ok_or_else(|| {
+        AtomError::with_path(
+            AtomErrorCode::CliUsageError,
+            format!("unknown backend id: {backend_id}"),
+            backend_id,
+        )
+    })?;
+    if !backend.is_enabled(manifest) {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ManifestInvalidValue,
+            format!("{backend_id} platform is not enabled"),
+            backend_id,
+        ));
+    }
+    backend.new_automation_session(repo_root, manifest, destination_id, runner, launch_behavior)
+}
+
+pub(crate) fn new_ios_automation_session<'a>(
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    destination_id: &'a str,
+    runner: &'a mut dyn ToolRunner,
+    launch_behavior: SessionLaunchBehavior,
+) -> Box<dyn BackendAutomationSession + 'a> {
+    Box::new(IosAutomationSession {
+        repo_root,
+        manifest,
+        runner,
+        destination_id: destination_id.to_owned(),
+        launch_behavior,
+        launch: None,
+        video_capture: None,
+    })
+}
+
+pub(crate) fn new_android_automation_session<'a>(
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    destination_id: &'a str,
+    runner: &'a mut dyn ToolRunner,
+    launch_behavior: SessionLaunchBehavior,
+) -> Box<dyn BackendAutomationSession + 'a> {
+    Box::new(AndroidAutomationSession {
+        repo_root,
+        manifest,
+        runner,
+        destination_id: destination_id.to_owned(),
+        launch_behavior,
+        launch: None,
+        video_capture: None,
+    })
+}
+
+struct IosAutomationSession<'a> {
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    runner: &'a mut dyn ToolRunner,
+    destination_id: String,
     launch_behavior: SessionLaunchBehavior,
     launch: Option<AppLaunch>,
     video_capture: Option<VideoCapture>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionLaunchBehavior {
-    LaunchOnly,
-    AttachOrLaunch,
-}
-
-impl<'a, R: ToolRunner> AutomationSession<'a, R> {
-    fn new(
-        repo_root: &'a Utf8Path,
-        manifest: &'a NormalizedManifest,
-        destination_id: &'a str,
-        runner: &'a mut R,
-        descriptor: DestinationDescriptor,
-        launch_behavior: SessionLaunchBehavior,
-    ) -> AtomResult<Self> {
-        let driver = AutomationDriver::for_descriptor(&descriptor)?;
-        debug_assert_eq!(descriptor.id, destination_id);
-        Ok(Self {
-            repo_root,
-            manifest,
-            runner,
-            descriptor,
-            driver,
-            launch_behavior,
-            launch: None,
-            video_capture: None,
-        })
-    }
-
-    fn ensure_launched(&mut self) -> AtomResult<()> {
-        if self.launch.is_some() {
-            return Ok(());
-        }
-        if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
-            && let Some(launch) = self
-                .driver
-                .attach(self.repo_root, self.manifest, self.runner)?
-        {
-            self.launch = Some(launch);
-            return Ok(());
-        }
-        let launch = self
-            .driver
-            .launch(self.repo_root, self.manifest, self.runner)?;
-        self.driver
-            .wait_until_ready(self.repo_root, self.manifest, &launch, self.runner)?;
-        self.launch = Some(launch);
-        Ok(())
-    }
-
-    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
-        self.ensure_launched()?;
-        let launch = self.active_launch()?;
-        self.driver
-            .interact(self.repo_root, &launch, self.runner, request)
-    }
-
+impl IosAutomationSession<'_> {
     fn active_launch(&self) -> AtomResult<AppLaunch> {
         self.launch.clone().ok_or_else(|| {
             AtomError::new(
@@ -1139,24 +1110,228 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
             )
         })
     }
+}
+
+impl BackendAutomationSession for IosAutomationSession<'_> {
+    fn video_extension(&self) -> &'static str {
+        "mov"
+    }
+
+    fn ensure_launched(&mut self) -> AtomResult<()> {
+        if self.launch.is_some() {
+            return Ok(());
+        }
+        if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
+            && let Some(launch) = attach_ios_app(
+                self.repo_root,
+                self.manifest,
+                &self.destination_id,
+                self.runner,
+            )?
+        {
+            self.launch = Some(launch);
+            return Ok(());
+        }
+        let Some(destination) = list_ios_destinations(self.repo_root, self.runner)?
+            .into_iter()
+            .find(|destination| destination.id == self.destination_id)
+        else {
+            return Err(AtomError::with_path(
+                AtomErrorCode::AutomationUnavailable,
+                format!("unknown destination id: {}", self.destination_id),
+                &self.destination_id,
+            ));
+        };
+        let launch = launch_ios_app(self.repo_root, self.manifest, destination, self.runner)?;
+        let launch_destination_id = match &launch {
+            AppLaunch::IosSimulator { destination_id, .. }
+            | AppLaunch::IosDevice { destination_id, .. } => destination_id.as_str(),
+            AppLaunch::Android { .. } => {
+                return Err(AtomError::new(
+                    AtomErrorCode::AutomationUnavailable,
+                    "iOS automation session launched an Android app",
+                ));
+            }
+        };
+        wait_for_idb_launch_ready(
+            self.repo_root,
+            launch_destination_id,
+            &self.manifest.app.name,
+            &self.manifest.app.slug,
+            self.runner,
+        )?;
+        self.launch = Some(launch);
+        Ok(())
+    }
+
+    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
+        self.ensure_launched()?;
+        interact_with_idb(self.repo_root, &self.destination_id, self.runner, request)
+    }
 
     fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
         let root = self.repo_root.join("cng-output").join("artifacts");
         write_parent_dir(&root)?;
         let path = root.join(format!("inspect-{}.png", timestamp_suffix()));
-        let launch = self.active_launch()?;
-        capture_screenshot_for_launch(self.repo_root, &launch, &path, self.runner)?;
+        self.capture_screenshot(&path)?;
         Ok(path)
     }
 
+    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
+    }
+
+    fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_logs_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
+    }
+
+    fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_video_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
+    }
+
     fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
-        let launch = self.launch.as_ref().ok_or_else(|| {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        self.video_capture = Some(start_video_capture(self.repo_root, &launch, output_path)?);
+        Ok(())
+    }
+
+    fn stop_video(&mut self) -> AtomResult<Utf8PathBuf> {
+        let video = self.video_capture.take().ok_or_else(|| {
             AtomError::new(
                 AtomErrorCode::AutomationUnavailable,
-                "app must be launched before recording video",
+                "video recording has not been started",
             )
         })?;
-        self.video_capture = Some(start_video_capture(self.repo_root, launch, output_path)?);
+        stop_video_capture(self.repo_root, video, self.runner)
+    }
+
+    fn shutdown_video(&mut self) -> AtomResult<()> {
+        if self.video_capture.is_some() {
+            let _ = self.stop_video()?;
+        }
+        Ok(())
+    }
+}
+
+struct AndroidAutomationSession<'a> {
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    runner: &'a mut dyn ToolRunner,
+    destination_id: String,
+    launch_behavior: SessionLaunchBehavior,
+    launch: Option<AppLaunch>,
+    video_capture: Option<VideoCapture>,
+}
+
+impl AndroidAutomationSession<'_> {
+    fn active_launch(&self) -> AtomResult<AppLaunch> {
+        self.launch.clone().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::InternalBug,
+                "automation session expected a launch after ensure_launched",
+            )
+        })
+    }
+}
+
+impl BackendAutomationSession for AndroidAutomationSession<'_> {
+    fn video_extension(&self) -> &'static str {
+        "mp4"
+    }
+
+    fn ensure_launched(&mut self) -> AtomResult<()> {
+        if self.launch.is_some() {
+            return Ok(());
+        }
+        if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
+            && let Some(launch) = attach_android_app(
+                self.repo_root,
+                self.manifest,
+                &self.destination_id,
+                self.runner,
+            )?
+        {
+            self.launch = Some(launch);
+            return Ok(());
+        }
+        let Some(destination) =
+            find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+        else {
+            return Err(AtomError::with_path(
+                AtomErrorCode::AutomationUnavailable,
+                format!("unknown destination id: {}", self.destination_id),
+                &self.destination_id,
+            ));
+        };
+        let launch = launch_android_app(self.repo_root, self.manifest, &destination, self.runner)?;
+        let (serial, application_id) = match &launch {
+            AppLaunch::Android {
+                serial,
+                application_id,
+            } => (serial.as_str(), application_id.as_str()),
+            AppLaunch::IosSimulator { .. } | AppLaunch::IosDevice { .. } => {
+                return Err(AtomError::new(
+                    AtomErrorCode::AutomationUnavailable,
+                    "Android automation session launched an iOS app",
+                ));
+            }
+        };
+        wait_for_android_launch_ready(self.repo_root, serial, application_id, self.runner)?;
+        self.launch = Some(launch);
+        Ok(())
+    }
+
+    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        match launch {
+            AppLaunch::Android { serial, .. } => {
+                interact_with_android_uiautomator(self.repo_root, &serial, self.runner, request)
+            }
+            AppLaunch::IosSimulator { .. } | AppLaunch::IosDevice { .. } => Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "Android automation session expected an Android launch",
+            )),
+        }
+    }
+
+    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
+        let root = self.repo_root.join("cng-output").join("artifacts");
+        write_parent_dir(&root)?;
+        let path = root.join(format!("inspect-{}.png", timestamp_suffix()));
+        self.capture_screenshot(&path)?;
+        Ok(path)
+    }
+
+    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
+    }
+
+    fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_logs_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
+    }
+
+    fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_video_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
+    }
+
+    fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        self.video_capture = Some(start_video_capture(self.repo_root, &launch, output_path)?);
         Ok(())
     }
 
@@ -1185,7 +1360,7 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
 fn interact_with_idb(
     repo_root: &Utf8Path,
     destination_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     request: InteractionRequest,
 ) -> AtomResult<InteractionResult> {
     match request {
@@ -1296,7 +1471,7 @@ fn interact_with_idb(
 fn inspect_ui_with_idb(
     repo_root: &Utf8Path,
     destination_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<UiSnapshot> {
     let raw = capture_idb(
         runner,
@@ -1433,7 +1608,7 @@ fn format_idb_coordinate(value: f64) -> String {
 }
 
 fn run_idb(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     destination_id: &str,
     subcommand: &[String],
@@ -1443,7 +1618,7 @@ fn run_idb(
 }
 
 fn capture_idb(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     destination_id: &str,
     subcommand: &[String],
@@ -1487,34 +1662,11 @@ enum AppLaunch {
     },
 }
 
-impl AppLaunch {
-    fn launch(
-        repo_root: &Utf8Path,
-        manifest: &NormalizedManifest,
-        destination_id: &str,
-        runner: &mut impl ToolRunner,
-    ) -> AtomResult<Self> {
-        if let Some(destination) = list_ios_destinations(repo_root, runner)?
-            .into_iter()
-            .find(|destination| destination.id == destination_id)
-        {
-            return launch_ios_app(repo_root, manifest, destination, runner);
-        }
-        if let Some(destination) = find_android_destination(repo_root, runner, destination_id)? {
-            return launch_android_app(repo_root, manifest, &destination, runner);
-        }
-        Err(AtomError::new(
-            AtomErrorCode::AutomationUnavailable,
-            format!("unknown destination id: {destination_id}"),
-        ))
-    }
-}
-
 fn launch_ios_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     destination: IosDestination,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<AppLaunch> {
     if !manifest.ios.enabled {
         return Err(AtomError::new(
@@ -1601,7 +1753,7 @@ fn attach_ios_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     destination_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Option<AppLaunch>> {
     if !manifest.ios.enabled {
         return Ok(None);
@@ -1627,7 +1779,7 @@ fn launch_android_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     destination: &crate::devices::android::AndroidDestination,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<AppLaunch> {
     if !manifest.android.enabled {
         return Err(AtomError::new(
@@ -1685,7 +1837,7 @@ fn attach_android_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     destination_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Option<AppLaunch>> {
     if !manifest.android.enabled {
         return Ok(None);
@@ -1718,7 +1870,7 @@ fn capture_screenshot_for_launch(
     repo_root: &Utf8Path,
     launch: &AppLaunch,
     output_path: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     match launch {
@@ -1761,7 +1913,7 @@ fn capture_ios_simulator_screenshot(
     repo_root: &Utf8Path,
     destination_id: &str,
     output_path: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     match run_idb(
         runner,
@@ -1791,7 +1943,7 @@ fn capture_ios_simulator_screenshot(
 }
 
 fn run_idb_screenshot_with_retry(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     destination_id: &str,
     output_path: &Utf8Path,
@@ -1823,7 +1975,7 @@ fn run_idb_screenshot_with_retry(
 }
 
 fn run_simctl_screenshot_with_retry(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     destination_id: &str,
     output_path: &Utf8Path,
@@ -1861,7 +2013,7 @@ fn capture_logs_for_launch(
     launch: &AppLaunch,
     output_path: &Utf8Path,
     seconds: u64,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     let contents = match launch {
@@ -1915,7 +2067,7 @@ fn capture_logs_for_launch(
 }
 
 fn capture_ios_logs_for_launch(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     destination_id: &str,
     bundle_id: &str,
@@ -1996,7 +2148,7 @@ fn capture_video_for_launch(
     launch: &AppLaunch,
     output_path: &Utf8Path,
     seconds: u64,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     match launch {
@@ -2114,7 +2266,7 @@ fn spawn_idb_video(
 fn stop_video_capture(
     repo_root: &Utf8Path,
     video: VideoCapture,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Utf8PathBuf> {
     let mut child = video.child;
     if video.platform == DestinationPlatform::Android {
@@ -2159,7 +2311,7 @@ fn stop_android_screenrecord(
     repo_root: &Utf8Path,
     serial: &str,
     child: &mut Child,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<()> {
     if wait_for_child_exit(child, Duration::from_millis(100))? {
         return Ok(());
@@ -2468,6 +2620,7 @@ mod tests {
     #[test]
     fn require_plan_capabilities_rejects_unsupported_steps() {
         let descriptor = DestinationDescriptor {
+            backend_id: "ios".to_owned(),
             id: "ios-device".to_owned(),
             platform: DestinationPlatform::Ios,
             kind: DestinationKind::Device,
@@ -2772,24 +2925,8 @@ mod tests {
 
     #[test]
     fn video_artifact_name_uses_platform_specific_extensions() {
-        let ios_name = video_artifact_name(
-            Some("session.mp4".to_owned()),
-            2,
-            &AppLaunch::IosSimulator {
-                destination_id: "SIM-123".to_owned(),
-                bundle_id: "build.atom.hello".to_owned(),
-                app_name: "Hello Atom".to_owned(),
-                app_slug: "hello-atom".to_owned(),
-            },
-        );
-        let android_name = video_artifact_name(
-            Some("session".to_owned()),
-            2,
-            &AppLaunch::Android {
-                serial: "emulator-5554".to_owned(),
-                application_id: "build.atom.hello".to_owned(),
-            },
-        );
+        let ios_name = video_artifact_name(Some("session.mp4".to_owned()), 2, "mov");
+        let android_name = video_artifact_name(Some("session".to_owned()), 2, "mp4");
 
         assert_eq!(ios_name, "session.mov");
         assert_eq!(android_name, "session.mp4");

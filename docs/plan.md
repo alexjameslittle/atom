@@ -251,16 +251,17 @@ The core abstraction should be `platform + destination`:
 
 Planned command surface:
 
-- `atom destinations --json`
-- `atom devices <ios|android> [--json]`
-- `atom evidence logs --destination <id> --output <path>`
-- `atom evidence screenshot --destination <id> --output <path>`
-- `atom evidence video --destination <id> --output <path>`
-- `atom inspect ui --destination <id> [--output <path>]`
-- `atom run <ios|android> --detach`
-- `atom stop <ios|android>`
-- `atom interact --destination <id> ...` for tap, long-press, swipe, drag, and text entry
-- `atom evaluate run --destination <id> --plan <path> --artifacts-dir <path>`
+- `atom destinations --platform <platform> --json`
+- `atom devices --platform <platform> [--json]`
+- `atom evidence logs --platform <platform> --destination <id> --output <path>`
+- `atom evidence screenshot --platform <platform> --destination <id> --output <path>`
+- `atom evidence video --platform <platform> --destination <id> --output <path>`
+- `atom inspect ui --platform <platform> --destination <id> [--output <path>]`
+- `atom run --platform <platform> --detach`
+- `atom stop --platform <platform>`
+- `atom interact --platform <platform> --destination <id> ...` for tap, long-press, swipe, drag, and
+  text entry
+- `atom evaluate run --platform <platform> --destination <id> --plan <path> --artifacts-dir <path>`
 
 Minimum evaluation plan capabilities:
 
@@ -532,20 +533,20 @@ Deliverables:
 
 - iOS `BUILD.bazel` uses `ios_application` from `rules_apple` (replaces `swift_binary`)
 - Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
-- `atom run ios` builds, installs, and launches on iOS simulator via `idb`
-- `atom run android` builds, installs, and launches on Android emulator via `adb`
-- `atom run ios|android --detach` launches, waits for an inspectable app session, and then returns
-  without holding the terminal open for log streaming
-- `atom stop ios|android` stops the selected app without uninstalling it
+- `atom run --platform ios` builds, installs, and launches on iOS simulator via `idb`
+- `atom run --platform android` builds, installs, and launches on Android emulator via `adb`
+- `atom run --platform <platform> --detach` launches, waits for an inspectable app session, and then
+  returns without holding the terminal open for log streaming
+- `atom stop --platform <platform>` stops the selected app without uninstalling it
 - Ad-hoc code signing for simulator builds
 
 Exit criteria:
 
-- `atom run ios` launches the example app on an iOS simulator
-- `atom run android` launches the example app on an Android emulator
-- `atom run ios|android --detach` leaves the example app running for follow-on inspection or
-  evidence capture
-- `atom stop ios|android` cleans up a detached example session
+- `atom run --platform ios` launches the example app on an iOS simulator
+- `atom run --platform android` launches the example app on an Android emulator
+- `atom run --platform <platform> --detach` leaves the example app running for follow-on inspection
+  or evidence capture
+- `atom stop --platform <platform>` cleans up a detached example session
 - No Xcode project or Gradle project is required
 
 ### Phase 4A: Runtime kernel
@@ -797,23 +798,23 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 
 Deliverables:
 
-- `atom run ios`
-- `atom run android`
-- `atom run ios --detach`
-- `atom run android --detach`
-- `atom stop ios`
-- `atom stop android`
+- `atom run --platform ios`
+- `atom run --platform android`
+- `atom run --platform ios --detach`
+- `atom run --platform android --detach`
+- `atom stop --platform ios`
+- `atom stop --platform android`
 - `atom test`
 - Plugin authoring and consumption docs for first-party and third-party crates
 - Example app proving first-party and third-party-style plugin composition
-- `atom destinations --json`
-- `atom devices ios|android --json`
-- `atom evidence logs`
-- `atom evidence screenshot`
-- `atom evidence video`
-- `atom inspect ui`
-- `atom interact` for tap, long-press, swipe, drag, and text entry
-- `atom evaluate run`
+- `atom destinations --platform <platform> --json`
+- `atom devices --platform <platform> --json`
+- `atom evidence logs --platform <platform>`
+- `atom evidence screenshot --platform <platform>`
+- `atom evidence video --platform <platform>`
+- `atom inspect ui --platform <platform>`
+- `atom interact --platform <platform>` for tap, long-press, swipe, drag, and text entry
+- `atom evaluate run --platform <platform>`
 - hello-world-owned demo surface module plus a plain app variant that proves automation does not
   depend on app-specific hooks
 - Repo-local skills for destination discovery, evidence capture, and UI evaluation

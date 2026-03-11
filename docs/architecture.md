@@ -13,7 +13,8 @@ Bazel is the only source of truth for build graph shape and app/module configura
 
 Dependency direction should move one way:
 
-`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-cng` -> `atom-deploy` -> `atom-cli`
+`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-backends` -> `atom-cng` -> `atom-deploy` ->
+`atom-cli`
 
 `atom-runtime` and runtime plugin libraries remain separate from CLI/CNG graph orchestration.
 
@@ -30,6 +31,10 @@ Dependency direction should move one way:
   - Loads Bazel-generated module metadata
   - Validates module inputs
   - Resolves dependency order and initialization order
+- `atom-backends`
+  - Owns compile-time backend registration primitives shared by CLI/CNG/deploy refactors
+  - Defines the seam for first-party backend composition without dynamic loading
+  - Stays platform-neutral; concrete iOS/Android behavior lives in backend implementations above it
 - `atom-cng`
   - Validates extension compatibility for modules and config/CNG plugins
   - Merges app + module + config-plugin configuration into deterministic generation plans
@@ -39,14 +44,17 @@ Dependency direction should move one way:
   - Owns app icon config parsing, validation, file contributions, and platform resource wiring
 - `atom-deploy`
   - Device discovery and destination selection
+  - Dispatches run/stop/evaluate flows through registered first-party backend contracts
   - Build/install/launch orchestration for simulators, emulators, and connected devices
   - Framework-owned evidence capture, UI inspection, interaction, and proof-bundle orchestration
   - Resolves destinations and external tool invocations for deployment workflows, including `idb`
-    for iOS and platform tooling for Android
+    for iOS and platform tooling for Android through registered first-party backends today
   - Keeps platform deployment orchestration out of `atom-cli`
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
   - Links the first-party config plugin registry used during `atom prebuild`
+  - Links the first-party backend selection model used for deploy/evaluate/CNG composition
+  - Exposes uniform backend-aware verbs such as `atom run --platform <platform>`
   - Must stay a thin wrapper, not an alternate build system
 - `atom-runtime`
   - Runtime kernel: lifecycle state machine (Created → Initializing → Running →
@@ -79,10 +87,13 @@ Dependency direction should move one way:
 2. `atom-cli` resolves the requested app target.
 3. `atom-manifest` loads app metadata from Bazel outputs.
 4. `atom-modules` loads module metadata from Bazel outputs and orders dependencies.
-5. `atom-cng` validates module + config-plugin compatibility, instantiates registered config
-   plugins, and produces a deterministic generation plan.
-6. `atom-deploy` resolves platform-specific build outputs and deployment commands when needed.
-7. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
+5. `atom-cli` selects the requested backend through the first-party registry for backend-aware
+   commands.
+6. `atom-cng` validates module + config-plugin compatibility, instantiates registered config
+   plugins, and produces a deterministic generation plan through backend planners.
+7. `atom-deploy` resolves platform-specific build outputs and deployment commands through backend
+   contracts when needed.
+8. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
    kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
    Rust-backed runtime module registrations, enter through that app-owned configuration path.
 

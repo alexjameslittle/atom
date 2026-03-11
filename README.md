@@ -22,8 +22,8 @@ This branch now implements the Phase 4 runtime/plugin slice from the spec:
   `atom-runtime`
 - a canonical example consumer in [`examples/hello-world`](examples/hello-world)
 - local and CI verification harnesses driven by `mise`
-- generated Swift and Kotlin host bootstraps that start the Rust runtime through `atom run ios` and
-  `atom run android`
+- generated Swift and Kotlin host bootstraps that start the Rust runtime through
+  `atom run --platform ios` and `atom run --platform android`
 - app-owned runtime plugin registration through `atom_runtime_config()` in the example app
 
 Current decisions:

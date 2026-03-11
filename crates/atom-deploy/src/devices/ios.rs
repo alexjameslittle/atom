@@ -51,7 +51,7 @@ impl IosDestination {
 /// Returns an error if no simulators or devices are available.
 pub fn resolve_ios_destination(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     requested_device: Option<&str>,
 ) -> AtomResult<IosDestination> {
     if let Some(requested_device) = requested_device {
@@ -77,7 +77,7 @@ pub fn resolve_ios_destination(
 
 fn resolve_requested_ios_destination(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     requested_device: &str,
 ) -> AtomResult<IosDestination> {
     let destinations = list_ios_destinations(repo_root, runner)?;
@@ -116,7 +116,7 @@ fn resolve_requested_ios_destination(
 /// Returns an error if `idb list-targets` fails or returns invalid JSON.
 pub fn list_ios_simulators(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Vec<IosDestination>> {
     Ok(list_idb_targets(repo_root, runner)?
         .into_iter()
@@ -131,7 +131,7 @@ pub fn list_ios_simulators(
 /// Returns an error if `idb list-targets` fails or returns invalid JSON.
 pub fn list_ios_destinations(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Vec<IosDestination>> {
     let mut destinations = list_idb_targets(repo_root, runner)?;
     sort_ios_destinations(&mut destinations);
@@ -188,7 +188,7 @@ pub(crate) fn sort_ios_destinations(destinations: &mut [IosDestination]) {
 /// Returns an error if the simulator cannot be booted.
 pub fn prepare_ios_simulator(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     destination: &IosDestination,
 ) -> AtomResult<String> {
     let simulator = destination.id.clone();
@@ -200,7 +200,7 @@ pub fn prepare_ios_simulator(
 
 fn list_idb_targets(
     repo_root: &Utf8Path,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<Vec<IosDestination>> {
     parse_idb_targets(&capture_tool(
         runner,

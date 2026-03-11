@@ -1,4 +1,5 @@
 mod android;
+mod backends;
 mod emit;
 mod ios;
 mod templates;
@@ -17,9 +18,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
 use serde_json::{Value, json};
 
-use crate::android::build_android_plan;
-pub use crate::emit::emit_host_tree;
-use crate::ios::build_ios_plan;
+use crate::backends::{GenerationBackendRegistry, first_party_generation_backend_registry};
+pub use crate::emit::{emit_host_tree, emit_host_tree_with_registry};
 
 pub type ConfigPluginFactory = fn(&ConfigPluginRequest) -> AtomResult<Box<dyn ConfigPlugin>>;
 
@@ -158,14 +158,27 @@ pub struct GenerationPlan {
 /// # Errors
 ///
 /// Returns an error if compatibility validation or metadata merging fails.
-#[expect(
-    clippy::too_many_lines,
-    reason = "generation planning merges module and plugin contributions in a single pass"
-)]
 pub fn build_generation_plan(
     manifest: &NormalizedManifest,
     modules: &[ResolvedModule],
     config_plugins: &ConfigPluginRegistry,
+) -> AtomResult<GenerationPlan> {
+    let registry = first_party_generation_backend_registry();
+    build_generation_plan_with_registry(manifest, modules, config_plugins, &registry)
+}
+
+/// # Errors
+///
+/// Returns an error if compatibility validation or metadata merging fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "generation planning merges module and plugin contributions in a single pass"
+)]
+pub fn build_generation_plan_with_registry(
+    manifest: &NormalizedManifest,
+    modules: &[ResolvedModule],
+    config_plugins: &ConfigPluginRegistry,
+    registry: &GenerationBackendRegistry,
 ) -> AtomResult<GenerationPlan> {
     validate_extension_compatibility(manifest, modules)?;
 
@@ -261,14 +274,18 @@ pub fn build_generation_plan(
             .collect(),
     };
 
-    let ios = manifest
-        .ios
-        .enabled
-        .then(|| build_ios_plan(&manifest.app, &manifest.build, &manifest.ios));
-    let android = manifest
-        .android
-        .enabled
-        .then(|| build_android_plan(&manifest.app, &manifest.build, &manifest.android));
+    let mut ios = None;
+    let mut android = None;
+    for backend in registry.iter() {
+        let Some(platform_plan) = backend.build_platform_plan(manifest) else {
+            continue;
+        };
+        match backend.id() {
+            "ios" => ios = Some(platform_plan),
+            "android" => android = Some(platform_plan),
+            _ => {}
+        }
+    }
 
     let mut generated_files = vec![aggregate_schema];
     generated_files.extend(schema.modules.iter().cloned());
@@ -877,20 +894,23 @@ fn xml_escape(value: &str) -> String {
 mod tests {
     use std::fs;
 
+    use atom_backends::BackendDefinition;
     use atom_manifest::{
         AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, JsonMap,
         ModuleRequest, NormalizedManifest,
     };
     use atom_modules::{MethodSpec, ModuleKind, ModuleManifest, ResolvedModule};
-    use camino::Utf8PathBuf;
+    use camino::{Utf8Path, Utf8PathBuf};
     use serde_json::json;
     use tempfile::tempdir;
 
     use super::{
         ConfigPlugin, ConfigPluginContext, ConfigPluginRegistry, ContributedFile, FileSource,
-        PlatformContribution, build_generation_plan, emit_host_tree, object_from_value,
-        render_prebuild_plan,
+        GenerationPlan, PlatformContribution, PlatformPlan, build_generation_plan,
+        build_generation_plan_with_registry, emit_host_tree, emit_host_tree_with_registry,
+        object_from_value, render_prebuild_plan,
     };
+    use crate::backends::{GenerationBackend, GenerationBackendRegistry};
 
     struct FixturePlugin;
 
@@ -1084,6 +1104,94 @@ mod tests {
         assert!(
             root.join("generated/android/hello-atom/BUILD.bazel")
                 .exists()
+        );
+    }
+
+    #[test]
+    fn cng_uses_registered_backends_for_planning_and_emission() {
+        struct FixtureBackend;
+
+        impl BackendDefinition for FixtureBackend {
+            fn id(&self) -> &'static str {
+                "ios"
+            }
+
+            fn platform(&self) -> &'static str {
+                "ios"
+            }
+        }
+
+        impl GenerationBackend for FixtureBackend {
+            fn build_platform_plan(&self, manifest: &NormalizedManifest) -> Option<PlatformPlan> {
+                Some(PlatformPlan {
+                    generated_root: manifest.build.generated_root.join("fixture").join("ios"),
+                    target: "//generated/fixture/ios:app".to_owned(),
+                    files: vec![
+                        manifest
+                            .build
+                            .generated_root
+                            .join("fixture")
+                            .join("ios")
+                            .join("FIXTURE.txt"),
+                    ],
+                })
+            }
+
+            fn emit_host_tree(
+                &self,
+                repo_root: &Utf8Path,
+                plan: &GenerationPlan,
+            ) -> atom_ffi::AtomResult<()> {
+                crate::emit::write_file(
+                    &repo_root.join(
+                        plan.ios
+                            .as_ref()
+                            .expect("fixture backend should populate ios plan")
+                            .generated_root
+                            .join("FIXTURE.txt"),
+                    ),
+                    "fixture backend",
+                )
+            }
+
+            fn generated_root(&self, plan: &GenerationPlan) -> Option<Utf8PathBuf> {
+                plan.ios.as_ref().map(|ios| ios.generated_root.clone())
+            }
+        }
+
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let (manifest, modules) = write_fixture(&root);
+        let mut registry = GenerationBackendRegistry::new();
+        registry
+            .register(Box::new(FixtureBackend))
+            .expect("fixture backend should register");
+
+        let plan = build_generation_plan_with_registry(
+            &manifest,
+            &modules,
+            &fixture_registry(),
+            &registry,
+        )
+        .expect("plan");
+        assert_eq!(
+            plan.ios
+                .as_ref()
+                .expect("fixture backend should produce ios plan")
+                .generated_root,
+            Utf8PathBuf::from("generated/fixture/ios")
+        );
+        assert!(plan.android.is_none());
+        assert!(
+            plan.generated_files
+                .contains(&Utf8PathBuf::from("generated/fixture/ios/FIXTURE.txt"))
+        );
+
+        let roots = emit_host_tree_with_registry(&root, &plan, &registry).expect("host tree");
+        assert_eq!(roots, vec![Utf8PathBuf::from("generated/fixture/ios")]);
+        assert_eq!(
+            fs::read_to_string(root.join("generated/fixture/ios/FIXTURE.txt")).expect("fixture"),
+            "fixture backend"
         );
     }
 

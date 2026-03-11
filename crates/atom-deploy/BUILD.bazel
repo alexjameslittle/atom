@@ -8,6 +8,7 @@ rust_library(
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
+        "//crates/atom-backends",
         "//crates/atom-ffi",
         "//crates/atom-manifest",
         "@crates//:camino",
