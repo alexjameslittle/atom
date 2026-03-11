@@ -1,22 +1,20 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library")
 
 rust_library(
-    name = "atom-backends",
+    name = "atom-backend-ios",
     srcs = glob(["src/**/*.rs"]),
-    crate_name = "atom_backends",
+    crate_name = "atom_backend_ios",
     crate_root = "src/lib.rs",
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
+        "//crates/atom-backends",
+        "//crates/atom-cng",
+        "//crates/atom-deploy",
         "//crates/atom-ffi",
         "//crates/atom-manifest",
         "//crates/atom-modules",
         "@crates//:camino",
-        "@crates//:serde",
+        "@crates//:minijinja",
     ],
-)
-
-rust_test(
-    name = "atom-backends-test",
-    crate = ":atom-backends",
 )

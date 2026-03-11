@@ -3,57 +3,26 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+use atom_backends::{DeployBackend, DeployBackendRegistry, LaunchMode, ToolRunner};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::backends::{DeployBackendRegistry, first_party_deploy_backend_registry};
 use crate::devices::android::{prepare_android_emulator, resolve_android_device};
 use crate::devices::ios::{
     IosDestination, IosDestinationKind, prepare_ios_simulator, resolve_ios_destination,
 };
 use crate::evaluate::wait_for_ios_launch_ready;
 use crate::progress::run_step;
-use crate::tools::{
-    ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool, stream_tool,
-};
+use crate::tools::{capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool, stream_tool};
 
 const ANDROID_APP_PID_WAIT_ATTEMPTS: usize = 30;
 const ANDROID_APP_PID_WAIT_INTERVAL: Duration = Duration::from_millis(500);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaunchMode {
-    Attached,
-    Detached,
-}
 
 /// # Errors
 ///
 /// Returns an error if the backend id is unknown, disabled for the app, or deployment fails.
 pub fn deploy_backend(
-    repo_root: &Utf8Path,
-    manifest: &NormalizedManifest,
-    backend_id: &str,
-    requested_device: Option<&str>,
-    launch_mode: LaunchMode,
-    runner: &mut impl ToolRunner,
-) -> AtomResult<()> {
-    let registry = first_party_deploy_backend_registry();
-    deploy_backend_with_registry(
-        repo_root,
-        manifest,
-        &registry,
-        backend_id,
-        requested_device,
-        launch_mode,
-        runner,
-    )
-}
-
-/// # Errors
-///
-/// Returns an error if the backend id is unknown, disabled for the app, or deployment fails.
-pub fn deploy_backend_with_registry(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     registry: &DeployBackendRegistry,
@@ -73,27 +42,6 @@ pub fn deploy_backend_with_registry(
 pub fn stop_backend(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
-    backend_id: &str,
-    requested_device: Option<&str>,
-    runner: &mut impl ToolRunner,
-) -> AtomResult<()> {
-    let registry = first_party_deploy_backend_registry();
-    stop_backend_with_registry(
-        repo_root,
-        manifest,
-        &registry,
-        backend_id,
-        requested_device,
-        runner,
-    )
-}
-
-/// # Errors
-///
-/// Returns an error if the backend id is unknown, disabled for the app, or stopping fails.
-pub fn stop_backend_with_registry(
-    repo_root: &Utf8Path,
-    manifest: &NormalizedManifest,
     registry: &DeployBackendRegistry,
     backend_id: &str,
     requested_device: Option<&str>,
@@ -107,7 +55,7 @@ pub fn stop_backend_with_registry(
 fn resolve_backend<'a>(
     registry: &'a DeployBackendRegistry,
     backend_id: &str,
-) -> AtomResult<&'a dyn crate::backends::DeployBackend> {
+) -> AtomResult<&'a dyn DeployBackend> {
     registry.get(backend_id).map(Box::as_ref).ok_or_else(|| {
         AtomError::with_path(
             AtomErrorCode::CliUsageError,

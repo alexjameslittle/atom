@@ -24,6 +24,8 @@ rust_test(
     name = "atom-cng-test",
     crate = ":atom-cng",
     deps = [
+        "//crates/atom-backend-android",
+        "//crates/atom-backend-ios",
         "@crates//:pretty_assertions",
         "@crates//:tempfile",
     ],

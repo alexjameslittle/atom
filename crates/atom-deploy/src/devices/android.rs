@@ -2,11 +2,12 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use atom_backends::ToolRunner;
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8Path;
 
 use crate::devices::{choose_from_menu, should_prompt_interactively};
-use crate::tools::{ToolRunner, capture_tool};
+use crate::tools::capture_tool;
 
 const ANDROID_BOOT_TIMEOUT_ATTEMPTS: usize = 60;
 const ANDROID_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -402,7 +403,7 @@ mod tests {
         AndroidDestination, find_android_destination, parse_emulator_avd_name,
         prepare_android_emulator,
     };
-    use crate::tools::ToolRunner;
+    use atom_backends::ToolRunner;
 
     #[derive(Default)]
     struct FakeToolRunner {

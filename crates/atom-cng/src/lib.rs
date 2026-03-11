@@ -1,25 +1,27 @@
-mod android;
-mod backends;
 mod emit;
-mod ios;
 mod templates;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+pub use atom_backends::{
+    ContributedFile, FileSource, GenerationBackendRegistry, GenerationPlan, PlatformContribution,
+    PlatformPlan, SchemaFilePlan, SchemaPlan,
+};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::{
-    AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, FRAMEWORK_ATOM_API_LEVEL,
-    FRAMEWORK_VERSION, IosConfig, NormalizedManifest,
+    AndroidConfig, AppConfig, ConfigPluginRequest, FRAMEWORK_ATOM_API_LEVEL, FRAMEWORK_VERSION,
+    IosConfig, NormalizedManifest,
 };
 use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
 use serde_json::{Value, json};
 
-use crate::backends::{GenerationBackendRegistry, first_party_generation_backend_registry};
-pub use crate::emit::{emit_host_tree, emit_host_tree_with_registry};
+pub use crate::emit::emit_host_tree;
+pub use crate::emit::write_file as write_generated_file;
+pub use crate::templates::{render as render_template, static_template};
 
 pub type ConfigPluginFactory = fn(&ConfigPluginRequest) -> AtomResult<Box<dyn ConfigPlugin>>;
 
@@ -48,46 +50,6 @@ pub struct ConfigPluginContext<'a> {
     pub app: &'a AppConfig,
     pub repo_root: &'a Utf8Path,
     pub generated_root: &'a Utf8Path,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlatformPlan {
-    pub generated_root: Utf8PathBuf,
-    pub target: String,
-    pub files: Vec<Utf8PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaPlan {
-    pub aggregate: Utf8PathBuf,
-    pub modules: Vec<Utf8PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaFilePlan {
-    pub source: Utf8PathBuf,
-    pub output: Utf8PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContributedFile {
-    pub source: FileSource,
-    pub output: Utf8PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileSource {
-    Copy(Utf8PathBuf),
-    Content(String),
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct PlatformContribution {
-    pub files: Vec<ContributedFile>,
-    pub plist_entries: JsonMap,
-    pub android_manifest_entries: JsonMap,
-    pub bazel_resources: Vec<String>,
-    pub bazel_resource_globs: Vec<String>,
 }
 
 #[derive(Default)]
@@ -130,43 +92,6 @@ impl ConfigPluginRegistry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct GenerationPlan {
-    pub version: u16,
-    pub status: String,
-    pub app: AppConfig,
-    pub build: BuildConfig,
-    pub ios_config: Option<IosConfig>,
-    pub android_config: Option<AndroidConfig>,
-    pub modules: Vec<ResolvedModule>,
-    pub permissions: Vec<String>,
-    pub plist: JsonMap,
-    pub android_manifest: JsonMap,
-    pub entitlements: JsonMap,
-    pub schema: SchemaPlan,
-    pub schema_files: Vec<SchemaFilePlan>,
-    pub contributed_files: Vec<ContributedFile>,
-    pub ios_resources: Vec<String>,
-    pub ios_resource_globs: Vec<String>,
-    pub android_resources: Vec<String>,
-    pub ios: Option<PlatformPlan>,
-    pub android: Option<PlatformPlan>,
-    pub generated_files: Vec<Utf8PathBuf>,
-    pub warnings: Vec<String>,
-}
-
-/// # Errors
-///
-/// Returns an error if compatibility validation or metadata merging fails.
-pub fn build_generation_plan(
-    manifest: &NormalizedManifest,
-    modules: &[ResolvedModule],
-    config_plugins: &ConfigPluginRegistry,
-) -> AtomResult<GenerationPlan> {
-    let registry = first_party_generation_backend_registry();
-    build_generation_plan_with_registry(manifest, modules, config_plugins, &registry)
-}
-
 /// # Errors
 ///
 /// Returns an error if compatibility validation or metadata merging fails.
@@ -174,7 +99,7 @@ pub fn build_generation_plan(
     clippy::too_many_lines,
     reason = "generation planning merges module and plugin contributions in a single pass"
 )]
-pub fn build_generation_plan_with_registry(
+pub fn build_generation_plan(
     manifest: &NormalizedManifest,
     modules: &[ResolvedModule],
     config_plugins: &ConfigPluginRegistry,
@@ -398,7 +323,10 @@ pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
     builder.finished_data().to_vec()
 }
 
-pub(crate) fn render_plist_document(plist: &JsonMap) -> AtomResult<String> {
+/// # Errors
+///
+/// Returns an error if the plist payload cannot be rendered as XML.
+pub fn render_plist_document(plist: &JsonMap) -> AtomResult<String> {
     let mut output = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n",
     );
@@ -407,7 +335,10 @@ pub(crate) fn render_plist_document(plist: &JsonMap) -> AtomResult<String> {
     Ok(output)
 }
 
-pub(crate) fn render_android_manifest_document(
+/// # Errors
+///
+/// Returns an error if the Android manifest payload cannot be rendered as XML.
+pub fn render_android_manifest_document(
     package_name: &str,
     manifest: &JsonMap,
 ) -> AtomResult<String> {
@@ -490,7 +421,7 @@ fn default_ios_plist(app: &AppConfig, ios: &IosConfig) -> JsonMap {
                         "UISceneConfigurationName": "Default Configuration",
                         "UISceneDelegateClassName": format!(
                             "{}.AtomSceneDelegate",
-                            ios::swift_support_module_name(app)
+                            swift_support_module_name(app)
                         ),
                     }
                 ]
@@ -527,6 +458,10 @@ fn default_android_manifest(app: &AppConfig, android: &AndroidConfig) -> JsonMap
             }
         }
     }))
+}
+
+fn swift_support_module_name(app: &AppConfig) -> String {
+    format!("atom_{}_support", app.slug.replace('-', "_"))
 }
 
 fn normalize_schema_output(schema_file: &Utf8Path) -> Utf8PathBuf {
@@ -894,7 +829,13 @@ fn xml_escape(value: &str) -> String {
 mod tests {
     use std::fs;
 
+    use atom_backend_android::register_generation_backend as register_android_generation_backend;
+    use atom_backend_ios::register_generation_backend as register_ios_generation_backend;
     use atom_backends::BackendDefinition;
+    use atom_backends::{
+        ContributedFile, FileSource, GenerationBackend, GenerationBackendRegistry, GenerationPlan,
+        PlatformContribution, PlatformPlan,
+    };
     use atom_manifest::{
         AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, JsonMap,
         ModuleRequest, NormalizedManifest,
@@ -905,12 +846,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ConfigPlugin, ConfigPluginContext, ConfigPluginRegistry, ContributedFile, FileSource,
-        GenerationPlan, PlatformContribution, PlatformPlan, build_generation_plan,
-        build_generation_plan_with_registry, emit_host_tree, emit_host_tree_with_registry,
-        object_from_value, render_prebuild_plan,
+        ConfigPlugin, ConfigPluginContext, ConfigPluginRegistry, build_generation_plan,
+        emit_host_tree, object_from_value, render_prebuild_plan,
     };
-    use crate::backends::{GenerationBackend, GenerationBackendRegistry};
 
     struct FixturePlugin;
 
@@ -1061,13 +999,28 @@ mod tests {
         ConfigPluginRegistry::default()
     }
 
+    fn first_party_generation_registry() -> GenerationBackendRegistry {
+        let mut registry = GenerationBackendRegistry::new();
+        register_ios_generation_backend(&mut registry).expect("ios backend should register");
+        register_android_generation_backend(&mut registry)
+            .expect("android backend should register");
+        registry
+    }
+
     #[test]
     fn plan_contains_required_generated_files() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let (manifest, modules) = write_fixture(&root);
+        let generation_registry = first_party_generation_registry();
 
-        let plan = build_generation_plan(&manifest, &modules, &fixture_registry()).expect("plan");
+        let plan = build_generation_plan(
+            &manifest,
+            &modules,
+            &fixture_registry(),
+            &generation_registry,
+        )
+        .expect("plan");
 
         assert!(
             plan.generated_files
@@ -1094,10 +1047,17 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let (manifest, modules) = write_fixture(&root);
+        let generation_registry = first_party_generation_registry();
 
-        let plan = build_generation_plan(&manifest, &modules, &fixture_registry()).expect("plan");
+        let plan = build_generation_plan(
+            &manifest,
+            &modules,
+            &fixture_registry(),
+            &generation_registry,
+        )
+        .expect("plan");
 
-        emit_host_tree(&root, &plan).expect("host tree");
+        emit_host_tree(&root, &plan, &generation_registry).expect("host tree");
 
         assert!(root.join("generated/schema/atom.fbs").exists());
         assert!(root.join("generated/ios/hello-atom/BUILD.bazel").exists());
@@ -1167,13 +1127,8 @@ mod tests {
             .register(Box::new(FixtureBackend))
             .expect("fixture backend should register");
 
-        let plan = build_generation_plan_with_registry(
-            &manifest,
-            &modules,
-            &fixture_registry(),
-            &registry,
-        )
-        .expect("plan");
+        let plan = build_generation_plan(&manifest, &modules, &fixture_registry(), &registry)
+            .expect("plan");
         assert_eq!(
             plan.ios
                 .as_ref()
@@ -1187,7 +1142,7 @@ mod tests {
                 .contains(&Utf8PathBuf::from("generated/fixture/ios/FIXTURE.txt"))
         );
 
-        let roots = emit_host_tree_with_registry(&root, &plan, &registry).expect("host tree");
+        let roots = emit_host_tree(&root, &plan, &registry).expect("host tree");
         assert_eq!(roots, vec![Utf8PathBuf::from("generated/fixture/ios")]);
         assert_eq!(
             fs::read_to_string(root.join("generated/fixture/ios/FIXTURE.txt")).expect("fixture"),
@@ -1200,9 +1155,16 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let (manifest, modules) = write_fixture(&root);
+        let generation_registry = first_party_generation_registry();
 
-        let plan = build_generation_plan(&manifest, &modules, &fixture_registry()).expect("plan");
-        emit_host_tree(&root, &plan).expect("host tree");
+        let plan = build_generation_plan(
+            &manifest,
+            &modules,
+            &fixture_registry(),
+            &generation_registry,
+        )
+        .expect("plan");
+        emit_host_tree(&root, &plan, &generation_registry).expect("host tree");
 
         let ios_build =
             fs::read_to_string(root.join("generated/ios/hello-atom/BUILD.bazel")).expect("ios");
@@ -1337,8 +1299,10 @@ mod tests {
 
         let mut registry = fixture_registry();
         register_fixture_plugin(&mut registry);
-        let plan = build_generation_plan(&manifest, &modules, &registry).expect("plan");
-        emit_host_tree(&root, &plan).expect("host tree");
+        let generation_registry = first_party_generation_registry();
+        let plan = build_generation_plan(&manifest, &modules, &registry, &generation_registry)
+            .expect("plan");
+        emit_host_tree(&root, &plan, &generation_registry).expect("host tree");
 
         let ios_plist =
             fs::read_to_string(root.join("generated/ios/hello-atom/Info.generated.plist"))
@@ -1398,8 +1362,11 @@ mod tests {
         let mut registry = fixture_registry();
         register_fixture_plugin(&mut registry);
 
-        let initial_plan = build_generation_plan(&manifest, &modules, &registry).expect("plan");
-        emit_host_tree(&root, &initial_plan).expect("host tree");
+        let generation_registry = first_party_generation_registry();
+        let initial_plan =
+            build_generation_plan(&manifest, &modules, &registry, &generation_registry)
+                .expect("plan");
+        emit_host_tree(&root, &initial_plan, &generation_registry).expect("host tree");
 
         let generated_svg =
             root.join("cng-output/ios/hello-atom/resources/AppIcon.icon/Assets/atom.svg");
@@ -1407,8 +1374,10 @@ mod tests {
 
         fs::remove_file(root.join("assets/AppIcon.icon/Assets/atom.svg")).expect("remove svg");
 
-        let second_plan = build_generation_plan(&manifest, &modules, &registry).expect("plan");
-        emit_host_tree(&root, &second_plan).expect("host tree");
+        let second_plan =
+            build_generation_plan(&manifest, &modules, &registry, &generation_registry)
+                .expect("plan");
+        emit_host_tree(&root, &second_plan, &generation_registry).expect("host tree");
 
         assert!(!generated_svg.exists());
         assert!(
@@ -1424,8 +1393,14 @@ mod tests {
         let (manifest, mut modules) = write_fixture(&root);
         modules[0].manifest.atom_api_level = 2;
 
-        let error = build_generation_plan(&manifest, &modules, &fixture_registry())
-            .expect_err("incompatible module should fail");
+        let generation_registry = first_party_generation_registry();
+        let error = build_generation_plan(
+            &manifest,
+            &modules,
+            &fixture_registry(),
+            &generation_registry,
+        )
+        .expect_err("incompatible module should fail");
         assert_eq!(error.code, atom_ffi::AtomErrorCode::ExtensionIncompatible);
     }
 }

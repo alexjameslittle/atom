@@ -1,7 +1,7 @@
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use minijinja::Environment;
 
-pub(crate) fn env() -> Environment<'static> {
+pub fn env() -> Environment<'static> {
     let mut env = Environment::new();
     env.add_template(
         "ios/BUILD.bazel",
@@ -66,7 +66,10 @@ pub(crate) fn env() -> Environment<'static> {
     env
 }
 
-pub(crate) fn render(name: &str, ctx: minijinja::Value) -> AtomResult<String> {
+/// # Errors
+///
+/// Returns an error if the named template cannot be loaded or rendered.
+pub fn render(name: &str, ctx: minijinja::Value) -> AtomResult<String> {
     let env = env();
     let template = env.get_template(name).map_err(|error| {
         AtomError::new(
@@ -80,4 +83,20 @@ pub(crate) fn render(name: &str, ctx: minijinja::Value) -> AtomResult<String> {
             format!("failed to render template {name}: {error}"),
         )
     })
+}
+
+/// # Errors
+///
+/// Returns an error if the named static template is unknown.
+pub fn static_template(name: &str) -> AtomResult<&'static str> {
+    match name {
+        "ios/LaunchScreen.storyboard" => Ok(include_str!("templates/ios/LaunchScreen.storyboard")),
+        "ios/atom_runtime.h" => Ok(include_str!("templates/ios/atom_runtime.h")),
+        "ios/AtomAppDelegate.swift" => Ok(include_str!("templates/ios/AtomAppDelegate.swift")),
+        "ios/main.swift" => Ok(include_str!("templates/ios/main.swift")),
+        _ => Err(AtomError::new(
+            AtomErrorCode::CngWriteError,
+            format!("failed to load static template {name}"),
+        )),
+    }
 }

@@ -1,4 +1,3 @@
-mod backends;
 mod deploy;
 pub mod destinations;
 pub mod devices;
@@ -7,38 +6,36 @@ pub mod progress;
 mod tools;
 
 pub use crate::deploy::{
-    LaunchMode, deploy_android, deploy_backend, deploy_ios, generated_target, stop_android,
-    stop_backend, stop_ios,
+    deploy_android, deploy_backend, deploy_ios, generated_target, stop_android, stop_backend,
+    stop_ios,
 };
+pub use crate::evaluate::{new_android_automation_session, new_ios_automation_session};
 pub use crate::tools::{
-    CommandOutput, ProcessRunner, ToolRunner, capture_bazel, capture_bazel_owned,
-    capture_json_tool, capture_tool, find_bazel_output, find_bazel_output_owned, run_bazel,
-    run_bazel_owned, run_tool,
+    CommandOutput, ProcessRunner, capture_bazel, capture_bazel_owned, capture_json_tool,
+    capture_tool, find_bazel_output, find_bazel_output_owned, run_bazel, run_bazel_owned, run_tool,
 };
+pub use atom_backends::{LaunchMode, ToolRunner};
 
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
     use std::fs;
 
+    use atom_backend_android::register_deploy_backend as register_android_deploy_backend;
+    use atom_backend_ios::register_deploy_backend as register_ios_deploy_backend;
+    use atom_backends::{
+        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+        DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
+        LaunchMode, SessionLaunchBehavior, ToolRunner,
+    };
     use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, IosConfig, NormalizedManifest};
     use camino::{Utf8Path, Utf8PathBuf};
     use tempfile::tempdir;
 
-    use crate::backends::{BackendAutomationSession, DeployBackend, DeployBackendRegistry};
-    use crate::deploy::{
-        LaunchMode, deploy_android, deploy_backend_with_registry, deploy_ios, stop_android,
-        stop_ios,
-    };
-    use crate::destinations::{
-        DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
-        list_destinations, list_destinations_with_registry,
-    };
+    use crate::deploy::{deploy_android, deploy_backend, deploy_ios, stop_android, stop_ios};
+    use crate::destinations::list_destinations;
     use crate::devices::android::AndroidDestination;
     use crate::devices::ios::{IosDestination, IosDestinationKind, select_default_ios_destination};
-    use crate::evaluate::SessionLaunchBehavior;
-    use crate::tools::ToolRunner;
-    use atom_backends::BackendDefinition;
 
     #[derive(Default)]
     struct FakeToolRunner {
@@ -130,6 +127,13 @@ mod tests {
             r#"{{"udid":"SIM-123","name":"iPhone 16","state":"{simulator_state}","type":"simulator","os_version":"18.2","architecture":"x86_64"}}
 {{"udid":"00008130-001431E90A78001C","name":"Alex's iPhone","state":"Booted","type":"device","os_version":"18.2","architecture":"arm64"}}"#
         )
+    }
+
+    fn first_party_registry() -> DeployBackendRegistry {
+        let mut registry = DeployBackendRegistry::new();
+        register_ios_deploy_backend(&mut registry).expect("ios backend should register");
+        register_android_deploy_backend(&mut registry).expect("android backend should register");
+        registry
     }
 
     #[test]
@@ -521,7 +525,8 @@ mod tests {
             ]),
         };
 
-        let destinations = list_destinations(&root, &mut runner).expect("destinations");
+        let registry = first_party_registry();
+        let destinations = list_destinations(&root, &registry, &mut runner).expect("destinations");
 
         assert!(destinations.iter().any(|destination| {
             destination.id == "SIM-123"
@@ -659,8 +664,7 @@ mod tests {
             }))
             .expect("beta backend should register");
 
-        let destinations =
-            list_destinations_with_registry(&root, &registry, &mut runner).expect("destinations");
+        let destinations = list_destinations(&root, &registry, &mut runner).expect("destinations");
 
         assert_eq!(destinations.len(), 2);
         assert_eq!(
@@ -745,7 +749,7 @@ mod tests {
             .register(Box::new(FixtureBackend))
             .expect("fixture backend should register");
 
-        deploy_backend_with_registry(
+        deploy_backend(
             &root,
             &manifest,
             &registry,

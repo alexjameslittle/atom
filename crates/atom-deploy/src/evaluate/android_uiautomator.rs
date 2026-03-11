@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 use std::thread;
 use std::time::Duration;
 
+use atom_backends::ToolRunner;
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8Path;
 
-use crate::tools::{ToolRunner, capture_tool, run_tool};
+use crate::tools::{capture_tool, run_tool};
 
 use super::{
     InteractionRequest, InteractionResult, ScreenInfo, UiBounds, UiNode, UiSnapshot,

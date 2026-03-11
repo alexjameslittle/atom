@@ -1,29 +1,23 @@
-use atom_backends::BackendDefinition;
+use atom_backends::{
+    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform, LaunchMode,
+    SessionLaunchBehavior, ToolRunner,
+};
+use atom_deploy::devices::ios::{IosDestination, IosDestinationKind, list_ios_destinations};
+use atom_deploy::{deploy_ios, new_ios_automation_session, stop_ios};
 use atom_ffi::AtomResult;
 use atom_manifest::NormalizedManifest;
 use camino::Utf8Path;
 
-use crate::backends::{BackendAutomationSession, DeployBackend, DeployBackendRegistry};
-use crate::deploy::{LaunchMode, deploy_ios, stop_ios};
-use crate::destinations::{
-    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
-};
-use crate::devices::ios::{IosDestination, IosDestinationKind, list_ios_destinations};
-use crate::evaluate::{SessionLaunchBehavior, new_ios_automation_session};
-use crate::tools::ToolRunner;
-
 const BACKEND_ID: &str = "ios";
 
-pub(super) struct IosDestinationBackend;
+struct IosDeployBackend;
 
-/// # Errors
-///
-/// Returns an error if the backend id is registered more than once.
 pub fn register(registry: &mut DeployBackendRegistry) -> AtomResult<()> {
-    registry.register(Box::new(IosDestinationBackend))
+    registry.register(Box::new(IosDeployBackend))
 }
 
-impl BackendDefinition for IosDestinationBackend {
+impl BackendDefinition for IosDeployBackend {
     fn id(&self) -> &'static str {
         BACKEND_ID
     }
@@ -33,7 +27,7 @@ impl BackendDefinition for IosDestinationBackend {
     }
 }
 
-impl DeployBackend for IosDestinationBackend {
+impl DeployBackend for IosDeployBackend {
     fn is_enabled(&self, manifest: &NormalizedManifest) -> bool {
         manifest.ios.enabled
     }
@@ -94,9 +88,7 @@ impl DeployBackend for IosDestinationBackend {
     }
 }
 
-pub(crate) fn destination_descriptor_from_ios(
-    destination: IosDestination,
-) -> DestinationDescriptor {
+fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDescriptor {
     let display_name = destination.display_label();
     let id = destination.id.clone();
     let kind = match destination.kind {

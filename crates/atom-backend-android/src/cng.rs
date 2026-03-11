@@ -1,13 +1,51 @@
+use atom_backends::{
+    BackendDefinition, GenerationBackend, GenerationBackendRegistry, GenerationPlan, PlatformPlan,
+};
+use atom_cng::{render_android_manifest_document, render_template, write_generated_file};
 use atom_ffi::AtomResult;
-use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, metadata_target};
+use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, NormalizedManifest, metadata_target};
 use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 use minijinja::context;
 
-use crate::templates::render;
-use crate::{GenerationPlan, PlatformPlan};
+const BACKEND_ID: &str = "android";
 
-pub(crate) fn build_android_plan(
+struct AndroidGenerationBackend;
+
+pub fn register(registry: &mut GenerationBackendRegistry) -> AtomResult<()> {
+    registry.register(Box::new(AndroidGenerationBackend))
+}
+
+impl BackendDefinition for AndroidGenerationBackend {
+    fn id(&self) -> &'static str {
+        BACKEND_ID
+    }
+
+    fn platform(&self) -> &'static str {
+        "android"
+    }
+}
+
+impl GenerationBackend for AndroidGenerationBackend {
+    fn build_platform_plan(&self, manifest: &NormalizedManifest) -> Option<PlatformPlan> {
+        manifest
+            .android
+            .enabled
+            .then(|| build_android_plan(&manifest.app, &manifest.build, &manifest.android))
+    }
+
+    fn emit_host_tree(&self, repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
+        emit_android_host_tree(repo_root, plan)
+    }
+
+    fn generated_root(&self, plan: &GenerationPlan) -> Option<Utf8PathBuf> {
+        plan.android
+            .as_ref()
+            .map(|android| android.generated_root.clone())
+    }
+}
+
+fn build_android_plan(
     app: &AppConfig,
     build: &BuildConfig,
     android: &AndroidConfig,
@@ -35,7 +73,7 @@ pub(crate) fn build_android_plan(
     }
 }
 
-pub(crate) fn render_android_build_file(
+fn render_android_build_file(
     app: &AppConfig,
     modules: &[ResolvedModule],
     android: &AndroidConfig,
@@ -48,7 +86,7 @@ pub(crate) fn render_android_build_file(
         .iter()
         .map(|m| metadata_target(&m.request.target_label, "_android_srcs"))
         .collect::<AtomResult<_>>()?;
-    render(
+    render_template(
         "android/BUILD.bazel",
         context! {
             jni_prefix => jni_prefix(package_name),
@@ -62,21 +100,15 @@ pub(crate) fn render_android_build_file(
     )
 }
 
-pub(crate) fn render_android_manifest_xml(
-    android: &AndroidConfig,
-    manifest: &JsonMap,
-) -> AtomResult<String> {
-    crate::render_android_manifest_document(
+fn render_android_manifest_xml(android: &AndroidConfig, manifest: &JsonMap) -> AtomResult<String> {
+    render_android_manifest_document(
         android.application_id.as_deref().unwrap_or_default(),
         manifest,
     )
 }
 
-pub(crate) fn render_kotlin_application(
-    app: &AppConfig,
-    android: &AndroidConfig,
-) -> AtomResult<String> {
-    render(
+fn render_kotlin_application(app: &AppConfig, android: &AndroidConfig) -> AtomResult<String> {
+    render_template(
         "android/AtomApplication.kt",
         context! {
             package_name => android.application_id.as_deref().unwrap_or_default(),
@@ -86,12 +118,12 @@ pub(crate) fn render_kotlin_application(
     )
 }
 
-pub(crate) fn render_kotlin_bindings(
+fn render_kotlin_bindings(
     modules: &[ResolvedModule],
     android: &AndroidConfig,
 ) -> AtomResult<String> {
     let module_ids: Vec<&str> = modules.iter().map(|m| m.manifest.id.as_str()).collect();
-    render(
+    render_template(
         "android/AtomBindings.kt",
         context! {
             package_name => android.application_id.as_deref().unwrap_or_default(),
@@ -100,12 +132,8 @@ pub(crate) fn render_kotlin_bindings(
     )
 }
 
-pub(crate) fn render_kotlin_main_activity(
-    app: &AppConfig,
-    _generated_root: &Utf8Path,
-    android: &AndroidConfig,
-) -> AtomResult<String> {
-    render(
+fn render_kotlin_main_activity(app: &AppConfig, android: &AndroidConfig) -> AtomResult<String> {
+    render_template(
         "android/MainActivity.kt",
         context! {
             package_name => android.application_id.as_deref().unwrap_or_default(),
@@ -115,11 +143,8 @@ pub(crate) fn render_kotlin_main_activity(
     )
 }
 
-pub(crate) fn render_android_runtime_jni(
-    app: &AppConfig,
-    android: &AndroidConfig,
-) -> AtomResult<String> {
-    render(
+fn render_android_runtime_jni(app: &AppConfig, android: &AndroidConfig) -> AtomResult<String> {
+    render_template(
         "android/atom_runtime_jni.rs",
         context! {
             entry_crate_name => &app.entry_crate_name,
@@ -128,7 +153,7 @@ pub(crate) fn render_android_runtime_jni(
     )
 }
 
-pub(crate) fn kotlin_package_dir(application_id: &str) -> Utf8PathBuf {
+fn kotlin_package_dir(application_id: &str) -> Utf8PathBuf {
     Utf8PathBuf::from(application_id.replace('.', "/"))
 }
 
@@ -153,10 +178,7 @@ fn jni_mangle_segment(value: &str) -> String {
     mangled
 }
 
-pub(crate) fn emit_android_host_tree(
-    repo_root: &Utf8Path,
-    plan: &GenerationPlan,
-) -> AtomResult<()> {
+fn emit_android_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
     let Some(android) = &plan.android else {
         return Ok(());
     };
@@ -164,7 +186,7 @@ pub(crate) fn emit_android_host_tree(
         .android_config
         .as_ref()
         .expect("android config should exist when android output exists");
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root.join(&android.generated_root).join("BUILD.bazel"),
         &render_android_build_file(
             &plan.app,
@@ -173,13 +195,13 @@ pub(crate) fn emit_android_host_tree(
             &plan.android_resources,
         )?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&android.generated_root)
             .join("AndroidManifest.generated.xml"),
         &render_android_manifest_xml(android_config, &plan.android_manifest)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&android.generated_root)
             .join("atom_runtime_jni.rs"),
@@ -194,17 +216,17 @@ pub(crate) fn emit_android_host_tree(
                 .as_deref()
                 .expect("android application id should exist when enabled"),
         ));
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root.join(&package_dir).join("AtomApplication.kt"),
         &render_kotlin_application(&plan.app, android_config)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root.join(&package_dir).join("AtomBindings.kt"),
         &render_kotlin_bindings(&plan.modules, android_config)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root.join(&package_dir).join("MainActivity.kt"),
-        &render_kotlin_main_activity(&plan.app, &android.generated_root, android_config)?,
+        &render_kotlin_main_activity(&plan.app, android_config)?,
     )?;
     Ok(())
 }

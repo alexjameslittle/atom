@@ -1,10 +1,8 @@
 use std::{fs, io};
 
+use atom_backends::{ContributedFile, FileSource, GenerationBackendRegistry, GenerationPlan};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::{Utf8Path, Utf8PathBuf};
-
-use crate::backends::{GenerationBackendRegistry, first_party_generation_backend_registry};
-use crate::{ContributedFile, FileSource, GenerationPlan};
 
 /// # Errors
 ///
@@ -12,17 +10,9 @@ use crate::{ContributedFile, FileSource, GenerationPlan};
 ///
 /// # Panics
 ///
-/// Panics if platform configs are missing when the corresponding platform plan
-/// exists, or if schema files lack the expected generated prefix.
-pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<Vec<Utf8PathBuf>> {
-    let registry = first_party_generation_backend_registry();
-    emit_host_tree_with_registry(repo_root, plan, &registry)
-}
-
-/// # Errors
-///
-/// Returns an error if any generated file or directory cannot be written.
-pub fn emit_host_tree_with_registry(
+/// Panics if platform configs are missing when the corresponding platform plan exists, or if
+/// schema files lack the expected generated prefix.
+pub fn emit_host_tree(
     repo_root: &Utf8Path,
     plan: &GenerationPlan,
     registry: &GenerationBackendRegistry,
@@ -75,7 +65,11 @@ fn generated_roots(
         .collect()
 }
 
-pub(crate) fn write_file(path: &Utf8Path, contents: &str) -> AtomResult<()> {
+/// # Errors
+///
+/// Returns an error if the destination parent directory cannot be created or the file cannot be
+/// written.
+pub fn write_file(path: &Utf8Path, contents: &str) -> AtomResult<()> {
     write_parent_dir(path)?;
     fs::write(path, contents).map_err(|error| {
         AtomError::with_path(

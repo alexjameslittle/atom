@@ -86,7 +86,8 @@ Local and CI verification must stay aligned. If you add a new required check, ad
 
 The intended dependency flow is:
 
-`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-cng` -> `atom-deploy` -> `atom-cli`
+`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-backends` -> `atom-cng` -> `atom-deploy` ->
+`atom-backend-{ios,android}` -> `atom-cli`
 
 `atom-runtime` stays separate from CLI/CNG orchestration code.
 
@@ -95,9 +96,14 @@ Crate responsibilities:
 - `atom-ffi`: stable error types, FlatBuffer error payloads, low-level ABI types.
 - `atom-manifest`: app metadata loading and validation from Bazel-generated JSON.
 - `atom-modules`: module metadata loading, validation, and dependency ordering.
-- `atom-cng`: deterministic generation planning and emitted host tree writes.
-- `atom-deploy`: device discovery, platform deployment, evidence capture, UI evaluation, and
-  external tool orchestration.
+- `atom-backends`: shared backend contracts, registries, and backend-neutral deploy/evaluate/CNG
+  data types.
+- `atom-cng`: deterministic generation planning and emitted host tree writes through backend
+  contracts.
+- `atom-deploy`: generic destination discovery, deployment, evidence capture, and UI evaluation
+  orchestration through backend contracts.
+- `atom-backend-ios` / `atom-backend-android`: first-party backend implementation crates linked into
+  the official CLI binary.
 - `atom-cli`: thin CLI command dispatch and workspace resolution.
 - `atom-runtime`: runtime primitives and host-facing execution logic.
 

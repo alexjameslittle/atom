@@ -1,4 +1,19 @@
+mod cng;
+mod deploy;
+
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
+
+pub use crate::cng::{
+    ContributedFile, FileSource, GenerationBackend, GenerationBackendRegistry, GenerationPlan,
+    PlatformContribution, PlatformPlan, SchemaFilePlan, SchemaPlan,
+};
+pub use crate::deploy::{
+    ArtifactRecord, BackendAutomationSession, DeployBackend, DeployBackendRegistry,
+    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
+    EvaluationBundleManifest, EvaluationPlan, EvaluationStep, InteractionRequest,
+    InteractionResult, LaunchMode, ScreenInfo, SessionLaunchBehavior, StepRecord, ToolRunner,
+    UiBounds, UiNode, UiSnapshot,
+};
 
 pub trait BackendDefinition {
     fn id(&self) -> &'static str;

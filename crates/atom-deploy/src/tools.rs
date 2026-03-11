@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use atom_backends::ToolRunner;
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -11,33 +12,6 @@ pub struct CommandOutput {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub exit_code: i32,
-}
-
-pub trait ToolRunner {
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails.
-    fn run(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails.
-    fn capture(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<String>;
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails.
-    fn capture_json_file(
-        &mut self,
-        repo_root: &Utf8Path,
-        tool: &str,
-        args: &[String],
-    ) -> AtomResult<String>;
-    /// Run a tool with stdout and stderr inherited from the current process, streaming
-    /// output directly to the terminal. Blocks until the process exits.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails or exits with a non-zero status.
-    fn stream(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
 }
 
 pub struct ProcessRunner;

@@ -2,12 +2,20 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
+use atom_backend_android::{
+    register_deploy_backend as register_android_deploy_backend,
+    register_generation_backend as register_android_generation_backend,
+};
+use atom_backend_ios::{
+    register_deploy_backend as register_ios_deploy_backend,
+    register_generation_backend as register_ios_generation_backend,
+};
+use atom_backends::{DeployBackendRegistry, GenerationBackendRegistry, InteractionRequest};
 use atom_cng::{ConfigPluginRegistry, build_generation_plan, emit_host_tree, render_prebuild_plan};
 pub use atom_deploy::CommandOutput;
 use atom_deploy::destinations::{list_backend_destinations, render_destination_lines};
 use atom_deploy::evaluate::{
-    InteractionRequest, capture_logs, capture_screenshot, capture_video, evaluate_run, inspect_ui,
-    interact,
+    capture_logs, capture_screenshot, capture_video, evaluate_run, inspect_ui, interact,
 };
 use atom_deploy::progress::run_step;
 use atom_deploy::{LaunchMode, ProcessRunner, ToolRunner, deploy_backend, run_bazel, stop_backend};
@@ -307,7 +315,13 @@ fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOu
     let repo_root = resolve_workspace_root(cwd)?;
     let manifest = load_manifest(&repo_root, &args.target)?;
     let modules = resolve_modules(&repo_root, &manifest.modules)?;
-    let plan = build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
+    let generation_registry = first_party_generation_backend_registry()?;
+    let plan = build_generation_plan(
+        &manifest,
+        &modules,
+        &default_config_plugin_registry(),
+        &generation_registry,
+    )?;
 
     if args.dry_run {
         return Ok(CommandOutput {
@@ -317,7 +331,7 @@ fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOu
         });
     }
 
-    let roots = emit_host_tree(&repo_root, &plan)?;
+    let roots = emit_host_tree(&repo_root, &plan, &generation_registry)?;
     let mut summary = String::new();
     for root in roots {
         summary.push_str(root.as_str());
@@ -351,15 +365,22 @@ fn execute_run(
         "Code generation failed",
         || {
             let modules = resolve_modules(&repo_root, &manifest.modules)?;
-            let plan =
-                build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
-            emit_host_tree(&repo_root, &plan)
+            let generation_registry = first_party_generation_backend_registry()?;
+            let plan = build_generation_plan(
+                &manifest,
+                &modules,
+                &default_config_plugin_registry(),
+                &generation_registry,
+            )?;
+            emit_host_tree(&repo_root, &plan, &generation_registry)
         },
     )?;
 
+    let deploy_registry = first_party_deploy_backend_registry()?;
     deploy_backend(
         &repo_root,
         &manifest,
+        &deploy_registry,
         platform,
         target.destination.as_deref(),
         launch_mode,
@@ -378,9 +399,11 @@ fn execute_stop(
     let platform = args.platform.as_backend_id();
     let target = &args.target;
     let manifest = load_manifest(&repo_root, &target.target)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     stop_backend(
         &repo_root,
         &manifest,
+        &deploy_registry,
         platform,
         target.destination.as_deref(),
         runner,
@@ -403,8 +426,13 @@ fn execute_destinations(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let destinations =
-        list_backend_destinations(&repo_root, args.platform.as_backend_id(), runner)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
+    let destinations = list_backend_destinations(
+        &repo_root,
+        &deploy_registry,
+        args.platform.as_backend_id(),
+        runner,
+    )?;
     if args.json {
         return json_output(&destinations);
     }
@@ -417,8 +445,13 @@ fn execute_devices(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let destinations =
-        list_backend_destinations(&repo_root, args.platform.as_backend_id(), runner)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
+    let destinations = list_backend_destinations(
+        &repo_root,
+        &deploy_registry,
+        args.platform.as_backend_id(),
+        runner,
+    )?;
     if args.json {
         return json_output(&destinations);
     }
@@ -431,6 +464,7 @@ fn execute_evidence(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     match &args.command {
         EvidenceCommand::Logs(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
@@ -438,6 +472,7 @@ fn execute_evidence(
             capture_logs(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
                 args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
@@ -452,6 +487,7 @@ fn execute_evidence(
             capture_screenshot(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
                 args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
@@ -465,6 +501,7 @@ fn execute_evidence(
             capture_video(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
                 args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
@@ -482,12 +519,14 @@ fn execute_inspect(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     match &args.command {
         InspectCommand::Ui(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
             let snapshot = inspect_ui(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
                 args.target.platform.as_backend_id(),
                 &args.target.destination,
                 runner,
@@ -535,6 +574,7 @@ fn execute_interact(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     let (target, request) = match &args.command {
         InteractCommand::Tap(args) => (
             &args.target,
@@ -578,6 +618,7 @@ fn execute_interact(
     let result = interact(
         &repo_root,
         &manifest,
+        &deploy_registry,
         target.platform.as_backend_id(),
         &target.destination,
         request,
@@ -592,6 +633,7 @@ fn execute_evaluate(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     match &args.command {
         EvaluateCommand::Run(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
@@ -600,6 +642,7 @@ fn execute_evaluate(
             let result = evaluate_run(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
                 args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &plan,
@@ -637,6 +680,20 @@ fn default_config_plugin_registry() -> ConfigPluginRegistry {
     let mut registry = ConfigPluginRegistry::new();
     atom_cng_app_icon::register(&mut registry);
     registry
+}
+
+fn first_party_deploy_backend_registry() -> AtomResult<DeployBackendRegistry> {
+    let mut registry = DeployBackendRegistry::new();
+    register_ios_deploy_backend(&mut registry)?;
+    register_android_deploy_backend(&mut registry)?;
+    Ok(registry)
+}
+
+fn first_party_generation_backend_registry() -> AtomResult<GenerationBackendRegistry> {
+    let mut registry = GenerationBackendRegistry::new();
+    register_ios_generation_backend(&mut registry)?;
+    register_android_generation_backend(&mut registry)?;
+    Ok(registry)
 }
 
 fn resolve_workspace_root(cwd: &Utf8Path) -> AtomResult<Utf8PathBuf> {

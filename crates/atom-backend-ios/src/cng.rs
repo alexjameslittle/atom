@@ -1,17 +1,49 @@
+use atom_backends::{
+    BackendDefinition, GenerationBackend, GenerationBackendRegistry, GenerationPlan, PlatformPlan,
+};
+use atom_cng::{render_plist_document, render_template, static_template, write_generated_file};
 use atom_ffi::AtomResult;
-use atom_manifest::{AppConfig, BuildConfig, IosConfig, metadata_target};
+use atom_manifest::{AppConfig, BuildConfig, IosConfig, NormalizedManifest, metadata_target};
 use atom_modules::{JsonMap, ResolvedModule};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use minijinja::context;
 
-use crate::templates::render;
-use crate::{GenerationPlan, PlatformPlan};
+const BACKEND_ID: &str = "ios";
 
-pub(crate) fn build_ios_plan(
-    app: &AppConfig,
-    build: &BuildConfig,
-    _ios: &IosConfig,
-) -> PlatformPlan {
+struct IosGenerationBackend;
+
+pub fn register(registry: &mut GenerationBackendRegistry) -> AtomResult<()> {
+    registry.register(Box::new(IosGenerationBackend))
+}
+
+impl BackendDefinition for IosGenerationBackend {
+    fn id(&self) -> &'static str {
+        BACKEND_ID
+    }
+
+    fn platform(&self) -> &'static str {
+        "ios"
+    }
+}
+
+impl GenerationBackend for IosGenerationBackend {
+    fn build_platform_plan(&self, manifest: &NormalizedManifest) -> Option<PlatformPlan> {
+        manifest
+            .ios
+            .enabled
+            .then(|| build_ios_plan(&manifest.app, &manifest.build, &manifest.ios))
+    }
+
+    fn emit_host_tree(&self, repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
+        emit_ios_host_tree(repo_root, plan)
+    }
+
+    fn generated_root(&self, plan: &GenerationPlan) -> Option<Utf8PathBuf> {
+        plan.ios.as_ref().map(|ios| ios.generated_root.clone())
+    }
+}
+
+fn build_ios_plan(app: &AppConfig, build: &BuildConfig, _ios: &IosConfig) -> PlatformPlan {
     let generated_root = build.generated_root.join("ios").join(&app.slug);
     let files = vec![
         generated_root.join("BUILD.bazel"),
@@ -31,7 +63,7 @@ pub(crate) fn build_ios_plan(
     }
 }
 
-pub(crate) fn render_ios_build_file(
+fn render_ios_build_file(
     app: &AppConfig,
     modules: &[ResolvedModule],
     ios: &IosConfig,
@@ -42,7 +74,7 @@ pub(crate) fn render_ios_build_file(
         .iter()
         .map(|m| metadata_target(&m.request.target_label, "_ios_srcs"))
         .collect::<AtomResult<_>>()?;
-    render(
+    render_template(
         "ios/BUILD.bazel",
         context! {
             support_module => swift_support_module_name(app),
@@ -56,20 +88,20 @@ pub(crate) fn render_ios_build_file(
     )
 }
 
-pub(crate) fn render_ios_plist(plist: &JsonMap) -> AtomResult<String> {
-    crate::render_plist_document(plist)
+fn render_ios_plist(plist: &JsonMap) -> AtomResult<String> {
+    render_plist_document(plist)
 }
 
-pub(crate) fn render_ios_launch_storyboard() -> String {
-    include_str!("templates/ios/LaunchScreen.storyboard").to_owned()
+fn render_ios_launch_storyboard() -> AtomResult<String> {
+    Ok(static_template("ios/LaunchScreen.storyboard")?.to_owned())
 }
 
-pub(crate) fn render_ios_runtime_header() -> String {
-    include_str!("templates/ios/atom_runtime.h").to_owned()
+fn render_ios_runtime_header() -> AtomResult<String> {
+    Ok(static_template("ios/atom_runtime.h")?.to_owned())
 }
 
-pub(crate) fn render_ios_runtime_bridge(app: &AppConfig) -> AtomResult<String> {
-    render(
+fn render_ios_runtime_bridge(app: &AppConfig) -> AtomResult<String> {
+    render_template(
         "ios/atom_runtime_app_bridge.rs",
         context! {
             entry_crate_name => &app.entry_crate_name,
@@ -77,12 +109,12 @@ pub(crate) fn render_ios_runtime_bridge(app: &AppConfig) -> AtomResult<String> {
     )
 }
 
-pub(crate) fn render_swift_app_delegate(_app: &AppConfig) -> String {
-    include_str!("templates/ios/AtomAppDelegate.swift").to_owned()
+fn render_swift_app_delegate(_app: &AppConfig) -> AtomResult<String> {
+    Ok(static_template("ios/AtomAppDelegate.swift")?.to_owned())
 }
 
-pub(crate) fn render_swift_scene_delegate(app: &AppConfig) -> AtomResult<String> {
-    render(
+fn render_swift_scene_delegate(app: &AppConfig) -> AtomResult<String> {
+    render_template(
         "ios/SceneDelegate.swift",
         context! {
             name => &app.name,
@@ -92,13 +124,13 @@ pub(crate) fn render_swift_scene_delegate(app: &AppConfig) -> AtomResult<String>
     )
 }
 
-pub(crate) fn render_swift_main() -> String {
-    include_str!("templates/ios/main.swift").to_owned()
+fn render_swift_main() -> AtomResult<String> {
+    Ok(static_template("ios/main.swift")?.to_owned())
 }
 
-pub(crate) fn render_swift_bindings(modules: &[ResolvedModule]) -> AtomResult<String> {
+fn render_swift_bindings(modules: &[ResolvedModule]) -> AtomResult<String> {
     let module_ids: Vec<&str> = modules.iter().map(|m| m.manifest.id.as_str()).collect();
-    render(
+    render_template(
         "ios/AtomBindings.swift",
         context! {
             module_ids,
@@ -106,11 +138,11 @@ pub(crate) fn render_swift_bindings(modules: &[ResolvedModule]) -> AtomResult<St
     )
 }
 
-pub(crate) fn swift_support_module_name(app: &AppConfig) -> String {
+fn swift_support_module_name(app: &AppConfig) -> String {
     format!("atom_{}_support", app.slug.replace('-', "_"))
 }
 
-pub(crate) fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
+fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
     let Some(ios) = &plan.ios else {
         return Ok(());
     };
@@ -118,7 +150,7 @@ pub(crate) fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) ->
         .ios_config
         .as_ref()
         .expect("ios config should exist when ios output exists");
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root.join(&ios.generated_root).join("BUILD.bazel"),
         &render_ios_build_file(
             &plan.app,
@@ -128,49 +160,49 @@ pub(crate) fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) ->
             &plan.ios_resource_globs,
         )?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&ios.generated_root)
             .join("Info.generated.plist"),
         &render_ios_plist(&plan.plist)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&ios.generated_root)
             .join("LaunchScreen.storyboard"),
-        &render_ios_launch_storyboard(),
+        &render_ios_launch_storyboard()?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root.join(&ios.generated_root).join("atom_runtime.h"),
-        &render_ios_runtime_header(),
+        &render_ios_runtime_header()?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&ios.generated_root)
             .join("atom_runtime_app_bridge.rs"),
         &render_ios_runtime_bridge(&plan.app)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&ios.generated_root)
             .join("AtomAppDelegate.swift"),
-        &render_swift_app_delegate(&plan.app),
+        &render_swift_app_delegate(&plan.app)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&ios.generated_root)
             .join("SceneDelegate.swift"),
         &render_swift_scene_delegate(&plan.app)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root
             .join(&ios.generated_root)
             .join("AtomBindings.swift"),
         &render_swift_bindings(&plan.modules)?,
     )?;
-    crate::emit::write_file(
+    write_generated_file(
         &repo_root.join(&ios.generated_root).join("main.swift"),
-        &render_swift_main(),
+        &render_swift_main()?,
     )?;
     Ok(())
 }

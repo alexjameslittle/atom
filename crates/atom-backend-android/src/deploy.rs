@@ -1,29 +1,23 @@
-use atom_backends::BackendDefinition;
+use atom_backends::{
+    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform, LaunchMode,
+    SessionLaunchBehavior, ToolRunner,
+};
+use atom_deploy::devices::android::{AndroidDestination, list_android_destinations};
+use atom_deploy::{deploy_android, new_android_automation_session, stop_android};
 use atom_ffi::AtomResult;
 use atom_manifest::NormalizedManifest;
 use camino::Utf8Path;
 
-use crate::backends::{BackendAutomationSession, DeployBackend, DeployBackendRegistry};
-use crate::deploy::{LaunchMode, deploy_android, stop_android};
-use crate::destinations::{
-    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
-};
-use crate::devices::android::{AndroidDestination, list_android_destinations};
-use crate::evaluate::{SessionLaunchBehavior, new_android_automation_session};
-use crate::tools::ToolRunner;
-
 const BACKEND_ID: &str = "android";
 
-pub(super) struct AndroidDestinationBackend;
+struct AndroidDeployBackend;
 
-/// # Errors
-///
-/// Returns an error if the backend id is registered more than once.
 pub fn register(registry: &mut DeployBackendRegistry) -> AtomResult<()> {
-    registry.register(Box::new(AndroidDestinationBackend))
+    registry.register(Box::new(AndroidDeployBackend))
 }
 
-impl BackendDefinition for AndroidDestinationBackend {
+impl BackendDefinition for AndroidDeployBackend {
     fn id(&self) -> &'static str {
         BACKEND_ID
     }
@@ -33,7 +27,7 @@ impl BackendDefinition for AndroidDestinationBackend {
     }
 }
 
-impl DeployBackend for AndroidDestinationBackend {
+impl DeployBackend for AndroidDeployBackend {
     fn is_enabled(&self, manifest: &NormalizedManifest) -> bool {
         manifest.android.enabled
     }
@@ -94,9 +88,7 @@ impl DeployBackend for AndroidDestinationBackend {
     }
 }
 
-pub(crate) fn destination_descriptor_from_android(
-    destination: AndroidDestination,
-) -> DestinationDescriptor {
+fn destination_descriptor_from_android(destination: AndroidDestination) -> DestinationDescriptor {
     let display_name = destination.display_label();
     let id = destination.destination_id();
     let kind = if destination.state == "avd" {

@@ -3,10 +3,14 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use atom_backends::{
+    BackendAutomationSession, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
+    DestinationPlatform, ToolRunner,
+};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 mod android_uiautomator;
@@ -14,20 +18,15 @@ mod android_uiautomator;
 use self::android_uiautomator::{
     inspect_ui_with_android_uiautomator, interact_with_android_uiautomator,
 };
-use crate::backends::{
-    BackendAutomationSession, DeployBackendRegistry, first_party_deploy_backend_registry,
-};
 use crate::deploy::{
     generated_target, ios_bazel_args, resolve_ios_installable_artifact, wait_for_app_pid,
 };
-use crate::destinations::{
-    DestinationCapability, DestinationDescriptor, DestinationPlatform, list_backend_destinations,
-};
+use crate::destinations::list_backend_destinations;
 use crate::devices::android::{find_android_destination, prepare_android_emulator};
 use crate::devices::ios::{
     IosDestination, IosDestinationKind, list_ios_destinations, prepare_ios_simulator,
 };
-use crate::tools::{ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool};
+use crate::tools::{capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool};
 
 const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -35,187 +34,10 @@ const IOS_SCREENSHOT_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const IOS_SCREENSHOT_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UiBounds {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UiNode {
-    pub id: String,
-    pub role: String,
-    pub label: String,
-    pub text: String,
-    pub visible: bool,
-    pub enabled: bool,
-    pub bounds: UiBounds,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ScreenInfo {
-    pub width: f64,
-    pub height: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UiSnapshot {
-    pub screen: ScreenInfo,
-    pub nodes: Vec<UiNode>,
-    #[serde(default)]
-    pub screenshot_path: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum InteractionRequest {
-    InspectUi,
-    Tap {
-        #[serde(default)]
-        target_id: Option<String>,
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    LongPress {
-        #[serde(default)]
-        target_id: Option<String>,
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    Swipe {
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    Drag {
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    TypeText {
-        #[serde(default)]
-        target_id: Option<String>,
-        text: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InteractionResult {
-    pub ok: bool,
-    pub snapshot: UiSnapshot,
-    #[serde(default)]
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EvaluationStep {
-    Launch,
-    WaitForUi {
-        #[serde(default)]
-        target_id: Option<String>,
-        #[serde(default)]
-        text: Option<String>,
-        #[serde(default)]
-        timeout_ms: Option<u64>,
-    },
-    Tap {
-        #[serde(default)]
-        target_id: Option<String>,
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    LongPress {
-        #[serde(default)]
-        target_id: Option<String>,
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    Swipe {
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    Drag {
-        #[serde(default)]
-        x: Option<f64>,
-        #[serde(default)]
-        y: Option<f64>,
-    },
-    TypeText {
-        #[serde(default)]
-        target_id: Option<String>,
-        text: String,
-    },
-    Screenshot {
-        #[serde(default)]
-        name: Option<String>,
-    },
-    InspectUi {
-        #[serde(default)]
-        name: Option<String>,
-    },
-    StartVideo {
-        #[serde(default)]
-        name: Option<String>,
-    },
-    StopVideo,
-    CollectLogs {
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        seconds: Option<u64>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EvaluationPlan {
-    pub steps: Vec<EvaluationStep>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ArtifactRecord {
-    pub name: String,
-    pub kind: String,
-    pub path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StepRecord {
-    pub index: usize,
-    pub kind: String,
-    pub ok: bool,
-    pub started_at_ms: u128,
-    pub finished_at_ms: u128,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub artifacts: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EvaluationBundleManifest {
-    pub target_label: String,
-    pub destination: DestinationDescriptor,
-    pub started_at_ms: u128,
-    pub finished_at_ms: u128,
-    pub transcript_path: String,
-    pub steps: Vec<StepRecord>,
-    pub artifacts: Vec<ArtifactRecord>,
-}
+pub use atom_backends::{
+    ArtifactRecord, EvaluationBundleManifest, EvaluationPlan, EvaluationStep, InteractionRequest,
+    InteractionResult, ScreenInfo, SessionLaunchBehavior, StepRecord, UiBounds, UiNode, UiSnapshot,
+};
 
 pub struct EvaluateCommandOutput {
     pub manifest: EvaluationBundleManifest,
@@ -228,15 +50,18 @@ pub struct EvaluateCommandOutput {
 pub fn inspect_ui(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<UiSnapshot> {
-    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
+    let descriptor =
+        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::InspectUi)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        registry,
         backend_id,
         destination_id,
         runner,
@@ -259,16 +84,19 @@ pub fn inspect_ui(
 pub fn interact(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
     request: InteractionRequest,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<InteractionResult> {
-    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
+    let descriptor =
+        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Interact)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        registry,
         backend_id,
         destination_id,
         runner,
@@ -287,16 +115,19 @@ pub fn interact(
 pub fn capture_screenshot(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
     output_path: &Utf8Path,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
+    let descriptor =
+        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Screenshot)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        registry,
         backend_id,
         destination_id,
         runner,
@@ -310,20 +141,27 @@ pub fn capture_screenshot(
 /// # Errors
 ///
 /// Returns an error if destination resolution, app launch, or log capture fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public evidence API keeps repo, manifest, registry, destination, and capture options explicit."
+)]
 pub fn capture_logs(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
     output_path: &Utf8Path,
     seconds: u64,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
+    let descriptor =
+        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Logs)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        registry,
         backend_id,
         destination_id,
         runner,
@@ -337,20 +175,27 @@ pub fn capture_logs(
 /// # Errors
 ///
 /// Returns an error if destination resolution, app launch, or video capture fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public evidence API keeps repo, manifest, registry, destination, and capture options explicit."
+)]
 pub fn capture_video(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
     output_path: &Utf8Path,
     seconds: u64,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
+    let descriptor =
+        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Video)?;
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        registry,
         backend_id,
         destination_id,
         runner,
@@ -365,9 +210,14 @@ pub fn capture_video(
 ///
 /// Returns an error if the evaluation plan cannot be loaded, a required capability is unavailable,
 /// or any step fails while executing.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public evaluation API keeps repo, manifest, registry, destination, plan, and artifact paths explicit."
+)]
 pub fn evaluate_run(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
     plan_path: &Utf8Path,
@@ -377,13 +227,15 @@ pub fn evaluate_run(
     let plan = load_evaluation_plan(plan_path)?;
     write_parent_dir(artifacts_dir)?;
 
-    let descriptor = resolve_destination_descriptor(repo_root, backend_id, destination_id, runner)?;
+    let descriptor =
+        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_plan_capabilities(&descriptor, &plan)?;
 
     let started_at_ms = timestamp_millis();
     let mut session = AutomationSession::new(
         repo_root,
         manifest,
+        registry,
         backend_id,
         destination_id,
         runner,
@@ -833,11 +685,12 @@ fn step_with_artifacts(
 
 fn resolve_destination_descriptor(
     repo_root: &Utf8Path,
+    registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<DestinationDescriptor> {
-    if let Some(destination) = list_backend_destinations(repo_root, backend_id, runner)?
+    if let Some(destination) = list_backend_destinations(repo_root, registry, backend_id, runner)?
         .into_iter()
         .find(|destination| destination.id == destination_id)
     {
@@ -955,16 +808,15 @@ struct AutomationSession<'a> {
     backend: Box<dyn BackendAutomationSession + 'a>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionLaunchBehavior {
-    LaunchOnly,
-    AttachOrLaunch,
-}
-
 impl<'a> AutomationSession<'a> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Automation sessions are assembled from explicit repo, manifest, registry, destination, and launch inputs."
+    )]
     fn new(
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
+        registry: &DeployBackendRegistry,
         backend_id: &'a str,
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
@@ -972,9 +824,8 @@ impl<'a> AutomationSession<'a> {
         launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Self> {
         debug_assert_eq!(descriptor.id, destination_id);
-        let registry = first_party_deploy_backend_registry();
         let backend = automation_session_with_registry(
-            &registry,
+            registry,
             repo_root,
             manifest,
             backend_id,
@@ -1055,7 +906,7 @@ fn automation_session_with_registry<'a>(
     backend.new_automation_session(repo_root, manifest, destination_id, runner, launch_behavior)
 }
 
-pub(crate) fn new_ios_automation_session<'a>(
+pub fn new_ios_automation_session<'a>(
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
     destination_id: &'a str,
@@ -1073,7 +924,7 @@ pub(crate) fn new_ios_automation_session<'a>(
     })
 }
 
-pub(crate) fn new_android_automation_session<'a>(
+pub fn new_android_automation_session<'a>(
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
     destination_id: &'a str,
@@ -2479,7 +2330,7 @@ mod tests {
     use std::collections::VecDeque;
 
     use crate::destinations::DestinationKind;
-    use crate::tools::ToolRunner;
+    use atom_backends::ToolRunner;
     use atom_ffi::{AtomError, AtomErrorCode};
     use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, IosConfig, NormalizedManifest};
     use camino::Utf8PathBuf;

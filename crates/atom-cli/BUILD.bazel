@@ -8,6 +8,9 @@ rust_library(
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
+        "//crates/atom-backend-android",
+        "//crates/atom-backend-ios",
+        "//crates/atom-backends",
         "//crates/atom-cng",
         "//crates/atom-cng-app-icon",
         "//crates/atom-deploy",
