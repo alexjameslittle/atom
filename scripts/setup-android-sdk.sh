@@ -11,10 +11,49 @@ repo_root=$(cd -- "$(dirname "$0")/.." && pwd)
 
 ANDROID_HOME="${ANDROID_HOME:-$HOME/.android/sdk}"
 ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+ANDROID_SYSTEM_IMAGE_PACKAGE="system-images;android-35;default;arm64-v8a"
+ANDROID_SYSTEM_IMAGE_DIR="$ANDROID_HOME/system-images/android-35/default/arm64-v8a"
+ATOM_AVD_NAME="atom_35"
+
+desired_atom_avd_config() {
+  config="$HOME/.android/avd/$ATOM_AVD_NAME.avd/config.ini"
+  [ -f "$config" ] || return 1
+  grep -q '^image.sysdir.1 = system-images/android-35/default/arm64-v8a/$' "$config"
+}
+
+set_avd_config_value() {
+  config="$1"
+  key="$2"
+  value="$3"
+  tmp=$(mktemp)
+  awk -v key="$key" -v value="$value" '
+    BEGIN { updated = 0 }
+    index($0, key " = ") == 1 {
+      print key " = " value
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) {
+        print key " = " value
+      }
+    }
+  ' "$config" > "$tmp"
+  mv "$tmp" "$config"
+}
+
+normalize_atom_avd_appearance() {
+  config="$HOME/.android/avd/$ATOM_AVD_NAME.avd/config.ini"
+  [ -f "$config" ] || return 0
+  set_avd_config_value "$config" "showDeviceFrame" "no"
+  set_avd_config_value "$config" "hw.gpu.enabled" "yes"
+  set_avd_config_value "$config" "hw.gpu.mode" "host"
+}
 
 if [ -d "$ANDROID_HOME/platforms/android-35" ] \
   && [ -x "$ANDROID_HOME/platform-tools/adb" ] \
-  && [ -d "$ANDROID_HOME/system-images/android-35" ] \
+  && [ -d "$ANDROID_SYSTEM_IMAGE_DIR" ] \
   && [ -d "$ANDROID_HOME/ndk" ]; then
   echo "Android SDK already installed at $ANDROID_HOME"
   write_mise_local=true
@@ -56,21 +95,32 @@ else
     "platform-tools" \
     "emulator" \
     "ndk;27.2.12479018" \
-    "system-images;android-35;google_apis;arm64-v8a" >/dev/null
-
-  avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
-  if ! "$avdmanager" list avd 2>/dev/null | grep -q "atom_35"; then
-    echo "Creating Android emulator AVD (atom_35)..."
-    echo "no" | "$avdmanager" create avd \
-      --name "atom_35" \
-      --package "system-images;android-35;google_apis;arm64-v8a" \
-      --device "pixel_6" \
-      --force >/dev/null 2>&1
-  fi
+    "$ANDROID_SYSTEM_IMAGE_PACKAGE" >/dev/null
 
   echo "Android SDK installed at $ANDROID_HOME"
   write_mise_local=true
 fi
+
+avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+if desired_atom_avd_config; then
+  echo "Android emulator AVD ($ATOM_AVD_NAME) already uses the default system image"
+else
+  if "$avdmanager" list avd 2>/dev/null | grep -q "$ATOM_AVD_NAME"; then
+    echo "Recreating Android emulator AVD ($ATOM_AVD_NAME) with the default system image..."
+    "$avdmanager" delete avd --name "$ATOM_AVD_NAME" >/dev/null 2>&1 || true
+    rm -rf "$HOME/.android/avd/$ATOM_AVD_NAME.avd" "$HOME/.android/avd/$ATOM_AVD_NAME.ini"
+  else
+    echo "Creating Android emulator AVD ($ATOM_AVD_NAME)..."
+  fi
+
+  echo "no" | "$avdmanager" create avd \
+    --name "$ATOM_AVD_NAME" \
+    --package "$ANDROID_SYSTEM_IMAGE_PACKAGE" \
+    --device "pixel_6" \
+    --force >/dev/null 2>&1
+fi
+
+normalize_atom_avd_appearance
 
 if [ "${write_mise_local:-}" = "true" ]; then
   cat > "$repo_root/.mise.local.toml" <<EOF

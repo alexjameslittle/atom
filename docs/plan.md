@@ -257,6 +257,8 @@ Planned command surface:
 - `atom evidence screenshot --destination <id> --output <path>`
 - `atom evidence video --destination <id> --output <path>`
 - `atom inspect ui --destination <id> [--output <path>]`
+- `atom run <ios|android> --detach`
+- `atom stop <ios|android>`
 - `atom interact --destination <id> ...` for tap, long-press, swipe, drag, and text entry
 - `atom evaluate run --destination <id> --plan <path> --artifacts-dir <path>`
 
@@ -271,10 +273,12 @@ Minimum evaluation plan capabilities:
 
 Backend direction:
 
-- iOS should use a framework-owned XCUITest-based backend, or a framework-owned
-  WebDriverAgent-compatible wrapper around XCTest. This is the only credible path to semantic
-  interaction on iOS. `simctl` is good for lifecycle, screenshots, and recordings, but not as the
-  primary UI interaction backend.
+- iOS should use a framework-owned `idb`-backed semantic backend. The underlying implementation may
+  still rely on XCTest-compatible primitives, but `simctl` is not sufficient as the primary
+  interaction backend.
+- For raw simulator screenshots, `simctl io screenshot` is an acceptable fallback when `idb` cannot
+  encode an image, because the semantic inspection/interaction path still stays in the
+  framework-owned backend.
 - iOS log capture should combine Atom runtime logs with simulator or device log collection so one
   evaluation run can correlate app behavior with visible UI evidence.
 - Android should use a framework-owned UI Automator-based backend for semantic hierarchy and
@@ -288,6 +292,15 @@ Output expectations:
 
 - Every evidence command writes caller-selected artifacts that can be attached to reviews or agent
   transcripts.
+- Standalone evidence, inspection, and one-step interaction commands should attach to the currently
+  running foreground app when possible so ad hoc debugging does not lose the state a human or agent
+  has already reached.
+- Launch and cleanup should be explicit for agent workflows: `atom run ... --detach` starts a
+  reusable app session without tying it to a live PTY, returns only after the app is inspectable,
+  and `atom stop ...` ends that app session without uninstalling the app or shutting down the
+  simulator/emulator.
+- iOS evidence capture should default proof-bundle videos to `.mov` artifacts and keep log output
+  focused on the selected app rather than full-device simulator noise when possible.
 - Every evaluation run produces a proof bundle with logs, screenshots, video, UI snapshots, and a
   step-by-step manifest of what the agent attempted.
 - UI inspection should emit machine-readable data with bounds, labels or text, and stable target
@@ -519,14 +532,20 @@ Deliverables:
 
 - iOS `BUILD.bazel` uses `ios_application` from `rules_apple` (replaces `swift_binary`)
 - Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
-- `atom run ios` builds, installs, and launches on iOS simulator via `xcrun simctl`
+- `atom run ios` builds, installs, and launches on iOS simulator via `idb`
 - `atom run android` builds, installs, and launches on Android emulator via `adb`
+- `atom run ios|android --detach` launches, waits for an inspectable app session, and then returns
+  without holding the terminal open for log streaming
+- `atom stop ios|android` stops the selected app without uninstalling it
 - Ad-hoc code signing for simulator builds
 
 Exit criteria:
 
 - `atom run ios` launches the example app on an iOS simulator
 - `atom run android` launches the example app on an Android emulator
+- `atom run ios|android --detach` leaves the example app running for follow-on inspection or
+  evidence capture
+- `atom stop ios|android` cleans up a detached example session
 - No Xcode project or Gradle project is required
 
 ### Phase 4A: Runtime kernel
@@ -780,6 +799,10 @@ Deliverables:
 
 - `atom run ios`
 - `atom run android`
+- `atom run ios --detach`
+- `atom run android --detach`
+- `atom stop ios`
+- `atom stop android`
 - `atom test`
 - Plugin authoring and consumption docs for first-party and third-party crates
 - Example app proving first-party and third-party-style plugin composition
@@ -791,8 +814,11 @@ Deliverables:
 - `atom inspect ui`
 - `atom interact` for tap, long-press, swipe, drag, and text entry
 - `atom evaluate run`
-- Framework-owned iOS automation backend based on XCTest semantics
-- Framework-owned Android automation backend based on UI Automator semantics
+- hello-world-owned demo surface module plus a plain app variant that proves automation does not
+  depend on app-specific hooks
+- Repo-local skills for destination discovery, evidence capture, and UI evaluation
+- Framework-owned iOS automation backend built on `idb`
+- Framework-owned Android UIAutomator-backed automation backend
 - Proof bundles that capture logs, screenshots, video, UI snapshots, and step transcripts
 
 Exit criteria:
@@ -805,6 +831,8 @@ Exit criteria:
   manual clicking
 - The same workflow can be executed as one evaluation run that leaves behind a machine-readable
   proof bundle
+- Agents can complete the same workflow through repo-local skills without dropping down to raw
+  `idb`, `adb`, or `xcrun`
 - The same workflow supports attached physical devices when platform tooling allows it
 - The destination model is extensible to additional platforms and destination kinds without
   redefining the proof model
@@ -837,16 +865,17 @@ Exit criteria:
 
 ## Recommended Next Implementation Slice
 
-The repo now has runnable generated hosts and app-owned runtime plugin registration. The next slice
-should tighten the library contract instead of reopening bootstrap work:
+The repo now has runnable generated hosts, first-party config/CNG plugins, and a Phase 6 proof
+surface. The next slice should harden the evaluation workflow end to end:
 
-1. Align the spec, plan, and Bazel rules around Bazel-owned module metadata plus `entry_crate_name`
-   as the runtime registration anchor.
-2. Stabilize `atom_app(...).config_plugins`, the `ConfigPlugin` trait, and one example plugin as the
-   build-time extension path for native-host customization.
-3. Add minimal compatibility validation for modules and config/CNG plugins before generation.
-4. Prove the contract with one example config/CNG plugin and one third-party-style module/library
-   integration path.
+1. Keep iOS destination discovery, launch, and semantic automation behind `idb` so agents stay on
+   Atom-owned commands instead of raw tool invocations.
+2. Keep Android evidence and interaction behind the matching Atom surfaces and tighten semantic
+   parity with the iOS path.
+3. Ship repo-local skills for destination discovery, evidence capture, and UI evaluation alongside
+   the CLI so agents can use the framework the same way humans do.
+4. Keep the spec, docs, example plans, and hello-world demo surface aligned as the proof model
+   expands to more destinations.
 
-That sequence preserves the current working runtime path, closes the remaining ecosystem gap, and
-sets up a more credible Expo-style library story without inventing a second metadata system.
+That sequence preserves the current public contract, raises the quality of runtime proof, and keeps
+the automation story framework-owned instead of drifting into local script sprawl.

@@ -1,5 +1,14 @@
+import Foundation
 import SwiftUI
 import UIKit
+
+@objc class AtomHostRootViewProvider: NSObject {
+    @objc required override init() {}
+
+    @objc func makeRootViewController() -> UIViewController {
+        UIHostingController(rootView: AtomRootView())
+    }
+}
 
 final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -15,7 +24,7 @@ final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         window.frame = windowScene.coordinateSpace.bounds
         window.backgroundColor = .systemBackground
-        window.rootViewController = UIHostingController(rootView: AtomRootView())
+        window.rootViewController = resolveRootViewController()
         self.window = window
         window.makeKeyAndVisible()
         runtimeDelegate?.initializeRuntime()
@@ -36,6 +45,21 @@ final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     private var runtimeDelegate: AtomAppDelegate? {
         UIApplication.shared.delegate as? AtomAppDelegate
+    }
+
+    private func resolveRootViewController() -> UIViewController {
+        if let providerType = resolvedRootViewProviderType() as? AtomHostRootViewProvider.Type
+        {
+            return providerType.init().makeRootViewController()
+        }
+        return UIHostingController(rootView: AtomRootView())
+    }
+
+    private func resolvedRootViewProviderType() -> AnyClass? {
+        if let providerType = NSClassFromString("AtomHostRootViewProviderImpl") {
+            return providerType
+        }
+        return NSClassFromString("{{ support_module }}.AtomHostRootViewProviderImpl")
     }
 }
 

@@ -1063,22 +1063,33 @@ invoke `bazel run`.
 
 iOS deployment sequence:
 
-1. `bazel build //generated/ios/<slug>:app` to produce the `.app` bundle.
-2. Boot the default iOS simulator if none is running, or use the currently booted simulator.
-3. `xcrun simctl install <device> <path-to-.app>` to install.
-4. `xcrun simctl launch <device> <bundle_id>` to launch.
+1. `bazel build //<build.generated_root>/ios/<slug>:app` to produce the `.app` bundle.
+2. Boot the requested or default iOS simulator with `idb boot <udid>` when targeting a simulator, or
+   reuse the connected device target when targeting hardware.
+3. `idb install --udid <destination> <path-to-.app>` to install.
+4. `idb launch -f --udid <destination> <bundle_id>` to launch.
+5. When `--detach` is not set, `idb launch -f -w --udid <destination> <bundle_id>` MAY be used to
+   keep the CLI attached and stream the app process output until interruption or exit.
 
 Android deployment sequence:
 
-1. `bazel build //generated/android/<slug>:app` to produce the APK.
+1. `bazel build //<build.generated_root>/android/<slug>:app` to produce the APK.
 2. `adb install -r <path-to-.apk>` to install on the running emulator or connected device.
-3. `adb shell am start -n <application_id>/.MainActivity` to launch.
+3. `adb shell am start -W -n <application_id>/.MainActivity` to launch and wait for Activity Manager
+   completion.
 
 Rules:
 
-- Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`xcrun`,
-  `adb`) are not available.
+- Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`idb`, `adb`)
+  are not available.
 - Both commands MUST stream build output to stderr.
+- `atom run ios|android --detach` MUST launch the selected app, wait until the app is
+  automation-ready for follow-on inspection or evidence capture, and then return without waiting on
+  long-lived log streaming.
+- `atom run ios|android` without `--detach` MAY stay attached to the launched app and stream app
+  logs until interruption or process exit.
+- `atom stop ios` and `atom stop android` MUST stop the selected app without uninstalling it or
+  shutting down the selected simulator, device, or emulator.
 - `atom run ios --device <udid>` and `atom run android --device <serial>` MUST support targeting a
   specific simulator, emulator, or connected device.
 - When attached to an interactive TTY and `--device` is omitted, `atom run ios` and
@@ -1135,13 +1146,16 @@ Rules:
 - Artifact-producing commands MUST allow caller-selected repo-relative or absolute output paths.
 - Video capture SHOULD be startable before the first interaction step and stoppable after the last
   required step so one artifact can prove the full interaction flow.
+- iOS simulator screenshot capture MAY fall back to `xcrun simctl io <udid> screenshot` when the
+  semantic `idb` backend is unavailable for image encoding. This fallback does not change the
+  requirement that semantic inspection and interaction stay framework-owned.
 - The primary automation backend MUST be semantic, not pixel-only.
-- iOS automation MUST use a framework-owned XCUITest-based backend or a framework-owned
-  WebDriverAgent-compatible backend. Coordinate-only `simctl` helpers are insufficient as the
-  primary conformance path.
-- Android automation MUST use a framework-owned UI Automator-based or equivalent instrumentation
-  backend. `adb shell input` MAY exist only as a fallback for interactions that cannot be expressed
-  through the primary backend.
+- iOS automation MUST use a framework-owned `idb`-backed semantic backend. Implementations MAY
+  satisfy this through XCTest-compatible primitives under the hood, but coordinate-only `simctl`
+  helpers are insufficient as the primary conformance path.
+- Android automation MUST use a framework-owned UI Automator-based backend. Implementations MAY
+  combine UI hierarchy inspection with `adb shell input` gestures so long as the framework, not the
+  app-under-test, owns the automation backend.
 - Coordinate-targeted actions MAY be supported, but semantic element targeting SHOULD be the default
   path exposed to agents.
 
@@ -1155,6 +1169,8 @@ Required commands:
 - `atom prebuild --dry-run`
 - `atom run ios`
 - `atom run android`
+- `atom stop ios`
+- `atom stop android`
 - `atom destinations`
 - `atom devices ios`
 - `atom devices android`
@@ -1198,10 +1214,19 @@ consumes Atom via `bzlmod`.
 `atom run ios`:
 
 - MUST follow the iOS deployment sequence defined in Section 9.8.3
+- MUST accept `--detach`
 
 `atom run android`:
 
 - MUST follow the Android deployment sequence defined in Section 9.8.3
+- MUST accept `--detach`
+
+`atom stop ios` and `atom stop android`:
+
+- MUST resolve the same target manifest and destination identifiers accepted by the corresponding
+  `atom run` command
+- MUST stop the selected app process without rebuilding, reinstalling, or uninstalling the app
+- SHOULD be idempotent when the selected app is not currently running
 
 `atom destinations`:
 
@@ -1214,31 +1239,47 @@ consumes Atom via `bzlmod`.
 - MUST be supported as compatibility commands for mobile-specific destination discovery
 - MUST support a machine-readable output mode suitable for agents
 - MUST report stable destination identifiers, destination kind, display name, and availability
+- Android emulator destinations MUST use stable `avd:<name>` identifiers rather than ephemeral
+  `emulator-5554`-style serials; connected Android devices continue to use their adb serials
 - MUST only return destinations for the requested mobile platform
 
 `atom evidence screenshot`:
 
 - MUST capture one screenshot from the selected destination
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the image to the requested output path
 
 `atom evidence video`:
 
 - MUST record a screen video from the selected destination
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the video to the requested output path
+- iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because `idb video` emits
+  a QuickTime movie container even when the caller provides an `.mp4` suffix
 
 `atom evidence logs`:
 
 - MUST collect logs from the selected destination or launched app process
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the logs to the requested output path
 - SHOULD preserve timestamps and stream ordering when the backend can provide them
+- SHOULD prefer app-focused log output over full-device syslog noise when the backend can scope or
+  post-filter the stream
 
 `atom inspect ui`:
 
 - MUST emit a machine-readable UI snapshot for the selected destination
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST include a screenshot reference or explicit screenshot output path in the snapshot payload
 
 `atom interact`:
 
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST support at least tap, long-press, swipe/drag, and text entry
 - SHOULD support semantic element targeting in addition to coordinate targeting
 - MUST fail with `AUTOMATION_TARGET_NOT_FOUND` when the requested semantic target cannot be resolved
@@ -1250,6 +1291,10 @@ consumes Atom via `bzlmod`.
 - MUST execute a machine-readable evaluation plan against one selected destination
 - MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
   interactions
+- A `launch` step MUST not report success until the selected app process is running and the
+  evaluation backend can obtain an initial UI snapshot from that launched app
+- On iOS, launch readiness MUST verify the focused foreground app identity before a UI snapshot is
+  accepted as evidence that the selected app is ready
 - MUST write a machine-readable artifact manifest plus referenced artifacts under the requested
   output directory
 - MUST stop on the first failed required step and surface the underlying automation or tool failure
@@ -1267,6 +1312,8 @@ Evaluation contract rules:
 - Destinations are the canonical debug-target abstraction for evaluation.
 - Evidence and interaction commands MUST accept the same destination identifiers reported by
   `atom destinations` and `atom devices`.
+- Agent workflows SHOULD prefer `atom run ... --detach`, `atom stop ...`, or direct evidence /
+  interaction commands rather than depending on one long-lived attached `atom run` session.
 - Implementations MAY expose additional subcommands, but they MUST preserve the required commands
   from Section 10.1.
 - Commands intended for agent use SHOULD offer stable machine-readable output without requiring ANSI
@@ -1525,6 +1572,8 @@ Required behavior:
 - `atom evaluate run` can orchestrate launch, waits, inspection, interactions, and artifact capture
   into one proof bundle
 - automation backends are framework-owned and semantic-first per Section 9.8.4
+- the canonical example app MAY include an app-owned demo surface through native module sources, but
+  framework automation MUST NOT depend on app-specific generated hooks
 - the evaluation model remains extensible to additional platforms and destination kinds through
   capability discovery
 - apps can consume first-party and third-party-style plugin crates through documented workflows
@@ -1546,15 +1595,13 @@ specified in a separate renderer spec if and when that work begins.
 
 - Should app-level override sections be added to resolve plist and manifest merge conflicts?
 - Should renderer work live in this spec or a dedicated additive spec?
-- Should the iOS automation backend be a framework-owned XCTest bundle directly, or a
-  WebDriverAgent-compatible wrapper around the same XCTest primitives?
 
 ## 13. Resolved Questions
 
 - **Should Xcode projects be emitted directly, or derived from Bazel later?** Neither for the
   minimum conformance profile. The generated `ios_application` target is built and deployed via
-  Bazel and `xcrun simctl`. Xcode project generation via `rules_xcodeproj` MAY be added as a
-  convenience in a later phase.
+  Bazel and `idb`. Xcode project generation via `rules_xcodeproj` MAY be added as a convenience in a
+  later phase.
 - **Should the runtime artifact be `staticlib`, `cdylib`, or both?** Both. iOS uses `staticlib`
   linked into the Swift binary. Android uses `cdylib` (shared library) loaded via JNI
   `System.loadLibrary()`. See Section 9.8.

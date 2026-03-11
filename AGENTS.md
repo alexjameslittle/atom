@@ -42,10 +42,13 @@ not repo-root wrapper paths.
 
 | Skill                                                                      | Use when                                                                                             |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [destination-discovery](.agents/skills/destination-discovery/SKILL.md)     | A task needs one stable `destination` id before launch, evidence capture, or evaluation work.        |
+| [evidence-capture](.agents/skills/evidence-capture/SKILL.md)               | A task needs logs, screenshots, video, or UI snapshots from a running Atom app.                      |
 | [implementation-strategy](.agents/skills/implementation-strategy/SKILL.md) | A task is multi-file, architectural, or high-risk and needs a concrete edit plan before coding.      |
 | [pr-summary](.agents/skills/pr-summary/SKILL.md)                           | A branch is ready for user handoff or PR drafting and needs a clean summary plus verification block. |
 | [release-review](.agents/skills/release-review/SKILL.md)                   | A release candidate or release-critical branch needs one final pass across spec, docs, and examples. |
 | [test-coverage-improver](.agents/skills/test-coverage-improver/SKILL.md)   | A diff changes behavior but the right test additions are not obvious yet.                            |
+| [ui-evaluation](.agents/skills/ui-evaluation/SKILL.md)                     | A task needs Atom-owned UI interaction or a proof bundle from `atom evaluate run`.                   |
 | [examples-auto-run](.agents/skills/examples-auto-run/SKILL.md)             | Framework or example changes need proof through the hello-world consumer app.                        |
 
 ### How skills work
@@ -93,7 +96,8 @@ Crate responsibilities:
 - `atom-manifest`: app metadata loading and validation from Bazel-generated JSON.
 - `atom-modules`: module metadata loading, validation, and dependency ordering.
 - `atom-cng`: deterministic generation planning and emitted host tree writes.
-- `atom-deploy`: device discovery, platform deployment, and external tool orchestration.
+- `atom-deploy`: device discovery, platform deployment, evidence capture, UI evaluation, and
+  external tool orchestration.
 - `atom-cli`: thin CLI command dispatch and workspace resolution.
 - `atom-runtime`: runtime primitives and host-facing execution logic.
 

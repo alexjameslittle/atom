@@ -5,7 +5,17 @@ repo_root=$(cd -- "$(dirname "$0")/../../../.." && pwd)
 cd "$repo_root"
 
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
-GENERATED_ROOT="$repo_root/generated"
+
+detect_generated_root() {
+  for candidate in "$repo_root/cng-output" "$repo_root/generated"; do
+    if [ -d "$candidate/ios" ] || [ -d "$candidate/android" ] || [ -d "$candidate/schema" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "$repo_root/cng-output"
+}
 
 echo "==> Running dry-run prebuild"
 bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET" --dry-run
@@ -13,6 +23,12 @@ bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET" --dry-run
 echo ""
 echo "==> Running real prebuild"
 bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+
+GENERATED_ROOT=$(detect_generated_root)
+
+echo ""
+echo "==> Using generated root"
+echo "  ${GENERATED_ROOT#"$repo_root"/}"
 
 echo ""
 echo "==> Checking generated tree structure"

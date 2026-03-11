@@ -1,0 +1,36 @@
+{
+  "steps": [
+    {
+      "kind": "launch"
+    },
+    {
+      "kind": "wait_for_ui",
+      "target_id": "atom.demo.primary_button",
+      "timeout_ms": 5000
+    },
+    {
+      "kind": "start_video",
+      "name": "session"
+    },
+    {
+      "kind": "type_text",
+      "target_id": "atom.demo.input",
+      "text": "phase 6 comprehensive typing proof"
+    },
+    {
+      "kind": "tap",
+      "target_id": "atom.demo.primary_button"
+    },
+    {
+      "kind": "inspect_ui",
+      "name": "inspect.json"
+    },
+    {
+      "kind": "screenshot",
+      "name": "after-tap.png"
+    },
+    {
+      "kind": "stop_video"
+    }
+  ]
+}

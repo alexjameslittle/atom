@@ -14,6 +14,7 @@ cd "$repo_root"
 
 mise install
 eval "$(mise env)"
+./scripts/setup-idb.sh
 ./scripts/setup-android-sdk.sh
 ./scripts/install-hooks.sh
 

@@ -40,7 +40,9 @@ Dependency direction should move one way:
 - `atom-deploy`
   - Device discovery and destination selection
   - Build/install/launch orchestration for simulators, emulators, and connected devices
-  - Resolves destinations and external tool invocations for deployment workflows
+  - Framework-owned evidence capture, UI inspection, interaction, and proof-bundle orchestration
+  - Resolves destinations and external tool invocations for deployment workflows, including `idb`
+    for iOS and platform tooling for Android
   - Keeps platform deployment orchestration out of `atom-cli`
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows

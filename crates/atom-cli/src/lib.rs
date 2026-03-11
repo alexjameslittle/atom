@@ -1,15 +1,27 @@
 use std::ffi::OsString;
+use std::fs;
 use std::path::PathBuf;
 
 use atom_cng::{ConfigPluginRegistry, build_generation_plan, emit_host_tree, render_prebuild_plan};
 pub use atom_deploy::CommandOutput;
+use atom_deploy::destinations::{
+    DestinationPlatform, list_destinations, list_platform_destinations, render_destination_lines,
+};
+use atom_deploy::evaluate::{
+    InteractionRequest, capture_logs, capture_screenshot, capture_video, evaluate_run, inspect_ui,
+    interact,
+};
 use atom_deploy::progress::run_step;
-use atom_deploy::{ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel};
+use atom_deploy::{
+    LaunchMode, ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel, stop_android,
+    stop_ios,
+};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::load_manifest;
 use atom_modules::resolve_modules;
 use camino::{Utf8Path, Utf8PathBuf};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 
 #[derive(Debug, Parser)]
 #[command(name = "atom")]
@@ -22,7 +34,14 @@ struct Cli {
 enum Commands {
     Prebuild(PrebuildArgs),
     Run(RunArgs),
+    Stop(StopArgs),
     Test,
+    Destinations(ListDestinationsArgs),
+    Devices(DevicesArgs),
+    Evidence(EvidenceArgs),
+    Inspect(InspectArgs),
+    Interact(InteractArgs),
+    Evaluate(EvaluateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -43,14 +62,192 @@ struct RunArgs {
 struct TargetArgs {
     #[arg(long)]
     target: String,
-    #[arg(long)]
-    device: Option<String>,
+    #[arg(long, alias = "device")]
+    destination: Option<String>,
+    #[arg(long, default_value_t = false)]
+    detach: bool,
 }
 
 #[derive(Debug, Subcommand)]
 enum RunPlatform {
     Ios(TargetArgs),
     Android(TargetArgs),
+}
+
+#[derive(Debug, Args)]
+struct StopArgs {
+    #[command(subcommand)]
+    platform: StopPlatform,
+}
+
+#[derive(Debug, Args)]
+struct StopTargetArgs {
+    #[arg(long)]
+    target: String,
+    #[arg(long, alias = "device")]
+    destination: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum StopPlatform {
+    Ios(StopTargetArgs),
+    Android(StopTargetArgs),
+}
+
+#[derive(Debug, Args)]
+struct ListDestinationsArgs {
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct DevicesArgs {
+    #[arg(value_enum)]
+    platform: DevicePlatform,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DevicePlatform {
+    Ios,
+    Android,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceArgs {
+    #[command(subcommand)]
+    command: EvidenceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EvidenceCommand {
+    Logs(EvidenceLogsArgs),
+    Screenshot(EvidenceOutputArgs),
+    Video(EvidenceVideoArgs),
+}
+
+#[derive(Debug, Args)]
+struct EvidenceOutputArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    output: Utf8PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceLogsArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    output: Utf8PathBuf,
+    #[arg(long, default_value_t = 60)]
+    seconds: u64,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceVideoArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    output: Utf8PathBuf,
+    #[arg(long, default_value_t = 5)]
+    seconds: u64,
+}
+
+#[derive(Debug, Args)]
+struct TargetDestinationArgs {
+    #[arg(long)]
+    target: String,
+    #[arg(long, alias = "device")]
+    destination: String,
+}
+
+#[derive(Debug, Args)]
+struct InspectArgs {
+    #[command(subcommand)]
+    command: InspectCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum InspectCommand {
+    Ui(InspectUiArgs),
+}
+
+#[derive(Debug, Args)]
+struct InspectUiArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    output: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct InteractArgs {
+    #[command(subcommand)]
+    command: InteractCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum InteractCommand {
+    Tap(PointOrTargetArgs),
+    LongPress(PointOrTargetArgs),
+    Swipe(PointArgs),
+    Drag(PointArgs),
+    TypeText(TypeTextArgs),
+}
+
+#[derive(Debug, Args)]
+struct PointOrTargetArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    target_id: Option<String>,
+    #[arg(long)]
+    x: Option<f64>,
+    #[arg(long)]
+    y: Option<f64>,
+}
+
+#[derive(Debug, Args)]
+struct PointArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    x: Option<f64>,
+    #[arg(long)]
+    y: Option<f64>,
+}
+
+#[derive(Debug, Args)]
+struct TypeTextArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    target_id: Option<String>,
+    #[arg(long)]
+    text: String,
+}
+
+#[derive(Debug, Args)]
+struct EvaluateArgs {
+    #[command(subcommand)]
+    command: EvaluateCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EvaluateCommand {
+    Run(EvaluateRunArgs),
+}
+
+#[derive(Debug, Args)]
+struct EvaluateRunArgs {
+    #[command(flatten)]
+    target: TargetDestinationArgs,
+    #[arg(long)]
+    plan: Utf8PathBuf,
+    #[arg(long)]
+    artifacts_dir: Utf8PathBuf,
 }
 
 /// # Errors
@@ -95,7 +292,14 @@ fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResul
     match &cli.command {
         Commands::Prebuild(args) => execute_prebuild(cwd, args),
         Commands::Run(args) => execute_run(cwd, args, runner),
+        Commands::Stop(args) => execute_stop(cwd, args, runner),
         Commands::Test => execute_test(cwd, runner),
+        Commands::Destinations(args) => execute_destinations(cwd, args, runner),
+        Commands::Devices(args) => execute_devices(cwd, args, runner),
+        Commands::Evidence(args) => execute_evidence(cwd, args, runner),
+        Commands::Inspect(args) => execute_inspect(cwd, args, runner),
+        Commands::Interact(args) => execute_interact(cwd, args, runner),
+        Commands::Evaluate(args) => execute_evaluate(cwd, args, runner),
     }
 }
 
@@ -137,6 +341,11 @@ fn execute_run(
         RunPlatform::Android(target) => ("android", target),
     };
     let manifest = load_manifest(&repo_root, &target.target)?;
+    let launch_mode = if target.detach {
+        LaunchMode::Detached
+    } else {
+        LaunchMode::Attached
+    };
     let enabled = match platform {
         "ios" => manifest.ios.enabled,
         "android" => manifest.android.enabled,
@@ -163,16 +372,57 @@ fn execute_run(
     )?;
 
     match platform {
-        "ios" => deploy_ios(&repo_root, &manifest, target.device.as_deref(), runner)?,
-        "android" => deploy_android(&repo_root, &manifest, target.device.as_deref(), runner)?,
+        "ios" => deploy_ios(
+            &repo_root,
+            &manifest,
+            target.destination.as_deref(),
+            launch_mode,
+            runner,
+        )?,
+        "android" => deploy_android(
+            &repo_root,
+            &manifest,
+            target.destination.as_deref(),
+            launch_mode,
+            runner,
+        )?,
         _ => unreachable!("run platform should be validated by clap"),
     }
 
-    Ok(CommandOutput {
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-        exit_code: 0,
-    })
+    Ok(success_output(Vec::new()))
+}
+
+fn execute_stop(
+    cwd: &Utf8Path,
+    args: &StopArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    let (platform, target) = match &args.platform {
+        StopPlatform::Ios(target) => ("ios", target),
+        StopPlatform::Android(target) => ("android", target),
+    };
+    let manifest = load_manifest(&repo_root, &target.target)?;
+    let enabled = match platform {
+        "ios" => manifest.ios.enabled,
+        "android" => manifest.android.enabled,
+        _ => unreachable!("stop platform should be validated by clap"),
+    };
+    if !enabled {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ManifestInvalidValue,
+            format!("{platform} platform is not enabled"),
+            platform,
+        ));
+    }
+
+    match platform {
+        "ios" => stop_ios(&repo_root, &manifest, target.destination.as_deref(), runner)?,
+        "android" => stop_android(&repo_root, &manifest, target.destination.as_deref(), runner)?,
+        _ => unreachable!("stop platform should be validated by clap"),
+    }
+
+    Ok(success_output(Vec::new()))
 }
 
 fn execute_test(cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<CommandOutput> {
@@ -180,11 +430,228 @@ fn execute_test(cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<Comm
     run_step("Running tests...", "Tests passed", "Tests failed", || {
         run_bazel(runner, &repo_root, &["test", "//..."])
     })?;
-    Ok(CommandOutput {
-        stdout: Vec::new(),
+    Ok(success_output(Vec::new()))
+}
+
+fn execute_destinations(
+    cwd: &Utf8Path,
+    args: &ListDestinationsArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    let destinations = list_destinations(&repo_root, runner)?;
+    if args.json {
+        return json_output(&destinations);
+    }
+    Ok(text_output(render_destination_lines(&destinations)))
+}
+
+fn execute_devices(
+    cwd: &Utf8Path,
+    args: &DevicesArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    let platform = match args.platform {
+        DevicePlatform::Ios => DestinationPlatform::Ios,
+        DevicePlatform::Android => DestinationPlatform::Android,
+    };
+    let destinations = list_platform_destinations(&repo_root, platform, runner)?;
+    if args.json {
+        return json_output(&destinations);
+    }
+    Ok(text_output(render_destination_lines(&destinations)))
+}
+
+fn execute_evidence(
+    cwd: &Utf8Path,
+    args: &EvidenceArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    match &args.command {
+        EvidenceCommand::Logs(args) => {
+            let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let output = resolve_cli_path(&repo_root, &args.output);
+            capture_logs(
+                &repo_root,
+                &manifest,
+                &args.target.destination,
+                &output,
+                args.seconds,
+                runner,
+            )?;
+            Ok(text_output(format!("{output}\n")))
+        }
+        EvidenceCommand::Screenshot(args) => {
+            let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let output = resolve_cli_path(&repo_root, &args.output);
+            capture_screenshot(
+                &repo_root,
+                &manifest,
+                &args.target.destination,
+                &output,
+                runner,
+            )?;
+            Ok(text_output(format!("{output}\n")))
+        }
+        EvidenceCommand::Video(args) => {
+            let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let output = resolve_cli_path(&repo_root, &args.output);
+            capture_video(
+                &repo_root,
+                &manifest,
+                &args.target.destination,
+                &output,
+                args.seconds,
+                runner,
+            )?;
+            Ok(text_output(format!("{output}\n")))
+        }
+    }
+}
+
+fn execute_inspect(
+    cwd: &Utf8Path,
+    args: &InspectArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    match &args.command {
+        InspectCommand::Ui(args) => {
+            let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let snapshot = inspect_ui(&repo_root, &manifest, &args.target.destination, runner)?;
+            if let Some(output) = args
+                .output
+                .as_ref()
+                .map(|path| resolve_cli_path(&repo_root, path))
+            {
+                if let Some(parent) = output.parent() {
+                    fs::create_dir_all(parent).map_err(|error| {
+                        AtomError::with_path(
+                            AtomErrorCode::ExternalToolFailed,
+                            format!("failed to create inspect output directory: {error}"),
+                            parent.as_str(),
+                        )
+                    })?;
+                }
+                fs::write(
+                    &output,
+                    serde_json::to_string_pretty(&snapshot).map_err(|error| {
+                        AtomError::new(
+                            AtomErrorCode::InternalBug,
+                            format!("failed to encode UI snapshot: {error}"),
+                        )
+                    })?,
+                )
+                .map_err(|error| {
+                    AtomError::with_path(
+                        AtomErrorCode::ExternalToolFailed,
+                        format!("failed to write UI snapshot: {error}"),
+                        output.as_str(),
+                    )
+                })?;
+                return Ok(text_output(format!("{output}\n")));
+            }
+            json_output(&snapshot)
+        }
+    }
+}
+
+fn execute_interact(
+    cwd: &Utf8Path,
+    args: &InteractArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    let (target, request) = match &args.command {
+        InteractCommand::Tap(args) => (
+            &args.target,
+            InteractionRequest::Tap {
+                target_id: args.target_id.clone(),
+                x: args.x,
+                y: args.y,
+            },
+        ),
+        InteractCommand::LongPress(args) => (
+            &args.target,
+            InteractionRequest::LongPress {
+                target_id: args.target_id.clone(),
+                x: args.x,
+                y: args.y,
+            },
+        ),
+        InteractCommand::Swipe(args) => (
+            &args.target,
+            InteractionRequest::Swipe {
+                x: args.x,
+                y: args.y,
+            },
+        ),
+        InteractCommand::Drag(args) => (
+            &args.target,
+            InteractionRequest::Drag {
+                x: args.x,
+                y: args.y,
+            },
+        ),
+        InteractCommand::TypeText(args) => (
+            &args.target,
+            InteractionRequest::TypeText {
+                target_id: args.target_id.clone(),
+                text: args.text.clone(),
+            },
+        ),
+    };
+    let manifest = load_manifest(&repo_root, &target.target)?;
+    let result = interact(&repo_root, &manifest, &target.destination, request, runner)?;
+    json_output(&result)
+}
+
+fn execute_evaluate(
+    cwd: &Utf8Path,
+    args: &EvaluateArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    match &args.command {
+        EvaluateCommand::Run(args) => {
+            let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let plan = resolve_cli_path(&repo_root, &args.plan);
+            let artifacts_dir = resolve_cli_path(&repo_root, &args.artifacts_dir);
+            let result = evaluate_run(
+                &repo_root,
+                &manifest,
+                &args.target.destination,
+                &plan,
+                &artifacts_dir,
+                runner,
+            )?;
+            json_output(&result.manifest)
+        }
+    }
+}
+
+fn json_output<T: Serialize>(value: &T) -> AtomResult<CommandOutput> {
+    let stdout = serde_json::to_vec_pretty(value).map_err(|error| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            format!("failed to encode JSON output: {error}"),
+        )
+    })?;
+    Ok(success_output(stdout))
+}
+
+fn text_output(value: String) -> CommandOutput {
+    success_output(value.into_bytes())
+}
+
+fn success_output(stdout: Vec<u8>) -> CommandOutput {
+    CommandOutput {
+        stdout,
         stderr: Vec::new(),
         exit_code: 0,
-    })
+    }
 }
 
 fn default_config_plugin_registry() -> ConfigPluginRegistry {
@@ -220,6 +687,14 @@ fn resolve_command_root(cwd: &Utf8Path, workspace_directory: Option<&Utf8Path>) 
     workspace_directory.map_or_else(|| cwd.to_owned(), Utf8PathBuf::from)
 }
 
+fn resolve_cli_path(repo_root: &Utf8Path, path: &Utf8Path) -> Utf8PathBuf {
+    if path.is_absolute() {
+        path.to_owned()
+    } else {
+        repo_root.join(path)
+    }
+}
+
 fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
     for candidate in start.ancestors() {
         if candidate.join("MODULE.bazel").exists() {
@@ -233,10 +708,18 @@ fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
 mod tests {
     use std::fs;
 
-    use camino::Utf8PathBuf;
+    use camino::{Utf8Path, Utf8PathBuf};
+    use clap::Parser;
     use tempfile::tempdir;
 
-    use super::{find_workspace_root, resolve_workspace_root_with_workspace_dir, run_from_args};
+    use super::{
+        Cli, find_workspace_root, resolve_cli_path, resolve_workspace_root_with_workspace_dir,
+        run_from_args,
+    };
+
+    fn parse_cli(args: &[&str]) {
+        Cli::try_parse_from(args).expect("clap should accept the command");
+    }
 
     #[test]
     fn workspace_root_prefers_nearest_module_file() {
@@ -278,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn run_command_accepts_target_after_platform_subcommand() {
+    fn run_command_accepts_destination_alias() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         fs::write(root.join("MODULE.bazel"), "module(name = \"atom\")\n").expect("workspace");
@@ -290,11 +773,189 @@ mod tests {
                 "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
+                "--destination",
+                "SIM-123",
             ],
             &root,
         )
         .expect_err("missing manifest should fail after clap accepts the command");
 
         assert_ne!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn run_command_accepts_detach_flag() {
+        parse_cli(&[
+            "atom",
+            "run",
+            "android",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--detach",
+        ]);
+    }
+
+    #[test]
+    fn stop_command_accepts_destination_alias() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        fs::write(root.join("MODULE.bazel"), "module(name = \"atom\")\n").expect("workspace");
+
+        let error = run_from_args(
+            [
+                "atom",
+                "stop",
+                "ios",
+                "--target",
+                "//examples/hello-world/apps/hello_atom:hello_atom",
+                "--destination",
+                "SIM-123",
+            ],
+            &root,
+        )
+        .expect_err("missing manifest should fail after clap accepts the command");
+
+        assert_ne!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn destinations_command_accepts_json_flag() {
+        parse_cli(&["atom", "destinations", "--json"]);
+    }
+
+    #[test]
+    fn devices_command_accepts_platform_and_json_flag() {
+        parse_cli(&["atom", "devices", "ios", "--json"]);
+        parse_cli(&["atom", "devices", "android", "--json"]);
+    }
+
+    #[test]
+    fn evidence_commands_accept_required_flags() {
+        parse_cli(&[
+            "atom",
+            "evidence",
+            "logs",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--destination",
+            "SIM-123",
+            "--output",
+            "tmp/logs.txt",
+            "--seconds",
+            "10",
+        ]);
+        parse_cli(&[
+            "atom",
+            "evidence",
+            "screenshot",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--destination",
+            "SIM-123",
+            "--output",
+            "tmp/screenshot.png",
+        ]);
+        parse_cli(&[
+            "atom",
+            "evidence",
+            "video",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--destination",
+            "SIM-123",
+            "--output",
+            "tmp/video.mp4",
+            "--seconds",
+            "3",
+        ]);
+    }
+
+    #[test]
+    fn inspect_ui_accepts_output_flag() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        fs::write(root.join("MODULE.bazel"), "module(name = \"atom\")\n").expect("workspace");
+
+        let error = run_from_args(
+            [
+                "atom",
+                "inspect",
+                "ui",
+                "--target",
+                "//examples/hello-world/apps/hello_atom:hello_atom",
+                "--destination",
+                "SIM-123",
+                "--output",
+                "tmp/out.json",
+            ],
+            &root,
+        )
+        .expect_err("missing manifest should fail after clap accepts the command");
+
+        assert_ne!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn interact_commands_accept_supported_shapes() {
+        parse_cli(&[
+            "atom",
+            "interact",
+            "tap",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--destination",
+            "SIM-123",
+            "--target-id",
+            "atom.demo.primary_button",
+        ]);
+        parse_cli(&[
+            "atom",
+            "interact",
+            "type-text",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--destination",
+            "SIM-123",
+            "--target-id",
+            "atom.demo.input",
+            "--text",
+            "hello",
+        ]);
+    }
+
+    #[test]
+    fn evaluate_run_requires_plan_and_artifacts_dir() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let error = run_from_args(
+            [
+                "atom",
+                "evaluate",
+                "run",
+                "--target",
+                "//examples/hello-world/apps/hello_atom:hello_atom",
+                "--destination",
+                "SIM-123",
+            ],
+            &root,
+        )
+        .expect_err("missing evaluate args should fail");
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn resolve_cli_path_joins_repo_relative_paths() {
+        let repo_root = Utf8PathBuf::from("/tmp/atom-workspace");
+        let resolved = resolve_cli_path(&repo_root, Utf8Path::new("examples/plan.json"));
+
+        assert_eq!(resolved, repo_root.join("examples/plan.json"));
+    }
+
+    #[test]
+    fn resolve_cli_path_preserves_absolute_paths() {
+        let repo_root = Utf8PathBuf::from("/tmp/atom-workspace");
+        let absolute = Utf8PathBuf::from("/tmp/output.json");
+
+        assert_eq!(resolve_cli_path(&repo_root, &absolute), absolute);
     }
 }

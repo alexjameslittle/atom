@@ -1,9 +1,13 @@
 mod deploy;
+pub mod destinations;
 pub mod devices;
+pub mod evaluate;
 pub mod progress;
 mod tools;
 
-pub use crate::deploy::{deploy_android, deploy_ios, generated_target};
+pub use crate::deploy::{
+    LaunchMode, deploy_android, deploy_ios, generated_target, stop_android, stop_ios,
+};
 pub use crate::tools::{
     CommandOutput, ProcessRunner, ToolRunner, capture_bazel, capture_bazel_owned,
     capture_json_tool, capture_tool, find_bazel_output, find_bazel_output_owned, run_bazel,
@@ -19,7 +23,10 @@ mod tests {
     use camino::{Utf8Path, Utf8PathBuf};
     use tempfile::tempdir;
 
-    use crate::deploy::{deploy_android, deploy_ios};
+    use crate::deploy::{LaunchMode, deploy_android, deploy_ios, stop_android, stop_ios};
+    use crate::destinations::{
+        DestinationCapability, DestinationKind, DestinationPlatform, list_destinations,
+    };
     use crate::devices::android::AndroidDestination;
     use crate::devices::ios::{IosDestination, IosDestinationKind, select_default_ios_destination};
     use crate::tools::ToolRunner;
@@ -109,6 +116,13 @@ mod tests {
         }
     }
 
+    fn idb_targets_json(simulator_state: &str) -> String {
+        format!(
+            r#"{{"udid":"SIM-123","name":"iPhone 16","state":"{simulator_state}","type":"simulator","os_version":"18.2","architecture":"x86_64"}}
+{{"udid":"00008130-001431E90A78001C","name":"Alex's iPhone","state":"Booted","type":"device","os_version":"18.2","architecture":"arm64"}}"#
+        )
+    }
+
     #[test]
     fn ios_deploy_sequence_builds_boots_installs_and_launches() {
         let directory = tempdir().expect("tempdir");
@@ -117,32 +131,33 @@ mod tests {
         let mut runner = FakeToolRunner {
             calls: Vec::new(),
             captures: VecDeque::from([
-                "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-18-2\":[{\"name\":\"iPhone 16\",\"udid\":\"SIM-123\",\"state\":\"Shutdown\",\"isAvailable\":true}]}}\n".to_owned(),
+                idb_targets_json("Shutdown"),
                 "bazel-bin/generated/ios/hello-atom/app.app\n".to_owned(),
             ]),
         };
 
-        deploy_ios(&root, &manifest, Some("SIM-123"), &mut runner).expect("ios deploy");
+        deploy_ios(
+            &root,
+            &manifest,
+            Some("SIM-123"),
+            LaunchMode::Attached,
+            &mut runner,
+        )
+        .expect("ios deploy");
 
         assert_eq!(
             runner.calls,
             vec![
                 (
-                    "xcrun".to_owned(),
-                    vec![
-                        "simctl".to_owned(),
-                        "list".to_owned(),
-                        "devices".to_owned(),
-                        "available".to_owned(),
-                        "-j".to_owned(),
-                    ],
+                    "idb".to_owned(),
+                    vec!["list-targets".to_owned(), "--json".to_owned(),],
                 ),
                 (
                     "bazelisk".to_owned(),
                     vec![
                         "build".to_owned(),
                         "//generated/ios/hello-atom:app".to_owned(),
-                        "--ios_multi_cpus=sim_arm64".to_owned(),
+                        "--ios_multi_cpus=sim_arm64,x86_64".to_owned(),
                     ],
                 ),
                 (
@@ -150,28 +165,19 @@ mod tests {
                     vec![
                         "cquery".to_owned(),
                         "//generated/ios/hello-atom:app".to_owned(),
-                        "--ios_multi_cpus=sim_arm64".to_owned(),
+                        "--ios_multi_cpus=sim_arm64,x86_64".to_owned(),
                         "--output=files".to_owned(),
                     ],
                 ),
                 (
-                    "xcrun".to_owned(),
-                    vec!["simctl".to_owned(), "boot".to_owned(), "SIM-123".to_owned()],
+                    "idb".to_owned(),
+                    vec!["boot".to_owned(), "SIM-123".to_owned()],
                 ),
                 (
-                    "xcrun".to_owned(),
+                    "idb".to_owned(),
                     vec![
-                        "simctl".to_owned(),
-                        "bootstatus".to_owned(),
-                        "SIM-123".to_owned(),
-                        "-b".to_owned(),
-                    ],
-                ),
-                (
-                    "xcrun".to_owned(),
-                    vec![
-                        "simctl".to_owned(),
                         "install".to_owned(),
+                        "--udid".to_owned(),
                         "SIM-123".to_owned(),
                         root.join("bazel-bin/generated/ios/hello-atom/app.app")
                             .as_str()
@@ -179,11 +185,21 @@ mod tests {
                     ],
                 ),
                 (
-                    "xcrun".to_owned(),
+                    "idb".to_owned(),
                     vec![
-                        "simctl".to_owned(),
+                        "terminate".to_owned(),
+                        "--udid".to_owned(),
+                        "SIM-123".to_owned(),
+                        "build.atom.hello".to_owned(),
+                    ],
+                ),
+                (
+                    "idb".to_owned(),
+                    vec![
                         "launch".to_owned(),
-                        "--console".to_owned(),
+                        "-f".to_owned(),
+                        "-w".to_owned(),
+                        "--udid".to_owned(),
                         "SIM-123".to_owned(),
                         "build.atom.hello".to_owned(),
                     ],
@@ -200,7 +216,7 @@ mod tests {
         let mut runner = FakeToolRunner {
             calls: Vec::new(),
             captures: VecDeque::from([
-                "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-18-2\":[{\"name\":\"iPhone 16\",\"udid\":\"SIM-123\",\"state\":\"Shutdown\",\"isAvailable\":true}]}}\n".to_owned(),
+                idb_targets_json("Shutdown"),
                 "bazel-bin/generated/ios/hello-atom/app.app\n".to_owned(),
             ]),
         };
@@ -209,6 +225,7 @@ mod tests {
             &root,
             &manifest,
             Some("00008130-001431E90A78001C"),
+            LaunchMode::Attached,
             &mut runner,
         )
         .expect("ios device deploy");
@@ -217,14 +234,8 @@ mod tests {
             runner.calls,
             vec![
                 (
-                    "xcrun".to_owned(),
-                    vec![
-                        "simctl".to_owned(),
-                        "list".to_owned(),
-                        "devices".to_owned(),
-                        "available".to_owned(),
-                        "-j".to_owned(),
-                    ],
+                    "idb".to_owned(),
+                    vec!["list-targets".to_owned(), "--json".to_owned(),],
                 ),
                 (
                     "bazelisk".to_owned(),
@@ -244,13 +255,10 @@ mod tests {
                     ],
                 ),
                 (
-                    "xcrun".to_owned(),
+                    "idb".to_owned(),
                     vec![
-                        "devicectl".to_owned(),
-                        "device".to_owned(),
                         "install".to_owned(),
-                        "app".to_owned(),
-                        "--device".to_owned(),
+                        "--udid".to_owned(),
                         "00008130-001431E90A78001C".to_owned(),
                         root.join("bazel-bin/generated/ios/hello-atom/app.app")
                             .as_str()
@@ -258,13 +266,21 @@ mod tests {
                     ],
                 ),
                 (
-                    "xcrun".to_owned(),
+                    "idb".to_owned(),
                     vec![
-                        "devicectl".to_owned(),
-                        "device".to_owned(),
-                        "process".to_owned(),
+                        "terminate".to_owned(),
+                        "--udid".to_owned(),
+                        "00008130-001431E90A78001C".to_owned(),
+                        "build.atom.hello".to_owned(),
+                    ],
+                ),
+                (
+                    "idb".to_owned(),
+                    vec![
                         "launch".to_owned(),
-                        "--device".to_owned(),
+                        "-f".to_owned(),
+                        "-w".to_owned(),
+                        "--udid".to_owned(),
                         "00008130-001431E90A78001C".to_owned(),
                         "build.atom.hello".to_owned(),
                     ],
@@ -284,20 +300,27 @@ mod tests {
         let mut runner = FakeToolRunner {
             calls: Vec::new(),
             captures: VecDeque::from([
-                "{\"devices\":{\"com.apple.CoreSimulator.SimRuntime.iOS-18-2\":[{\"name\":\"iPhone 16\",\"udid\":\"SIM-123\",\"state\":\"Shutdown\",\"isAvailable\":true}]}}\n".to_owned(),
+                idb_targets_json("Shutdown"),
                 "bazel-bin/generated/ios/hello-atom/app.ipa\n".to_owned(),
             ]),
         };
 
-        deploy_ios(&root, &manifest, Some("SIM-123"), &mut runner).expect("ios deploy");
+        deploy_ios(
+            &root,
+            &manifest,
+            Some("SIM-123"),
+            LaunchMode::Attached,
+            &mut runner,
+        )
+        .expect("ios deploy");
 
         assert_eq!(
-            runner.calls[5],
+            runner.calls[4],
             (
-                "xcrun".to_owned(),
+                "idb".to_owned(),
                 vec![
-                    "simctl".to_owned(),
                     "install".to_owned(),
+                    "--udid".to_owned(),
                     "SIM-123".to_owned(),
                     app_bundle.as_str().to_owned(),
                 ],
@@ -314,12 +337,19 @@ mod tests {
             calls: Vec::new(),
             captures: VecDeque::from([
                 "bazel-bin/generated/android/hello-atom/app_unsigned.apk\nbazel-bin/generated/android/hello-atom/app.apk\n".to_owned(),
+                "1\n".to_owned(),
                 "4793\n".to_owned(),
             ]),
         };
 
-        deploy_android(&root, &manifest, Some("emulator-5554"), &mut runner)
-            .expect("android deploy");
+        deploy_android(
+            &root,
+            &manifest,
+            Some("emulator-5554"),
+            LaunchMode::Attached,
+            &mut runner,
+        )
+        .expect("android deploy");
 
         assert_eq!(
             runner.calls,
@@ -339,6 +369,16 @@ mod tests {
                         "//generated/android/hello-atom:app".to_owned(),
                         "--android_platforms=//platforms:arm64-v8a".to_owned(),
                         "--output=files".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "getprop".to_owned(),
+                        "sys.boot_completed".to_owned(),
                     ],
                 ),
                 (
@@ -370,6 +410,7 @@ mod tests {
                         "shell".to_owned(),
                         "am".to_owned(),
                         "start".to_owned(),
+                        "-W".to_owned(),
                         "-n".to_owned(),
                         "build.atom.hello/.MainActivity".to_owned(),
                     ],
@@ -410,6 +451,7 @@ mod tests {
                 name: "iPad Pro".to_owned(),
                 state: "Shutdown".to_owned(),
                 runtime: Some("com.apple.CoreSimulator.SimRuntime.iOS-18-2".to_owned()),
+                architecture: Some("x86_64".to_owned()),
                 is_available: true,
             },
             IosDestination {
@@ -419,6 +461,7 @@ mod tests {
                 name: "iPhone 16".to_owned(),
                 state: "Shutdown".to_owned(),
                 runtime: Some("com.apple.CoreSimulator.SimRuntime.iOS-18-2".to_owned()),
+                architecture: Some("x86_64".to_owned()),
                 is_available: true,
             },
             IosDestination {
@@ -428,6 +471,7 @@ mod tests {
                 name: "Alex's iPhone".to_owned(),
                 state: "ready".to_owned(),
                 runtime: None,
+                architecture: Some("arm64".to_owned()),
                 is_available: true,
             },
         ];
@@ -450,6 +494,252 @@ mod tests {
         assert_eq!(
             destination.display_label(),
             "Emulator: Pixel 9 [Emulator; emulator-5554]"
+        );
+    }
+
+    #[test]
+    fn destination_listing_reports_capabilities_and_platforms() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                idb_targets_json("Booted"),
+                "List of devices attached\nemulator-5554\tdevice model:Pixel_9 device:emu64a\n"
+                    .to_owned(),
+                "atom_35\n".to_owned(),
+                "atom_35\nPixel_9_API_35\n".to_owned(),
+            ]),
+        };
+
+        let destinations = list_destinations(&root, &mut runner).expect("destinations");
+
+        assert!(destinations.iter().any(|destination| {
+            destination.id == "SIM-123"
+                && destination.platform == DestinationPlatform::Ios
+                && destination.kind == DestinationKind::Simulator
+                && destination
+                    .capabilities
+                    .contains(&DestinationCapability::Evaluate)
+        }));
+        assert!(destinations.iter().any(|destination| {
+            destination.id == "00008130-001431E90A78001C"
+                && destination.platform == DestinationPlatform::Ios
+                && destination.kind == DestinationKind::Device
+                && destination.capabilities == vec![DestinationCapability::Launch]
+        }));
+        assert!(destinations.iter().any(|destination| {
+            destination.id == "avd:atom_35"
+                && destination.platform == DestinationPlatform::Android
+                && destination.kind == DestinationKind::Emulator
+                && destination
+                    .capabilities
+                    .contains(&DestinationCapability::InspectUi)
+        }));
+        assert!(destinations.iter().any(|destination| {
+            destination.id == "avd:Pixel_9_API_35"
+                && destination.platform == DestinationPlatform::Android
+                && destination.kind == DestinationKind::Avd
+                && destination.available
+        }));
+
+        let json = serde_json::to_string(&destinations).expect("destinations json");
+        assert!(json.contains("\"platform\":\"ios\""));
+        assert!(json.contains("\"capabilities\":[\"launch\""));
+    }
+
+    #[test]
+    fn ios_detached_deploy_waits_for_ui_readiness_before_returning() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                idb_targets_json("Shutdown"),
+                "bazel-bin/generated/ios/hello-atom/app.app\n".to_owned(),
+                r#"{"elements":[{"AXUniqueId":"idb-node-0","type":"Application","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":0,"y":0,"width":402,"height":874}},{"AXUniqueId":"atom.demo.title","type":"StaticText","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":24,"y":96,"width":140,"height":28}}]}"#
+                    .to_owned(),
+            ]),
+        };
+
+        deploy_ios(
+            &root,
+            &manifest,
+            Some("SIM-123"),
+            LaunchMode::Detached,
+            &mut runner,
+        )
+        .expect("ios deploy");
+
+        assert!(runner.calls.contains(&(
+            "idb".to_owned(),
+            vec![
+                "launch".to_owned(),
+                "-f".to_owned(),
+                "--udid".to_owned(),
+                "SIM-123".to_owned(),
+                "build.atom.hello".to_owned(),
+            ],
+        )));
+        assert!(runner.calls.contains(&(
+            "idb".to_owned(),
+            vec![
+                "ui".to_owned(),
+                "describe-all".to_owned(),
+                "--udid".to_owned(),
+                "SIM-123".to_owned(),
+            ],
+        )));
+    }
+
+    #[test]
+    fn android_detached_deploy_skips_log_streaming() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                "bazel-bin/generated/android/hello-atom/app_unsigned.apk\nbazel-bin/generated/android/hello-atom/app.apk\n".to_owned(),
+                "1\n".to_owned(),
+            ]),
+        };
+
+        deploy_android(
+            &root,
+            &manifest,
+            Some("emulator-5554"),
+            LaunchMode::Detached,
+            &mut runner,
+        )
+        .expect("android deploy");
+
+        assert_eq!(
+            runner.calls,
+            vec![
+                (
+                    "bazelisk".to_owned(),
+                    vec![
+                        "build".to_owned(),
+                        "//generated/android/hello-atom:app".to_owned(),
+                        "--android_platforms=//platforms:arm64-v8a".to_owned(),
+                    ],
+                ),
+                (
+                    "bazelisk".to_owned(),
+                    vec![
+                        "cquery".to_owned(),
+                        "//generated/android/hello-atom:app".to_owned(),
+                        "--android_platforms=//platforms:arm64-v8a".to_owned(),
+                        "--output=files".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "getprop".to_owned(),
+                        "sys.boot_completed".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "install".to_owned(),
+                        "-r".to_owned(),
+                        root.join("bazel-bin/generated/android/hello-atom/app.apk")
+                            .as_str()
+                            .to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "am".to_owned(),
+                        "start".to_owned(),
+                        "-W".to_owned(),
+                        "-n".to_owned(),
+                        "build.atom.hello/.MainActivity".to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn ios_stop_only_terminates_when_app_is_running() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                idb_targets_json("Booted"),
+                "build.atom.hello | hello-atom | user | arm64 | Running | Not Debuggable | pid=42\n"
+                    .to_owned(),
+            ]),
+        };
+
+        stop_ios(&root, &manifest, Some("SIM-123"), &mut runner).expect("ios stop");
+
+        assert_eq!(
+            runner.calls,
+            vec![
+                (
+                    "idb".to_owned(),
+                    vec!["list-targets".to_owned(), "--json".to_owned(),],
+                ),
+                (
+                    "idb".to_owned(),
+                    vec![
+                        "list-apps".to_owned(),
+                        "--udid".to_owned(),
+                        "SIM-123".to_owned(),
+                    ],
+                ),
+                (
+                    "idb".to_owned(),
+                    vec![
+                        "terminate".to_owned(),
+                        "--udid".to_owned(),
+                        "SIM-123".to_owned(),
+                        "build.atom.hello".to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn android_stop_force_stops_running_destination() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner::default();
+
+        stop_android(&root, &manifest, Some("emulator-5554"), &mut runner).expect("android stop");
+
+        assert_eq!(
+            runner.calls,
+            vec![(
+                "adb".to_owned(),
+                vec![
+                    "-s".to_owned(),
+                    "emulator-5554".to_owned(),
+                    "shell".to_owned(),
+                    "am".to_owned(),
+                    "force-stop".to_owned(),
+                    "build.atom.hello".to_owned(),
+                ],
+            )]
         );
     }
 }

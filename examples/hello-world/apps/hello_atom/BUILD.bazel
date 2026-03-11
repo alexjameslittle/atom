@@ -22,8 +22,42 @@ atom_app(
     modules = [
         "//examples/hello-world/modules/device_info:device_info",
         "//examples/hello-world/modules/native_echo:native_echo",
+        "//examples/hello-world/modules/demo_surface:demo_surface",
     ],
     slug = "hello-atom",
+    deps = [
+        "//crates/atom-analytics",
+        "//crates/atom-navigation",
+        "//crates/atom-runtime",
+        "//examples/hello-world/modules/device_info",
+        "//examples/hello-world/plugins/lifecycle_logger",
+    ],
+)
+
+atom_app(
+    name = "hello_atom_plain",
+    android_application_id = "build.atom.hello.plain",
+    android_min_sdk = 28,
+    android_target_sdk = 35,
+    app_name = "Hello Atom Plain",
+    config_plugins = [
+        atom_app_icon(
+            android = "assets/ic_launcher.png",
+            android_min_sdk = 28,
+            ios = "assets/AppIcon.icon",
+            ios_min_deployment_target = "18.0",
+            min_atom_version = "0.1.0",
+        ),
+    ],
+    crate_name = "hello_atom_plain",
+    generated_root = "cng-output",
+    ios_bundle_id = "build.atom.hello.plain",
+    ios_deployment_target = "18.0",
+    modules = [
+        "//examples/hello-world/modules/device_info:device_info",
+        "//examples/hello-world/modules/native_echo:native_echo",
+    ],
+    slug = "hello-atom-plain",
     deps = [
         "//crates/atom-analytics",
         "//crates/atom-navigation",

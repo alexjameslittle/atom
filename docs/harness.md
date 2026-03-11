@@ -12,7 +12,9 @@ Run:
 
 This expects `mise` to already be installed, then installs the pinned toolchain from
 [../mise.toml](../mise.toml) and configures Git to use the tracked hooks in
-[../.githooks](../.githooks).
+[../.githooks](../.githooks). On macOS hosts with Homebrew available, bootstrap also installs the
+`idb` companion (`idb_companion`) from `facebook/fb` and installs the `fb-idb` CLI into the Homebrew
+prefix so the `idb` command is available on `PATH`.
 
 ## Local Guardrails
 

@@ -2,18 +2,55 @@ package {{ package_name }}
 
 import android.app.Activity
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+
+interface AtomHostViewFactory {
+    fun build(activity: Activity): View
+}
 
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(resolveRootView())
+    }
 
+    override fun onStart() {
+        super.onStart()
+        atomApp?.sendLifecycle(1, "foreground")
+    }
+
+    override fun onStop() {
+        atomApp?.sendLifecycle(2, "background")
+        super.onStop()
+    }
+
+    private val atomApp: AtomApplication?
+        get() = application as? AtomApplication
+
+    private fun resolveRootView(): View {
+        return loadHostViewFactory()?.build(this) ?: defaultRootView()
+    }
+
+    // App-owned native sources can provide a richer root view without modifying shared templates.
+    private fun loadHostViewFactory(): AtomHostViewFactory? {
+        return try {
+            val factoryClass = Class.forName("{{ package_name }}.AtomHostViewFactoryImpl")
+            val factory = factoryClass.getDeclaredConstructor().newInstance()
+            factory as? AtomHostViewFactory
+        } catch (_: ReflectiveOperationException) {
+            null
+        }
+    }
+
+    private fun defaultRootView(): View {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(48, 48, 48, 48)
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            setPadding(48, 96, 48, 48)
         }
         layout.addView(TextView(this).apply {
             text = "{{ name }}"
@@ -28,28 +65,10 @@ class MainActivity : Activity() {
         })
         layout.addView(TextView(this).apply {
             text = AtomBindings.moduleSummary
-            textSize = 12f
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             gravity = Gravity.CENTER
             alpha = 0.6f
         })
-        setContentView(layout)
+        return layout
     }
-
-    override fun onResume() {
-        super.onResume()
-        atomApp?.sendLifecycle(1, "foreground")
-    }
-
-    override fun onPause() {
-        atomApp?.sendLifecycle(2, "background")
-        super.onPause()
-    }
-
-    override fun onDestroy() {
-        atomApp?.sendLifecycle(5, "terminate")
-        super.onDestroy()
-    }
-
-    private val atomApp: AtomApplication?
-        get() = application as? AtomApplication
 }

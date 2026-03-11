@@ -1,0 +1,8 @@
+load("@atom//bzl/atom:defs.bzl", "atom_native_module")
+
+atom_native_module(
+    name = "demo_surface",
+    android_srcs = ["android/DemoSurfaceModule.kt"],
+    ios_srcs = ["ios/DemoSurfaceModule.swift"],
+    schema_files = ["schema/demo_surface.fbs"],
+)
