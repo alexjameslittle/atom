@@ -1,12 +1,10 @@
 use std::fmt::Write as _;
 
-use atom_backends::{BackendDefinition, DeployBackendRegistry, ToolRunner};
+use atom_backends::{DeployBackendRegistry, ToolRunner};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8Path;
 
-pub use atom_backends::{
-    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
-};
+pub use atom_backends::{DestinationCapability, DestinationDescriptor};
 
 /// # Errors
 ///
@@ -18,25 +16,6 @@ pub fn list_destinations(
 ) -> AtomResult<Vec<DestinationDescriptor>> {
     let mut destinations = Vec::new();
     for backend in registry.iter() {
-        destinations.extend(backend.list_destinations(repo_root, runner)?);
-    }
-    Ok(destinations)
-}
-
-/// # Errors
-///
-/// Returns an error if destination discovery for a backend on the requested platform fails.
-pub fn list_platform_destinations(
-    repo_root: &Utf8Path,
-    registry: &DeployBackendRegistry,
-    platform: DestinationPlatform,
-    runner: &mut impl ToolRunner,
-) -> AtomResult<Vec<DestinationDescriptor>> {
-    let mut destinations = Vec::new();
-    for backend in registry
-        .iter()
-        .filter(|backend| backend.platform() == platform.as_str())
-    {
         destinations.extend(backend.list_destinations(repo_root, runner)?);
     }
     Ok(destinations)
@@ -81,7 +60,7 @@ pub fn render_destination_lines(destinations: &[DestinationDescriptor]) -> Strin
             .join(",");
         let _ = writeln!(
             output,
-            "{} [{} {:?}; backend={}; available={}; state={}; capabilities={}]",
+            "{} [{} {}; backend={}; available={}; state={}; capabilities={}]",
             destination.display_name,
             destination.id,
             destination.kind,

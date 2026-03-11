@@ -19,32 +19,6 @@ pub enum SessionLaunchBehavior {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DestinationPlatform {
-    Ios,
-    Android,
-}
-
-impl DestinationPlatform {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ios => "ios",
-            Self::Android => "android",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DestinationKind {
-    Simulator,
-    Device,
-    Emulator,
-    Avd,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum DestinationCapability {
     Launch,
     Logs,
@@ -59,8 +33,7 @@ pub enum DestinationCapability {
 pub struct DestinationDescriptor {
     pub backend_id: String,
     pub id: String,
-    pub platform: DestinationPlatform,
-    pub kind: DestinationKind,
+    pub kind: String,
     pub display_name: String,
     pub available: bool,
     pub debug_state: String,

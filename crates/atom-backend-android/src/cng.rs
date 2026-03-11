@@ -1,12 +1,18 @@
 use atom_backends::{
-    BackendDefinition, GenerationBackend, GenerationBackendRegistry, GenerationPlan, PlatformPlan,
+    BackendContribution, BackendDefinition, BackendPlan, GenerationBackend,
+    GenerationBackendRegistry, GenerationPlan,
 };
-use atom_cng::{render_android_manifest_document, render_template, write_generated_file};
-use atom_ffi::AtomResult;
-use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, NormalizedManifest, metadata_target};
+use atom_cng::write_generated_file;
+use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
+use atom_manifest::{
+    AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, NormalizedManifest, metadata_target,
+};
 use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 use minijinja::context;
+use serde_json::{Value, json};
+
+use crate::templates::render as render_template;
 
 const BACKEND_ID: &str = "android";
 
@@ -27,7 +33,54 @@ impl BackendDefinition for AndroidGenerationBackend {
 }
 
 impl GenerationBackend for AndroidGenerationBackend {
-    fn build_platform_plan(&self, manifest: &NormalizedManifest) -> Option<PlatformPlan> {
+    fn initialize_backend(
+        &self,
+        manifest: &NormalizedManifest,
+    ) -> AtomResult<Option<BackendContribution>> {
+        Ok(manifest.android.enabled.then(|| BackendContribution {
+            metadata_entries: default_android_manifest(&manifest.app, &manifest.android),
+            ..BackendContribution::default()
+        }))
+    }
+
+    fn module_contribution(
+        &self,
+        _manifest: &NormalizedManifest,
+        module: &ResolvedModule,
+    ) -> AtomResult<BackendContribution> {
+        Ok(BackendContribution {
+            metadata_entries: module.manifest.android_manifest.clone(),
+            ..BackendContribution::default()
+        })
+    }
+
+    fn validate_module_compatibility(
+        &self,
+        manifest: &NormalizedManifest,
+        module: &ResolvedModule,
+    ) -> AtomResult<()> {
+        validate_min_sdk(
+            manifest.android.min_sdk,
+            module.manifest.android_min_sdk,
+            module.manifest.target_label.as_str(),
+            "android_min_sdk",
+        )
+    }
+
+    fn validate_config_plugin_compatibility(
+        &self,
+        manifest: &NormalizedManifest,
+        plugin: &ConfigPluginRequest,
+    ) -> AtomResult<()> {
+        validate_min_sdk(
+            manifest.android.min_sdk,
+            plugin.android_min_sdk,
+            plugin.target_label.as_str(),
+            "android_min_sdk",
+        )
+    }
+
+    fn build_backend_plan(&self, manifest: &NormalizedManifest) -> Option<BackendPlan> {
         manifest
             .android
             .enabled
@@ -39,9 +92,8 @@ impl GenerationBackend for AndroidGenerationBackend {
     }
 
     fn generated_root(&self, plan: &GenerationPlan) -> Option<Utf8PathBuf> {
-        plan.android
-            .as_ref()
-            .map(|android| android.generated_root.clone())
+        plan.backend(BACKEND_ID)
+            .map(|android| android.plan.generated_root.clone())
     }
 }
 
@@ -49,7 +101,7 @@ fn build_android_plan(
     app: &AppConfig,
     build: &BuildConfig,
     android: &AndroidConfig,
-) -> PlatformPlan {
+) -> BackendPlan {
     let generated_root = build.generated_root.join("android").join(&app.slug);
     let package_dir = kotlin_package_dir(
         android
@@ -66,7 +118,7 @@ fn build_android_plan(
         source_root.join("AtomBindings.kt"),
         source_root.join("MainActivity.kt"),
     ];
-    PlatformPlan {
+    BackendPlan {
         target: format!("//{}:app", generated_root.as_str()),
         generated_root,
         files,
@@ -178,36 +230,215 @@ fn jni_mangle_segment(value: &str) -> String {
     mangled
 }
 
+fn default_android_manifest(app: &AppConfig, android: &AndroidConfig) -> JsonMap {
+    object_from_value(json!({
+        "uses-sdk": {
+            "@android:minSdkVersion": android.min_sdk.unwrap_or_default(),
+            "@android:targetSdkVersion": android.target_sdk.unwrap_or_default(),
+        },
+        "application": {
+            "@android:label": app.name,
+            "@android:name": ".AtomApplication",
+            "activity": {
+                "@android:name": ".MainActivity",
+                "@android:exported": true,
+                "intent-filter": {
+                    "action": {
+                        "@android:name": "android.intent.action.MAIN"
+                    },
+                    "category": {
+                        "@android:name": "android.intent.category.LAUNCHER"
+                    }
+                }
+            }
+        }
+    }))
+}
+
+fn validate_min_sdk(
+    current: Option<u32>,
+    required: Option<u32>,
+    target_label: &str,
+    field: &str,
+) -> AtomResult<()> {
+    if let (Some(current), Some(required)) = (current, required)
+        && current < required
+    {
+        return Err(extension_compatibility_error(
+            target_label,
+            field,
+            format!(
+                "extension requires Android min_sdk {required}, app is configured for {current}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn extension_compatibility_error(target_label: &str, field: &str, message: String) -> AtomError {
+    AtomError::with_path(
+        AtomErrorCode::ExtensionIncompatible,
+        message,
+        format!("{target_label}.{field}"),
+    )
+}
+
+fn object_from_value(value: Value) -> JsonMap {
+    match value {
+        Value::Object(map) => map,
+        _ => JsonMap::new(),
+    }
+}
+
+fn render_android_manifest_document(package_name: &str, manifest: &JsonMap) -> AtomResult<String> {
+    use std::fmt::Write;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"{}\">",
+        xml_escape(package_name)
+    )
+    .expect("write to string");
+    render_android_nodes(&mut output, manifest, 1)?;
+    output.push_str("</manifest>\n");
+    Ok(output)
+}
+
+fn render_android_nodes(output: &mut String, nodes: &JsonMap, indent: usize) -> AtomResult<()> {
+    for (name, value) in nodes {
+        render_android_node(output, name, value, indent)?;
+    }
+    Ok(())
+}
+
+fn render_android_node(
+    output: &mut String,
+    name: &str,
+    value: &Value,
+    indent: usize,
+) -> AtomResult<()> {
+    use std::fmt::Write;
+
+    if let Value::Array(values) = value {
+        for entry in values {
+            render_android_node(output, name, entry, indent)?;
+        }
+        return Ok(());
+    }
+
+    let prefix = "  ".repeat(indent);
+    match value {
+        Value::Object(map) => {
+            let mut attributes = Vec::new();
+            let mut children = JsonMap::new();
+            let mut text = None;
+            for (key, entry) in map {
+                if let Some(attribute) = key.strip_prefix('@') {
+                    attributes.push((attribute, entry));
+                } else if key == "#text" {
+                    text = Some(entry);
+                } else {
+                    children.insert(key.clone(), entry.clone());
+                }
+            }
+
+            write!(output, "{prefix}<{name}").expect("write");
+            for (attribute, entry) in attributes {
+                write!(
+                    output,
+                    " {attribute}=\"{}\"",
+                    xml_escape(&render_xml_scalar(entry)?)
+                )
+                .expect("write");
+            }
+
+            if children.is_empty() && text.is_none() {
+                output.push_str(" />\n");
+                return Ok(());
+            }
+
+            output.push('>');
+            if let Some(text) = text {
+                write!(output, "{}", xml_escape(&render_xml_scalar(text)?)).expect("write");
+            }
+            if !children.is_empty() {
+                output.push('\n');
+                render_android_nodes(output, &children, indent + 1)?;
+                write!(output, "{prefix}").expect("write");
+            }
+            writeln!(output, "</{name}>").expect("write");
+        }
+        Value::String(_) | Value::Bool(_) | Value::Number(_) => {
+            writeln!(
+                output,
+                "{prefix}<{name}>{}</{name}>",
+                xml_escape(&render_xml_scalar(value)?)
+            )
+            .expect("write");
+        }
+        Value::Null => {
+            return Err(AtomError::new(
+                AtomErrorCode::CngTemplateError,
+                "android manifest values must not be null",
+            ));
+        }
+        Value::Array(_) => unreachable!("arrays are handled above"),
+    }
+    Ok(())
+}
+
+fn render_xml_scalar(value: &Value) -> AtomResult<String> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        _ => Err(AtomError::new(
+            AtomErrorCode::CngTemplateError,
+            "android manifest attribute values must be scalar",
+        )),
+    }
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 fn emit_android_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
-    let Some(android) = &plan.android else {
+    let Some(android) = plan.backend(BACKEND_ID) else {
         return Ok(());
     };
-    let android_config = plan
-        .android_config
-        .as_ref()
-        .expect("android config should exist when android output exists");
+    let android_config = &plan.manifest.android;
     write_generated_file(
-        &repo_root.join(&android.generated_root).join("BUILD.bazel"),
+        &repo_root
+            .join(&android.plan.generated_root)
+            .join("BUILD.bazel"),
         &render_android_build_file(
-            &plan.app,
+            &plan.manifest.app,
             &plan.modules,
             android_config,
-            &plan.android_resources,
+            &android.bazel_resources,
         )?,
     )?;
     write_generated_file(
         &repo_root
-            .join(&android.generated_root)
+            .join(&android.plan.generated_root)
             .join("AndroidManifest.generated.xml"),
-        &render_android_manifest_xml(android_config, &plan.android_manifest)?,
+        &render_android_manifest_xml(android_config, &android.metadata)?,
     )?;
     write_generated_file(
         &repo_root
-            .join(&android.generated_root)
+            .join(&android.plan.generated_root)
             .join("atom_runtime_jni.rs"),
-        &render_android_runtime_jni(&plan.app, android_config)?,
+        &render_android_runtime_jni(&plan.manifest.app, android_config)?,
     )?;
     let package_dir = android
+        .plan
         .generated_root
         .join("src/main/kotlin")
         .join(kotlin_package_dir(
@@ -218,7 +449,7 @@ fn emit_android_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomRe
         ));
     write_generated_file(
         &repo_root.join(&package_dir).join("AtomApplication.kt"),
-        &render_kotlin_application(&plan.app, android_config)?,
+        &render_kotlin_application(&plan.manifest.app, android_config)?,
     )?;
     write_generated_file(
         &repo_root.join(&package_dir).join("AtomBindings.kt"),
@@ -226,7 +457,7 @@ fn emit_android_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomRe
     )?;
     write_generated_file(
         &repo_root.join(&package_dir).join("MainActivity.kt"),
-        &render_kotlin_main_activity(&plan.app, android_config)?,
+        &render_kotlin_main_activity(&plan.manifest.app, android_config)?,
     )?;
     Ok(())
 }

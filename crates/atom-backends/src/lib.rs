@@ -4,15 +4,14 @@ mod deploy;
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 
 pub use crate::cng::{
-    ContributedFile, FileSource, GenerationBackend, GenerationBackendRegistry, GenerationPlan,
-    PlatformContribution, PlatformPlan, SchemaFilePlan, SchemaPlan,
+    BackendContribution, BackendPlan, ContributedFile, FileSource, GenerationBackend,
+    GenerationBackendRegistry, GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
 };
 pub use crate::deploy::{
     ArtifactRecord, BackendAutomationSession, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
-    EvaluationBundleManifest, EvaluationPlan, EvaluationStep, InteractionRequest,
-    InteractionResult, LaunchMode, ScreenInfo, SessionLaunchBehavior, StepRecord, ToolRunner,
-    UiBounds, UiNode, UiSnapshot,
+    DestinationCapability, DestinationDescriptor, EvaluationBundleManifest, EvaluationPlan,
+    EvaluationStep, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
+    SessionLaunchBehavior, StepRecord, ToolRunner, UiBounds, UiNode, UiSnapshot,
 };
 
 pub trait BackendDefinition {
@@ -105,15 +104,15 @@ mod tests {
         let mut registry = BackendRegistry::new();
         registry
             .register(FixtureBackend {
-                id: "ios",
-                platform: "ios",
+                id: "fixture-backend",
+                platform: "fixture-platform",
             })
             .expect("first registration should succeed");
 
         let error = registry
             .register(FixtureBackend {
-                id: "ios",
-                platform: "ios",
+                id: "fixture-backend",
+                platform: "fixture-platform",
             })
             .expect_err("duplicate id should fail");
 
@@ -121,7 +120,7 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("backend registry already contains id ios")
+                .contains("backend registry already contains id fixture-backend")
         );
     }
 }

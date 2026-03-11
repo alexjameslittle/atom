@@ -637,11 +637,12 @@ pub trait ConfigPlugin: Send + Sync {
     /// Validate plugin config. Called before any contribute methods.
     fn validate(&self) -> AtomResult<()>;
 
-    /// Contribute to the iOS host tree. Return empty contribution if not applicable.
-    fn contribute_ios(&self, ctx: &ConfigPluginContext) -> AtomResult<PlatformContribution>;
-
-    /// Contribute to the Android host tree. Return empty contribution if not applicable.
-    fn contribute_android(&self, ctx: &ConfigPluginContext) -> AtomResult<PlatformContribution>;
+    /// Contribute to a backend-owned host tree. Return empty contribution if not applicable.
+    fn contribute_backend(
+        &self,
+        backend_id: &str,
+        ctx: &ConfigPluginContext,
+    ) -> AtomResult<BackendContribution>;
 }
 
 pub struct ConfigPluginContext<'a> {
@@ -650,10 +651,9 @@ pub struct ConfigPluginContext<'a> {
     pub generated_root: &'a Utf8Path,
 }
 
-pub struct PlatformContribution {
+pub struct BackendContribution {
     pub files: Vec<ContributedFile>,
-    pub plist_entries: JsonMap,
-    pub android_manifest_entries: JsonMap,
+    pub metadata_entries: JsonMap,
     pub bazel_resources: Vec<String>,
 }
 
@@ -720,8 +720,8 @@ Each plugin macro should also declare compatibility metadata alongside the opaqu
 `android_min_sdk` are optional.
 
 The framework reads this array, validates compatibility first, instantiates each plugin by `id`,
-passes the opaque `config` to the plugin for parsing and validation, then calls
-`contribute_ios`/`contribute_android` during plan building.
+passes the opaque `config` to the plugin for parsing and validation, then calls `contribute_backend`
+during plan building.
 
 #### Plan merge integration
 
@@ -733,17 +733,14 @@ for plugin_entry in manifest.config_plugins:
     plugin = instantiate_plugin(plugin_entry.id, plugin_entry.config)
     plugin.validate() or error
 
-    if manifest.ios.enabled:
-        contrib = plugin.contribute_ios(ctx)
-        plan.plist = deep_merge(plan.plist, contrib.plist_entries) or error CNG_CONFLICT
+    for backend_id in plan.backends.keys():
+        contrib = plugin.contribute_backend(backend_id, ctx)
+        plan.backends[backend_id].metadata = deep_merge(
+            plan.backends[backend_id].metadata,
+            contrib.metadata_entries,
+        ) or error CNG_CONFLICT
         plan.files.extend(contrib.files)
-        plan.ios_resources.extend(contrib.bazel_resources)
-
-    if manifest.android.enabled:
-        contrib = plugin.contribute_android(ctx)
-        plan.android_manifest = deep_merge(plan.android_manifest, contrib.android_manifest_entries) or error CNG_CONFLICT
-        plan.files.extend(contrib.files)
-        plan.android_resources.extend(contrib.bazel_resources)
+        plan.backends[backend_id].resources.extend(contrib.bazel_resources)
 ```
 
 #### First plugin: `atom-cng-app-icon`
@@ -772,7 +769,7 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 
 #### Deliverables
 
-- `ConfigPlugin` trait and `PlatformContribution` types in `atom-cng`
+- `ConfigPlugin` trait in `atom-cng` and `BackendContribution` shared contract types
 - `config_plugins` param on `atom_app()` accepting a list of plugin config dicts
 - `config_plugins` field in the app metadata JSON schema
 - Compatibility metadata and validation for modules and config/CNG plugins

@@ -1,6 +1,6 @@
 use atom_cng::{
-    ConfigPlugin, ConfigPluginContext, ConfigPluginRegistry, ContributedFile, FileSource,
-    PlatformContribution,
+    BackendContribution, ConfigPlugin, ConfigPluginContext, ConfigPluginRegistry, ContributedFile,
+    FileSource,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::ConfigPluginRequest;
@@ -75,9 +75,23 @@ impl ConfigPlugin for AppIconPlugin {
         Ok(())
     }
 
-    fn contribute_ios(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<PlatformContribution> {
+    fn contribute_backend(
+        &self,
+        backend_id: &str,
+        ctx: &ConfigPluginContext<'_>,
+    ) -> AtomResult<BackendContribution> {
+        match backend_id {
+            "ios" => self.contribute_ios(ctx),
+            "android" => self.contribute_android(ctx),
+            _ => Ok(BackendContribution::default()),
+        }
+    }
+}
+
+impl AppIconPlugin {
+    fn contribute_ios(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<BackendContribution> {
         let Some(source) = &self.ios else {
-            return Ok(PlatformContribution::default());
+            return Ok(BackendContribution::default());
         };
         let source_path = ctx.repo_root.join(source);
         if !source_path.is_dir() {
@@ -95,7 +109,7 @@ impl ConfigPlugin for AppIconPlugin {
             ));
         }
 
-        Ok(PlatformContribution {
+        Ok(BackendContribution {
             files: vec![ContributedFile {
                 source: FileSource::Copy(source.clone()),
                 output: ctx
@@ -105,21 +119,17 @@ impl ConfigPlugin for AppIconPlugin {
                     .join(IOS_RESOURCE_PREFIX)
                     .join(IOS_RESOURCE_NAME),
             }],
-            plist_entries: json_object(json!({
+            metadata_entries: json_object(json!({
                 "CFBundleIconName": "AppIcon"
             })),
-            android_manifest_entries: serde_json::Map::default(),
             bazel_resources: Vec::new(),
             bazel_resource_globs: vec![format!("{IOS_RESOURCE_PREFIX}/{IOS_RESOURCE_NAME}/**")],
         })
     }
 
-    fn contribute_android(
-        &self,
-        ctx: &ConfigPluginContext<'_>,
-    ) -> AtomResult<PlatformContribution> {
+    fn contribute_android(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<BackendContribution> {
         let Some(source) = &self.android else {
-            return Ok(PlatformContribution::default());
+            return Ok(BackendContribution::default());
         };
         let source_path = ctx.repo_root.join(source);
         if !source_path.is_file() {
@@ -130,7 +140,7 @@ impl ConfigPlugin for AppIconPlugin {
             ));
         }
 
-        Ok(PlatformContribution {
+        Ok(BackendContribution {
             files: vec![ContributedFile {
                 source: FileSource::Copy(source.clone()),
                 output: ctx
@@ -139,8 +149,7 @@ impl ConfigPlugin for AppIconPlugin {
                     .join(&ctx.app.slug)
                     .join(ANDROID_RESOURCE_PATH),
             }],
-            plist_entries: serde_json::Map::default(),
-            android_manifest_entries: json_object(json!({
+            metadata_entries: json_object(json!({
                 "application": {
                     "@android:icon": "@mipmap/ic_launcher"
                 }
@@ -252,10 +261,10 @@ mod tests {
         }))))
         .expect("plugin");
         let ios = plugin
-            .contribute_ios(&context(&root))
+            .contribute_backend("ios", &context(&root))
             .expect("ios contribution");
         let android = plugin
-            .contribute_android(&context(&root))
+            .contribute_backend("android", &context(&root))
             .expect("android contribution");
 
         assert_eq!(

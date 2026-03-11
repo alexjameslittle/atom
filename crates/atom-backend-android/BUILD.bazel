@@ -3,6 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 rust_library(
     name = "atom-backend-android",
     srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(["src/templates/**"]),
     crate_name = "atom_backend_android",
     crate_root = "src/lib.rs",
     edition = "2024",
@@ -16,5 +17,6 @@ rust_library(
         "//crates/atom-modules",
         "@crates//:camino",
         "@crates//:minijinja",
+        "@crates//:serde_json",
     ],
 )

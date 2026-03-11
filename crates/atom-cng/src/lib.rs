@@ -3,25 +3,22 @@ mod templates;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write;
 
 pub use atom_backends::{
-    ContributedFile, FileSource, GenerationBackendRegistry, GenerationPlan, PlatformContribution,
-    PlatformPlan, SchemaFilePlan, SchemaPlan,
+    BackendContribution, BackendPlan, ContributedFile, FileSource, GenerationBackendRegistry,
+    GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::{
-    AndroidConfig, AppConfig, ConfigPluginRequest, FRAMEWORK_ATOM_API_LEVEL, FRAMEWORK_VERSION,
-    IosConfig, NormalizedManifest,
+    AppConfig, ConfigPluginRequest, FRAMEWORK_ATOM_API_LEVEL, FRAMEWORK_VERSION, NormalizedManifest,
 };
 use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub use crate::emit::emit_host_tree;
 pub use crate::emit::write_file as write_generated_file;
-pub use crate::templates::{render as render_template, static_template};
 
 pub type ConfigPluginFactory = fn(&ConfigPluginRequest) -> AtomResult<Box<dyn ConfigPlugin>>;
 
@@ -35,14 +32,12 @@ pub trait ConfigPlugin: Send + Sync {
 
     /// # Errors
     ///
-    /// Returns an error if the plugin cannot produce valid iOS contributions.
-    fn contribute_ios(&self, ctx: &ConfigPluginContext<'_>) -> AtomResult<PlatformContribution>;
-
-    /// # Errors
-    ///
-    /// Returns an error if the plugin cannot produce valid Android contributions.
-    fn contribute_android(&self, ctx: &ConfigPluginContext<'_>)
-    -> AtomResult<PlatformContribution>;
+    /// Returns an error if the plugin cannot produce valid backend contributions.
+    fn contribute_backend(
+        &self,
+        backend_id: &str,
+        ctx: &ConfigPluginContext<'_>,
+    ) -> AtomResult<BackendContribution>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +87,14 @@ impl ConfigPluginRegistry {
     }
 }
 
+#[derive(Default)]
+struct PendingBackendOutput {
+    metadata: JsonMap,
+    bazel_resources: Vec<String>,
+    bazel_resource_globs: Vec<String>,
+    plan: Option<BackendPlan>,
+}
+
 /// # Errors
 ///
 /// Returns an error if compatibility validation or metadata merging fails.
@@ -105,25 +108,25 @@ pub fn build_generation_plan(
     config_plugins: &ConfigPluginRegistry,
     registry: &GenerationBackendRegistry,
 ) -> AtomResult<GenerationPlan> {
-    validate_extension_compatibility(manifest, modules)?;
+    validate_extension_compatibility(manifest, modules, registry)?;
 
     let mut permissions = BTreeSet::new();
-    let mut plist = if manifest.ios.enabled {
-        default_ios_plist(&manifest.app, &manifest.ios)
-    } else {
-        JsonMap::new()
-    };
-    let mut android_manifest = if manifest.android.enabled {
-        default_android_manifest(&manifest.app, &manifest.android)
-    } else {
-        JsonMap::new()
-    };
+    let mut backends = BTreeMap::new();
+    let mut contributed_files = Vec::new();
+    for backend in registry.iter() {
+        let Some(contribution) = backend.initialize_backend(manifest)? else {
+            continue;
+        };
+        merge_backend_contribution(
+            &mut backends,
+            backend.id(),
+            contribution,
+            &format!("backends.{}.defaults", backend.id()),
+            &mut contributed_files,
+        )?;
+    }
     let mut entitlements = JsonMap::new();
     let mut schema_outputs = Vec::new();
-    let mut contributed_files = Vec::new();
-    let mut ios_resources = Vec::new();
-    let mut ios_resource_globs = Vec::new();
-    let mut android_resources = Vec::new();
     let schema_root = manifest.build.generated_root.join("schema");
     let aggregate_schema = schema_root.join("atom.fbs");
 
@@ -131,16 +134,18 @@ pub fn build_generation_plan(
         for permission in &module.manifest.permissions {
             permissions.insert(permission.clone());
         }
-        deep_merge_map(
-            &mut plist,
-            &module.manifest.plist,
-            &format!("plist.{}", module.manifest.id),
-        )?;
-        deep_merge_map(
-            &mut android_manifest,
-            &module.manifest.android_manifest,
-            &format!("android_manifest.{}", module.manifest.id),
-        )?;
+        for backend in registry.iter() {
+            if !backends.contains_key(backend.id()) {
+                continue;
+            }
+            merge_backend_contribution(
+                &mut backends,
+                backend.id(),
+                backend.module_contribution(manifest, module)?,
+                &format!("modules.{}.{}", module.manifest.id, backend.id()),
+                &mut contributed_files,
+            )?;
+        }
         deep_merge_map(
             &mut entitlements,
             &module.manifest.entitlements,
@@ -168,26 +173,14 @@ pub fn build_generation_plan(
         let plugin = config_plugins.instantiate(entry)?;
         plugin.validate()?;
 
-        if manifest.ios.enabled {
-            let contribution = plugin.contribute_ios(&plugin_ctx)?;
-            deep_merge_map(
-                &mut plist,
-                &contribution.plist_entries,
-                &format!("config_plugins.{}.plist", entry.id),
+        for backend_id in backends.keys().cloned().collect::<Vec<_>>() {
+            merge_backend_contribution(
+                &mut backends,
+                &backend_id,
+                plugin.contribute_backend(&backend_id, &plugin_ctx)?,
+                &format!("config_plugins.{}.{}", entry.id, backend_id),
+                &mut contributed_files,
             )?;
-            contributed_files.extend(contribution.files);
-            ios_resources.extend(contribution.bazel_resources);
-            ios_resource_globs.extend(contribution.bazel_resource_globs);
-        }
-        if manifest.android.enabled {
-            let contribution = plugin.contribute_android(&plugin_ctx)?;
-            deep_merge_map(
-                &mut android_manifest,
-                &contribution.android_manifest_entries,
-                &format!("config_plugins.{}.android_manifest", entry.id),
-            )?;
-            contributed_files.extend(contribution.files);
-            android_resources.extend(contribution.bazel_resources);
         }
     }
 
@@ -199,49 +192,48 @@ pub fn build_generation_plan(
             .collect(),
     };
 
-    let mut ios = None;
-    let mut android = None;
     for backend in registry.iter() {
-        let Some(platform_plan) = backend.build_platform_plan(manifest) else {
+        if !backends.contains_key(backend.id()) {
+            continue;
+        }
+        let Some(backend_plan) = backend.build_backend_plan(manifest) else {
             continue;
         };
-        match backend.id() {
-            "ios" => ios = Some(platform_plan),
-            "android" => android = Some(platform_plan),
-            _ => {}
-        }
+        backends.entry(backend.id().to_owned()).or_default().plan = Some(backend_plan);
     }
 
     let mut generated_files = vec![aggregate_schema];
     generated_files.extend(schema.modules.iter().cloned());
-    if let Some(ios) = &ios {
-        generated_files.extend(ios.files.iter().cloned());
-    }
-    if let Some(android) = &android {
-        generated_files.extend(android.files.iter().cloned());
-    }
     generated_files.extend(contributed_files.iter().map(|file| file.output.clone()));
+    let backends: BTreeMap<String, PlannedBackend> = backends
+        .into_iter()
+        .filter_map(|(id, pending)| {
+            pending.plan.map(|plan| {
+                generated_files.extend(plan.files.iter().cloned());
+                (
+                    id,
+                    PlannedBackend {
+                        plan,
+                        metadata: pending.metadata,
+                        bazel_resources: pending.bazel_resources,
+                        bazel_resource_globs: pending.bazel_resource_globs,
+                    },
+                )
+            })
+        })
+        .collect();
 
     Ok(GenerationPlan {
         version: 1,
         status: "dry-run".to_owned(),
-        app: manifest.app.clone(),
-        build: manifest.build.clone(),
-        ios_config: manifest.ios.enabled.then_some(manifest.ios.clone()),
-        android_config: manifest.android.enabled.then_some(manifest.android.clone()),
+        manifest: manifest.clone(),
         modules: modules.to_vec(),
         permissions: permissions.into_iter().collect(),
-        plist,
-        android_manifest,
         entitlements,
         schema,
         schema_files: schema_outputs,
         contributed_files,
-        ios_resources,
-        ios_resource_globs,
-        android_resources,
-        ios,
-        android,
+        backends,
         generated_files,
         warnings: Vec::new(),
     })
@@ -252,9 +244,9 @@ pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
 
     let status = builder.create_string(&plan.status);
-    let app_name = builder.create_string(&plan.app.name);
-    let app_slug = builder.create_string(&plan.app.slug);
-    let app_entry_target = builder.create_string(&plan.app.entry_crate_label);
+    let app_name = builder.create_string(&plan.manifest.app.name);
+    let app_slug = builder.create_string(&plan.manifest.app.slug);
+    let app_entry_target = builder.create_string(&plan.manifest.app.entry_crate_label);
     let app = create_prebuild_app(&mut builder, app_name, app_slug, app_entry_target);
 
     let mut module_offsets = Vec::with_capacity(plan.modules.len());
@@ -270,16 +262,19 @@ pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
     }
     let modules = builder.create_vector(module_offsets.as_slice());
 
-    let ios = plan.ios.as_ref().map(|ios| {
-        let generated_root = builder.create_string(ios.generated_root.as_str());
-        let target = builder.create_string(&ios.target);
-        create_prebuild_platform(&mut builder, generated_root, target)
-    });
-    let android = plan.android.as_ref().map(|android| {
-        let generated_root = builder.create_string(android.generated_root.as_str());
-        let target = builder.create_string(&android.target);
-        create_prebuild_platform(&mut builder, generated_root, target)
-    });
+    let mut backend_offsets = Vec::with_capacity(plan.backends.len());
+    for (backend_id, backend) in &plan.backends {
+        let id = builder.create_string(backend_id);
+        let generated_root = builder.create_string(backend.plan.generated_root.as_str());
+        let target = builder.create_string(&backend.plan.target);
+        backend_offsets.push(create_prebuild_backend(
+            &mut builder,
+            id,
+            generated_root,
+            target,
+        ));
+    }
+    let backends = builder.create_vector(backend_offsets.as_slice());
 
     let aggregate = builder.create_string(plan.schema.aggregate.as_str());
     let mut schema_module_offsets = Vec::with_capacity(plan.schema.modules.len());
@@ -307,51 +302,15 @@ pub fn render_prebuild_plan(plan: &GenerationPlan) -> Vec<u8> {
         builder.push_slot_always::<WIPOffset<_>>(6, status);
         builder.push_slot_always::<WIPOffset<_>>(8, app);
         builder.push_slot_always::<WIPOffset<_>>(10, modules);
-        if let Some(ios) = ios {
-            builder.push_slot_always::<WIPOffset<_>>(12, ios);
-        }
-        if let Some(android) = android {
-            builder.push_slot_always::<WIPOffset<_>>(14, android);
-        }
-        builder.push_slot_always::<WIPOffset<_>>(16, schema);
-        builder.push_slot_always::<WIPOffset<_>>(18, generated_files);
-        builder.push_slot_always::<WIPOffset<_>>(20, warnings);
+        builder.push_slot_always::<WIPOffset<_>>(12, backends);
+        builder.push_slot_always::<WIPOffset<_>>(14, schema);
+        builder.push_slot_always::<WIPOffset<_>>(16, generated_files);
+        builder.push_slot_always::<WIPOffset<_>>(18, warnings);
         builder.end_table(table)
     };
 
     builder.finish(root, None);
     builder.finished_data().to_vec()
-}
-
-/// # Errors
-///
-/// Returns an error if the plist payload cannot be rendered as XML.
-pub fn render_plist_document(plist: &JsonMap) -> AtomResult<String> {
-    let mut output = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n",
-    );
-    render_plist_value(&mut output, &Value::Object(plist.clone()), 0)?;
-    output.push_str("</plist>\n");
-    Ok(output)
-}
-
-/// # Errors
-///
-/// Returns an error if the Android manifest payload cannot be rendered as XML.
-pub fn render_android_manifest_document(
-    package_name: &str,
-    manifest: &JsonMap,
-) -> AtomResult<String> {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"{}\">",
-        xml_escape(package_name)
-    )
-    .expect("write to string");
-    render_android_nodes(&mut output, manifest, 1)?;
-    output.push_str("</manifest>\n");
-    Ok(output)
 }
 
 fn create_prebuild_app<'a>(
@@ -380,14 +339,16 @@ fn create_prebuild_module<'a>(
     builder.end_table(table)
 }
 
-fn create_prebuild_platform<'a>(
+fn create_prebuild_backend<'a>(
     builder: &mut FlatBufferBuilder<'a>,
+    id: WIPOffset<&'a str>,
     generated_root: WIPOffset<&'a str>,
     target: WIPOffset<&'a str>,
 ) -> WIPOffset<TableFinishedWIPOffset> {
     let table = builder.start_table();
-    builder.push_slot_always::<WIPOffset<_>>(4, generated_root);
-    builder.push_slot_always::<WIPOffset<_>>(6, target);
+    builder.push_slot_always::<WIPOffset<_>>(4, id);
+    builder.push_slot_always::<WIPOffset<_>>(6, generated_root);
+    builder.push_slot_always::<WIPOffset<_>>(8, target);
     builder.end_table(table)
 }
 
@@ -400,68 +361,6 @@ fn create_prebuild_schema<'a, T>(
     builder.push_slot_always::<WIPOffset<_>>(4, aggregate);
     builder.push_slot_always::<WIPOffset<_>>(6, modules);
     builder.end_table(table)
-}
-
-fn default_ios_plist(app: &AppConfig, ios: &IosConfig) -> JsonMap {
-    object_from_value(json!({
-        "CFBundleName": app.slug,
-        "CFBundleDisplayName": app.name,
-        "CFBundleIdentifier": ios.bundle_id.as_deref().unwrap_or_default(),
-        "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "1",
-        "LSRequiresIPhoneOS": true,
-        "MinimumOSVersion": ios.deployment_target.as_deref().unwrap_or_default(),
-        "UIApplicationSupportsIndirectInputEvents": true,
-        "UIApplicationSceneManifest": {
-            "UIApplicationSupportsMultipleScenes": false,
-            "UISceneConfigurations": {
-                "UIWindowSceneSessionRoleApplication": [
-                    {
-                        "UISceneConfigurationName": "Default Configuration",
-                        "UISceneDelegateClassName": format!(
-                            "{}.AtomSceneDelegate",
-                            swift_support_module_name(app)
-                        ),
-                    }
-                ]
-            }
-        },
-        "UIMainStoryboardFile": "",
-        "UILaunchStoryboardName": "LaunchScreen.storyboard",
-        "UISupportedInterfaceOrientations": [
-            "UIInterfaceOrientationPortrait"
-        ]
-    }))
-}
-
-fn default_android_manifest(app: &AppConfig, android: &AndroidConfig) -> JsonMap {
-    object_from_value(json!({
-        "uses-sdk": {
-            "@android:minSdkVersion": android.min_sdk.unwrap_or_default(),
-            "@android:targetSdkVersion": android.target_sdk.unwrap_or_default(),
-        },
-        "application": {
-            "@android:label": app.name,
-            "@android:name": ".AtomApplication",
-            "activity": {
-                "@android:name": ".MainActivity",
-                "@android:exported": true,
-                "intent-filter": {
-                    "action": {
-                        "@android:name": "android.intent.action.MAIN"
-                    },
-                    "category": {
-                        "@android:name": "android.intent.category.LAUNCHER"
-                    }
-                }
-            }
-        }
-    }))
-}
-
-fn swift_support_module_name(app: &AppConfig) -> String {
-    format!("atom_{}_support", app.slug.replace('-', "_"))
 }
 
 fn normalize_schema_output(schema_file: &Utf8Path) -> Utf8PathBuf {
@@ -478,26 +377,27 @@ fn normalize_schema_output(schema_file: &Utf8Path) -> Utf8PathBuf {
 fn validate_extension_compatibility(
     manifest: &NormalizedManifest,
     modules: &[ResolvedModule],
+    registry: &GenerationBackendRegistry,
 ) -> AtomResult<()> {
     for module in modules {
         validate_extension(
             module.manifest.target_label.as_str(),
             module.manifest.atom_api_level,
             module.manifest.min_atom_version.as_deref(),
-            module.manifest.ios_min_deployment_target.as_deref(),
-            module.manifest.android_min_sdk,
-            manifest,
         )?;
+        for backend in registry.iter() {
+            backend.validate_module_compatibility(manifest, module)?;
+        }
     }
     for plugin in &manifest.config_plugins {
         validate_extension(
             plugin.target_label.as_str(),
             plugin.atom_api_level,
             plugin.min_atom_version.as_deref(),
-            plugin.ios_min_deployment_target.as_deref(),
-            plugin.android_min_sdk,
-            manifest,
         )?;
+        for backend in registry.iter() {
+            backend.validate_config_plugin_compatibility(manifest, plugin)?;
+        }
     }
     Ok(())
 }
@@ -506,9 +406,6 @@ fn validate_extension(
     target_label: &str,
     atom_api_level: u32,
     min_atom_version: Option<&str>,
-    ios_min_deployment_target: Option<&str>,
-    android_min_sdk: Option<u32>,
-    manifest: &NormalizedManifest,
 ) -> AtomResult<()> {
     if atom_api_level != FRAMEWORK_ATOM_API_LEVEL {
         return Err(extension_compatibility_error(
@@ -532,32 +429,6 @@ fn validate_extension(
         ));
     }
 
-    if let (Some(current), Some(required)) = (
-        manifest.ios.deployment_target.as_deref(),
-        ios_min_deployment_target,
-    ) && compare_deployment_target(current, required)? == Ordering::Less
-    {
-        return Err(extension_compatibility_error(
-            target_label,
-            "ios_min_deployment_target",
-            format!(
-                "extension requires iOS deployment target {required}, app is configured for {current}"
-            ),
-        ));
-    }
-
-    if let (Some(current), Some(required)) = (manifest.android.min_sdk, android_min_sdk)
-        && current < required
-    {
-        return Err(extension_compatibility_error(
-            target_label,
-            "android_min_sdk",
-            format!(
-                "extension requires Android min_sdk {required}, app is configured for {current}"
-            ),
-        ));
-    }
-
     Ok(())
 }
 
@@ -569,30 +440,10 @@ fn extension_compatibility_error(target_label: &str, field: &str, message: Strin
     )
 }
 
-fn compare_deployment_target(current: &str, required: &str) -> AtomResult<Ordering> {
-    let current = parse_deployment_target(current)?;
-    let required = parse_deployment_target(required)?;
-    Ok(current.cmp(&required))
-}
-
 fn compare_semver(current: &str, required: &str) -> AtomResult<Ordering> {
     let current = parse_semver(current)?;
     let required = parse_semver(required)?;
     Ok(current.cmp(&required))
-}
-
-fn parse_deployment_target(value: &str) -> AtomResult<(u32, u32)> {
-    let mut components = value.split('.');
-    match (components.next(), components.next(), components.next()) {
-        (Some(major), Some(minor), None) => Ok((
-            parse_u32_component(major, "deployment target")?,
-            parse_u32_component(minor, "deployment target")?,
-        )),
-        _ => Err(AtomError::new(
-            AtomErrorCode::InternalBug,
-            format!("invalid deployment target format: {value}"),
-        )),
-    }
 }
 
 fn parse_semver(value: &str) -> AtomResult<(u32, u32, u32)> {
@@ -624,6 +475,27 @@ fn parse_u32_component(value: &str, kind: &str) -> AtomResult<u32> {
     })
 }
 
+fn merge_backend_contribution(
+    backends: &mut BTreeMap<String, PendingBackendOutput>,
+    backend_id: &str,
+    contribution: BackendContribution,
+    metadata_context: &str,
+    contributed_files: &mut Vec<ContributedFile>,
+) -> AtomResult<()> {
+    let backend = backends.entry(backend_id.to_owned()).or_default();
+    deep_merge_map(
+        &mut backend.metadata,
+        &contribution.metadata_entries,
+        metadata_context,
+    )?;
+    contributed_files.extend(contribution.files);
+    backend.bazel_resources.extend(contribution.bazel_resources);
+    backend
+        .bazel_resource_globs
+        .extend(contribution.bazel_resource_globs);
+    Ok(())
+}
+
 fn deep_merge_map(target: &mut JsonMap, source: &JsonMap, context: &str) -> AtomResult<()> {
     for (key, source_value) in source {
         match target.get_mut(key) {
@@ -652,147 +524,11 @@ fn deep_merge_value(target: &mut Value, source: &Value, path: &str) -> AtomResul
     }
 }
 
+#[cfg(test)]
 fn object_from_value(value: Value) -> JsonMap {
     match value {
         Value::Object(map) => map,
         _ => JsonMap::new(),
-    }
-}
-
-fn render_plist_value(output: &mut String, value: &Value, indent: usize) -> AtomResult<()> {
-    let prefix = "  ".repeat(indent);
-    match value {
-        Value::Object(map) => {
-            writeln!(output, "{prefix}<dict>").expect("write to string");
-            for (key, entry) in map {
-                writeln!(output, "{prefix}  <key>{}</key>", xml_escape(key)).expect("write");
-                render_plist_value(output, entry, indent + 1)?;
-            }
-            writeln!(output, "{prefix}</dict>").expect("write to string");
-        }
-        Value::Array(values) => {
-            writeln!(output, "{prefix}<array>").expect("write to string");
-            for entry in values {
-                render_plist_value(output, entry, indent + 1)?;
-            }
-            writeln!(output, "{prefix}</array>").expect("write to string");
-        }
-        Value::String(value) => {
-            writeln!(output, "{prefix}<string>{}</string>", xml_escape(value)).expect("write");
-        }
-        Value::Bool(true) => {
-            writeln!(output, "{prefix}<true/>").expect("write to string");
-        }
-        Value::Bool(false) => {
-            writeln!(output, "{prefix}<false/>").expect("write to string");
-        }
-        Value::Number(number) => {
-            if number.is_i64() || number.is_u64() {
-                writeln!(output, "{prefix}<integer>{number}</integer>").expect("write");
-            } else {
-                writeln!(output, "{prefix}<real>{number}</real>").expect("write");
-            }
-        }
-        Value::Null => {
-            return Err(AtomError::new(
-                AtomErrorCode::CngTemplateError,
-                "plist values must not be null",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn render_android_nodes(output: &mut String, nodes: &JsonMap, indent: usize) -> AtomResult<()> {
-    for (name, value) in nodes {
-        render_android_node(output, name, value, indent)?;
-    }
-    Ok(())
-}
-
-fn render_android_node(
-    output: &mut String,
-    name: &str,
-    value: &Value,
-    indent: usize,
-) -> AtomResult<()> {
-    if let Value::Array(values) = value {
-        for entry in values {
-            render_android_node(output, name, entry, indent)?;
-        }
-        return Ok(());
-    }
-
-    let prefix = "  ".repeat(indent);
-    match value {
-        Value::Object(map) => {
-            let mut attributes = Vec::new();
-            let mut children = JsonMap::new();
-            let mut text = None;
-            for (key, entry) in map {
-                if let Some(attribute) = key.strip_prefix('@') {
-                    attributes.push((attribute, entry));
-                } else if key == "#text" {
-                    text = Some(entry);
-                } else {
-                    children.insert(key.clone(), entry.clone());
-                }
-            }
-
-            write!(output, "{prefix}<{name}").expect("write");
-            for (attribute, entry) in attributes {
-                write!(
-                    output,
-                    " {attribute}=\"{}\"",
-                    xml_escape(&render_xml_scalar(entry)?)
-                )
-                .expect("write");
-            }
-
-            if children.is_empty() && text.is_none() {
-                output.push_str(" />\n");
-                return Ok(());
-            }
-
-            output.push('>');
-            if let Some(text) = text {
-                write!(output, "{}", xml_escape(&render_xml_scalar(text)?)).expect("write");
-            }
-            if !children.is_empty() {
-                output.push('\n');
-                render_android_nodes(output, &children, indent + 1)?;
-                write!(output, "{prefix}").expect("write");
-            }
-            writeln!(output, "</{name}>").expect("write");
-        }
-        Value::String(_) | Value::Bool(_) | Value::Number(_) => {
-            writeln!(
-                output,
-                "{prefix}<{name}>{}</{name}>",
-                xml_escape(&render_xml_scalar(value)?)
-            )
-            .expect("write");
-        }
-        Value::Null => {
-            return Err(AtomError::new(
-                AtomErrorCode::CngTemplateError,
-                "android manifest values must not be null",
-            ));
-        }
-        Value::Array(_) => unreachable!("arrays are handled above"),
-    }
-    Ok(())
-}
-
-fn render_xml_scalar(value: &Value) -> AtomResult<String> {
-    match value {
-        Value::String(value) => Ok(value.clone()),
-        Value::Bool(value) => Ok(value.to_string()),
-        Value::Number(value) => Ok(value.to_string()),
-        _ => Err(AtomError::new(
-            AtomErrorCode::CngTemplateError,
-            "android manifest attribute values must be scalar",
-        )),
     }
 }
 
@@ -803,7 +539,7 @@ fn render_aggregate_schema(plan: &GenerationPlan) -> AtomResult<String> {
         .iter()
         .map(|schema_file| {
             schema_file
-                .strip_prefix(plan.build.generated_root.join("schema"))
+                .strip_prefix(plan.manifest.build.generated_root.join("schema"))
                 .expect("schema file should live under generated schema root")
                 .as_str()
         })
@@ -816,15 +552,6 @@ fn render_aggregate_schema(plan: &GenerationPlan) -> AtomResult<String> {
     )
 }
 
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -833,8 +560,8 @@ mod tests {
     use atom_backend_ios::register_generation_backend as register_ios_generation_backend;
     use atom_backends::BackendDefinition;
     use atom_backends::{
-        ContributedFile, FileSource, GenerationBackend, GenerationBackendRegistry, GenerationPlan,
-        PlatformContribution, PlatformPlan,
+        BackendContribution, BackendPlan, ContributedFile, FileSource, GenerationBackend,
+        GenerationBackendRegistry, GenerationPlan,
     };
     use atom_manifest::{
         AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, JsonMap,
@@ -861,51 +588,47 @@ mod tests {
             Ok(())
         }
 
-        fn contribute_ios(
+        fn contribute_backend(
             &self,
+            backend_id: &str,
             ctx: &ConfigPluginContext<'_>,
-        ) -> atom_ffi::AtomResult<PlatformContribution> {
-            Ok(PlatformContribution {
-                files: vec![ContributedFile {
-                    source: FileSource::Copy(Utf8PathBuf::from("assets/AppIcon.icon")),
-                    output: ctx
-                        .generated_root
-                        .join("ios")
-                        .join(&ctx.app.slug)
-                        .join("resources")
-                        .join("AppIcon.icon"),
-                }],
-                plist_entries: object_from_value(json!({
-                    "CFBundleIconName": "AppIcon"
-                })),
-                android_manifest_entries: JsonMap::new(),
-                bazel_resources: Vec::new(),
-                bazel_resource_globs: vec!["resources/AppIcon.icon/**".to_owned()],
-            })
-        }
-
-        fn contribute_android(
-            &self,
-            ctx: &ConfigPluginContext<'_>,
-        ) -> atom_ffi::AtomResult<PlatformContribution> {
-            Ok(PlatformContribution {
-                files: vec![ContributedFile {
-                    source: FileSource::Copy(Utf8PathBuf::from("assets/ic_launcher.png")),
-                    output: ctx
-                        .generated_root
-                        .join("android")
-                        .join(&ctx.app.slug)
-                        .join("res/mipmap-xxxhdpi/ic_launcher.png"),
-                }],
-                plist_entries: JsonMap::new(),
-                android_manifest_entries: object_from_value(json!({
-                    "application": {
-                        "@android:icon": "@mipmap/ic_launcher"
-                    }
-                })),
-                bazel_resources: vec!["res/mipmap-xxxhdpi/ic_launcher.png".to_owned()],
-                bazel_resource_globs: Vec::new(),
-            })
+        ) -> atom_ffi::AtomResult<BackendContribution> {
+            match backend_id {
+                "ios" => Ok(BackendContribution {
+                    files: vec![ContributedFile {
+                        source: FileSource::Copy(Utf8PathBuf::from("assets/AppIcon.icon")),
+                        output: ctx
+                            .generated_root
+                            .join("ios")
+                            .join(&ctx.app.slug)
+                            .join("resources")
+                            .join("AppIcon.icon"),
+                    }],
+                    metadata_entries: object_from_value(json!({
+                        "CFBundleIconName": "AppIcon"
+                    })),
+                    bazel_resources: Vec::new(),
+                    bazel_resource_globs: vec!["resources/AppIcon.icon/**".to_owned()],
+                }),
+                "android" => Ok(BackendContribution {
+                    files: vec![ContributedFile {
+                        source: FileSource::Copy(Utf8PathBuf::from("assets/ic_launcher.png")),
+                        output: ctx
+                            .generated_root
+                            .join("android")
+                            .join(&ctx.app.slug)
+                            .join("res/mipmap-xxxhdpi/ic_launcher.png"),
+                    }],
+                    metadata_entries: object_from_value(json!({
+                        "application": {
+                            "@android:icon": "@mipmap/ic_launcher"
+                        }
+                    })),
+                    bazel_resources: vec!["res/mipmap-xxxhdpi/ic_launcher.png".to_owned()],
+                    bazel_resource_globs: Vec::new(),
+                }),
+                _ => Ok(BackendContribution::default()),
+            }
         }
     }
 
@@ -1073,25 +796,31 @@ mod tests {
 
         impl BackendDefinition for FixtureBackend {
             fn id(&self) -> &'static str {
-                "ios"
+                "fixture"
             }
 
             fn platform(&self) -> &'static str {
-                "ios"
+                "fixture"
             }
         }
 
         impl GenerationBackend for FixtureBackend {
-            fn build_platform_plan(&self, manifest: &NormalizedManifest) -> Option<PlatformPlan> {
-                Some(PlatformPlan {
-                    generated_root: manifest.build.generated_root.join("fixture").join("ios"),
-                    target: "//generated/fixture/ios:app".to_owned(),
+            fn initialize_backend(
+                &self,
+                _manifest: &NormalizedManifest,
+            ) -> atom_ffi::AtomResult<Option<BackendContribution>> {
+                Ok(Some(BackendContribution::default()))
+            }
+
+            fn build_backend_plan(&self, manifest: &NormalizedManifest) -> Option<BackendPlan> {
+                Some(BackendPlan {
+                    generated_root: manifest.build.generated_root.join("fixture"),
+                    target: "//generated/fixture:app".to_owned(),
                     files: vec![
                         manifest
                             .build
                             .generated_root
                             .join("fixture")
-                            .join("ios")
                             .join("FIXTURE.txt"),
                     ],
                 })
@@ -1104,9 +833,9 @@ mod tests {
             ) -> atom_ffi::AtomResult<()> {
                 crate::emit::write_file(
                     &repo_root.join(
-                        plan.ios
-                            .as_ref()
-                            .expect("fixture backend should populate ios plan")
+                        plan.backend("fixture")
+                            .expect("fixture backend should populate backend plan")
+                            .plan
                             .generated_root
                             .join("FIXTURE.txt"),
                     ),
@@ -1115,7 +844,8 @@ mod tests {
             }
 
             fn generated_root(&self, plan: &GenerationPlan) -> Option<Utf8PathBuf> {
-                plan.ios.as_ref().map(|ios| ios.generated_root.clone())
+                plan.backend("fixture")
+                    .map(|backend| backend.plan.generated_root.clone())
             }
         }
 
@@ -1130,22 +860,22 @@ mod tests {
         let plan = build_generation_plan(&manifest, &modules, &fixture_registry(), &registry)
             .expect("plan");
         assert_eq!(
-            plan.ios
-                .as_ref()
-                .expect("fixture backend should produce ios plan")
+            plan.backend("fixture")
+                .expect("fixture backend should produce fixture plan")
+                .plan
                 .generated_root,
-            Utf8PathBuf::from("generated/fixture/ios")
+            Utf8PathBuf::from("generated/fixture")
         );
-        assert!(plan.android.is_none());
+        assert!(plan.backend("android").is_none());
         assert!(
             plan.generated_files
-                .contains(&Utf8PathBuf::from("generated/fixture/ios/FIXTURE.txt"))
+                .contains(&Utf8PathBuf::from("generated/fixture/FIXTURE.txt"))
         );
 
         let roots = emit_host_tree(&root, &plan, &registry).expect("host tree");
-        assert_eq!(roots, vec![Utf8PathBuf::from("generated/fixture/ios")]);
+        assert_eq!(roots, vec![Utf8PathBuf::from("generated/fixture")]);
         assert_eq!(
-            fs::read_to_string(root.join("generated/fixture/ios/FIXTURE.txt")).expect("fixture"),
+            fs::read_to_string(root.join("generated/fixture/FIXTURE.txt")).expect("fixture"),
             "fixture backend"
         );
     }

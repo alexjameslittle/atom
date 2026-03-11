@@ -2,16 +2,14 @@ use std::collections::BTreeMap;
 use std::thread;
 use std::time::Duration;
 
-use atom_backends::ToolRunner;
+use atom_backends::{
+    InteractionRequest, InteractionResult, ScreenInfo, ToolRunner, UiBounds, UiNode, UiSnapshot,
+};
+use atom_deploy::{capture_tool, run_tool};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8Path;
 
-use crate::tools::{capture_tool, run_tool};
-
-use super::{
-    InteractionRequest, InteractionResult, ScreenInfo, UiBounds, UiNode, UiSnapshot,
-    resolve_interaction_point, timestamp_suffix,
-};
+use crate::deploy::{resolve_interaction_point, timestamp_suffix};
 
 const ACTION_SETTLE_DELAY: Duration = Duration::from_millis(250);
 

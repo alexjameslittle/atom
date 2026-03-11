@@ -36,27 +36,30 @@ Dependency direction should move one way:
   - Defines the compile-time seam for first-party backend composition without dynamic loading
   - Stays platform-neutral; concrete iOS/Android behavior lives in backend implementation crates
 - `atom-cng`
-  - Validates extension compatibility for modules and config/CNG plugins
+  - Validates framework-wide extension compatibility and delegates backend-specific compatibility
+    checks to registered backends
   - Merges app + module + config-plugin configuration into deterministic generation plans
   - Dispatches backend planning and emission through registered `GenerationBackend` contracts
-  - Writes the host tree for dry-run or materialized output
+  - Writes generic schema/contributed files plus delegates backend host-tree emission
 - `atom-cng-app-icon`
   - First-party config/CNG plugin crate implementing the public `ConfigPlugin` trait
   - Owns app icon config parsing, validation, file contributions, and platform resource wiring
 - `atom-deploy`
   - Device discovery and destination selection
   - Dispatches run/stop/evaluate flows through registered `DeployBackend` contracts
-  - Owns generic build/install/launch orchestration shared across backends
-  - Framework-owned evidence capture, UI inspection, interaction, and proof-bundle orchestration
+  - Owns generic evidence capture, UI evaluation, and proof-bundle orchestration
   - Keeps platform deployment orchestration out of `atom-cli`
 - `atom-backend-ios`
   - First-party iOS backend implementation crate
   - Registers iOS deploy and CNG backends for the canonical CLI binary
-  - Owns iOS destination mapping plus iOS-specific CNG planning/emission glue
+  - Owns iOS destination discovery, deploy/stop/evaluate implementation, and iOS host templates
+  - Owns iOS-specific CNG planning/emission and backend compatibility checks
 - `atom-backend-android`
   - First-party Android backend implementation crate
   - Registers Android deploy and CNG backends for the canonical CLI binary
-  - Owns Android destination mapping plus Android-specific CNG planning/emission glue
+  - Owns Android destination discovery, deploy/stop/evaluate implementation, and Android host
+    templates
+  - Owns Android-specific CNG planning/emission and backend compatibility checks
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
   - Links the first-party config plugin registry used during `atom prebuild`
@@ -97,9 +100,11 @@ Dependency direction should move one way:
 5. `atom-cli` builds the canonical first-party backend registries for CNG and deploy/evaluate.
 6. `atom-cng` validates module + config-plugin compatibility, instantiates registered config
    plugins, and produces a deterministic generation plan through registered backend planners.
-7. `atom-deploy` resolves platform-specific build outputs and deployment commands through registered
-   backend contracts when needed.
-8. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
+7. First-party backend crates contribute backend defaults, backend-specific compatibility checks,
+   and host-tree emission through the shared CNG contracts.
+8. `atom-deploy` resolves destinations, proof plans, and backend sessions through registered backend
+   contracts when needed.
+9. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
    kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
    Rust-backed runtime module registrations, enter through that app-owned configuration path.
 

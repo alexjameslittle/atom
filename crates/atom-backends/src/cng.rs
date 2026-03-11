@@ -1,12 +1,14 @@
+use std::collections::BTreeMap;
+
 use atom_ffi::AtomResult;
-use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, IosConfig, NormalizedManifest};
+use atom_manifest::{ConfigPluginRequest, NormalizedManifest};
 use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{BackendDefinition, BackendRegistry};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlatformPlan {
+pub struct BackendPlan {
     pub generated_root: Utf8PathBuf,
     pub target: String,
     pub files: Vec<Utf8PathBuf>,
@@ -37,10 +39,17 @@ pub enum FileSource {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct PlatformContribution {
+pub struct BackendContribution {
     pub files: Vec<ContributedFile>,
-    pub plist_entries: JsonMap,
-    pub android_manifest_entries: JsonMap,
+    pub metadata_entries: JsonMap,
+    pub bazel_resources: Vec<String>,
+    pub bazel_resource_globs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedBackend {
+    pub plan: BackendPlan,
+    pub metadata: JsonMap,
     pub bazel_resources: Vec<String>,
     pub bazel_resource_globs: Vec<String>,
 }
@@ -49,25 +58,23 @@ pub struct PlatformContribution {
 pub struct GenerationPlan {
     pub version: u16,
     pub status: String,
-    pub app: AppConfig,
-    pub build: BuildConfig,
-    pub ios_config: Option<IosConfig>,
-    pub android_config: Option<AndroidConfig>,
+    pub manifest: NormalizedManifest,
     pub modules: Vec<ResolvedModule>,
     pub permissions: Vec<String>,
-    pub plist: JsonMap,
-    pub android_manifest: JsonMap,
     pub entitlements: JsonMap,
     pub schema: SchemaPlan,
     pub schema_files: Vec<SchemaFilePlan>,
     pub contributed_files: Vec<ContributedFile>,
-    pub ios_resources: Vec<String>,
-    pub ios_resource_globs: Vec<String>,
-    pub android_resources: Vec<String>,
-    pub ios: Option<PlatformPlan>,
-    pub android: Option<PlatformPlan>,
+    pub backends: BTreeMap<String, PlannedBackend>,
     pub generated_files: Vec<Utf8PathBuf>,
     pub warnings: Vec<String>,
+}
+
+impl GenerationPlan {
+    #[must_use]
+    pub fn backend(&self, id: &str) -> Option<&PlannedBackend> {
+        self.backends.get(id)
+    }
 }
 
 #[expect(
@@ -75,7 +82,38 @@ pub struct GenerationPlan {
     reason = "Trait methods document the shared backend contract once at the trait boundary."
 )]
 pub trait GenerationBackend: BackendDefinition {
-    fn build_platform_plan(&self, manifest: &NormalizedManifest) -> Option<PlatformPlan>;
+    fn initialize_backend(
+        &self,
+        _manifest: &NormalizedManifest,
+    ) -> AtomResult<Option<BackendContribution>> {
+        Ok(None)
+    }
+
+    fn module_contribution(
+        &self,
+        _manifest: &NormalizedManifest,
+        _module: &ResolvedModule,
+    ) -> AtomResult<BackendContribution> {
+        Ok(BackendContribution::default())
+    }
+
+    fn validate_module_compatibility(
+        &self,
+        _manifest: &NormalizedManifest,
+        _module: &ResolvedModule,
+    ) -> AtomResult<()> {
+        Ok(())
+    }
+
+    fn validate_config_plugin_compatibility(
+        &self,
+        _manifest: &NormalizedManifest,
+        _plugin: &ConfigPluginRequest,
+    ) -> AtomResult<()> {
+        Ok(())
+    }
+
+    fn build_backend_plan(&self, manifest: &NormalizedManifest) -> Option<BackendPlan>;
 
     fn emit_host_tree(&self, repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()>;
 

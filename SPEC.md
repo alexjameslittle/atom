@@ -803,15 +803,18 @@ MUST fail generation.
 ```text
 function build_generation_plan(manifest, modules, framework):
     plan = new GenerationPlan()
-    plan.app = manifest.app
 
     validate_extension_compatibility(modules, manifest.config_plugins, manifest, framework)
         or error EXTENSION_INCOMPATIBLE
 
     for module in modules in resolved order:
         plan.permissions = union(plan.permissions, module.permissions)
-        plan.plist = deep_merge(plan.plist, module.plist) or error CNG_CONFLICT
-        plan.android_manifest = deep_merge(plan.android_manifest, module.android_manifest) or error CNG_CONFLICT
+        plan.backends["ios"].metadata = deep_merge(plan.backends["ios"].metadata, module.plist)
+            or error CNG_CONFLICT
+        plan.backends["android"].metadata = deep_merge(
+            plan.backends["android"].metadata,
+            module.android_manifest,
+        ) or error CNG_CONFLICT
         plan.entitlements = deep_merge(plan.entitlements, module.entitlements) or error CNG_CONFLICT
         plan.generated_sources.extend(module.generated_sources)
         plan.module_bindings.append(module.id)
@@ -819,21 +822,19 @@ function build_generation_plan(manifest, modules, framework):
     for entry in manifest.config_plugins in declaration order:
         plugin = instantiate_plugin(entry.id, entry.config)
         plugin.validate() or error
-        if manifest.ios.enabled:
-            ios_contrib = plugin.contribute_ios(ctx)
-            plan.plist = deep_merge(plan.plist, ios_contrib.plist_entries) or error CNG_CONFLICT
-            plan.files.extend(ios_contrib.files)
-            plan.ios_resources.extend(ios_contrib.bazel_resources)
-        if manifest.android.enabled:
-            android_contrib = plugin.contribute_android(ctx)
-            plan.android_manifest = deep_merge(plan.android_manifest, android_contrib.android_manifest_entries) or error CNG_CONFLICT
-            plan.files.extend(android_contrib.files)
-            plan.android_resources.extend(android_contrib.bazel_resources)
+        for backend_id in plan.backends.keys():
+            backend_contrib = plugin.contribute_backend(backend_id, ctx)
+            plan.backends[backend_id].metadata = deep_merge(
+                plan.backends[backend_id].metadata,
+                backend_contrib.metadata_entries,
+            ) or error CNG_CONFLICT
+            plan.files.extend(backend_contrib.files)
+            plan.backends[backend_id].resources.extend(backend_contrib.bazel_resources)
 
-    if manifest.ios.enabled:
-        plan.ios = build_ios_plan(manifest, plan)
-    if manifest.android.enabled:
-        plan.android = build_android_plan(manifest, plan)
+    for backend in backend_registry:
+        backend_plan = backend.build_backend_plan(manifest)
+        if backend_plan is not None:
+            plan.backends[backend.id].plan = backend_plan
 
     return plan
 ```
@@ -844,14 +845,9 @@ function build_generation_plan(manifest, modules, framework):
 function emit_host_tree(plan):
     roots = []
 
-    if plan.ios exists:
-        root = generated_root / "ios" / plan.app.slug
-        write_ios_files(root, plan)
-        roots.push(root)
-
-    if plan.android exists:
-        root = generated_root / "android" / plan.app.slug
-        write_android_files(root, plan)
+    for backend in plan.backends:
+        write_backend_files(backend, plan)
+        root = backend.plan.generated_root
         roots.push(root)
 
     return roots
@@ -915,7 +911,8 @@ table PrebuildModule {
   crate: string;
 }
 
-table PrebuildPlatform {
+table PrebuildBackend {
+  id: string;
   generated_root: string;
   target: string;
 }
@@ -930,8 +927,7 @@ table PrebuildPlan {
   status: string;
   app: PrebuildApp;
   modules: [PrebuildModule];
-  ios: PrebuildPlatform;
-  android: PrebuildPlatform;
+  backends: [PrebuildBackend];
   schema: PrebuildSchema;
   generated_files: [string];
   warnings: [string];
@@ -944,10 +940,10 @@ For the canonical `hello-atom` example, the `atom.cli.PrebuildPlan` payload MUST
 - `app.slug = "hello-atom"`
 - `app.entry_crate = "apps/hello_atom"`
 - one module entry with `id = "device_info"` and `crate = "modules/device_info"`
-- `ios.generated_root = "generated/ios/hello-atom"`
-- `ios.target = "//generated/ios/hello-atom:app"`
-- `android.generated_root = "generated/android/hello-atom"`
-- `android.target = "//generated/android/hello-atom:app"`
+- one backend entry with `id = "ios"`, `generated_root = "generated/ios/hello-atom"`, and
+  `target = "//generated/ios/hello-atom:app"`
+- one backend entry with `id = "android"`, `generated_root = "generated/android/hello-atom"`, and
+  `target = "//generated/android/hello-atom:app"`
 - `schema.aggregate = "generated/schema/atom.fbs"`
 - `schema.modules[0] = "generated/schema/modules/device_info/device_info.fbs"`
 - `generated_files` containing, at minimum, `generated/schema/atom.fbs`,
@@ -1492,14 +1488,13 @@ A config plugin crate MUST implement:
 
 - `id() -> &str` returning a unique plugin identifier
 - `validate() -> AtomResult<()>` for plugin-owned config validation
-- `contribute_ios(ctx) -> AtomResult<PlatformContribution>` for iOS host customization
-- `contribute_android(ctx) -> AtomResult<PlatformContribution>` for Android host customization
+- `contribute_backend(backend_id, ctx) -> AtomResult<BackendContribution>` for backend-owned host
+  customization
 
-A `PlatformContribution` MUST contain:
+A `BackendContribution` MUST contain:
 
 - `files`: list of files to copy or generate into the host tree
-- `plist_entries`: plist fragments merged per Section 9.2
-- `android_manifest_entries`: manifest fragments merged per Section 9.2
+- `metadata_entries`: backend-owned metadata fragments merged per Section 9.2
 - `bazel_resources`: additional resources for the platform build rule
 
 CNG MUST merge all config plugin contributions after module metadata and before host tree emission.

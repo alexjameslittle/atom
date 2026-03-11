@@ -1,5 +1,7 @@
+mod android_uiautomator;
 mod cng;
 mod deploy;
+mod templates;
 
 use atom_backends::{DeployBackendRegistry, GenerationBackendRegistry};
 use atom_ffi::AtomResult;
