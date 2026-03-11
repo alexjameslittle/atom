@@ -304,6 +304,7 @@ fn destination_descriptor_from_android(destination: AndroidDestination) -> Desti
     ];
 
     DestinationDescriptor {
+        platform: "android".to_owned(),
         backend_id: BACKEND_ID.to_owned(),
         id,
         kind: kind.to_owned(),
@@ -563,7 +564,13 @@ fn list_android_devices(
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<Vec<AndroidDestination>> {
     let output = capture_tool(runner, repo_root, "adb", &["devices", "-l"])?;
-    Ok(parse_adb_devices(&output))
+    let mut destinations = parse_adb_devices(&output);
+    for destination in &mut destinations {
+        if destination.is_emulator {
+            destination.avd_name = emulator_avd_name(repo_root, runner, &destination.serial)?;
+        }
+    }
+    Ok(destinations)
 }
 
 fn parse_adb_devices(output: &str) -> Vec<AndroidDestination> {
@@ -614,6 +621,25 @@ fn list_avds(repo_root: &Utf8Path, runner: &mut dyn ToolRunner) -> AtomResult<Ve
             .map(ToOwned::to_owned)
             .collect(),
     )
+}
+
+fn emulator_avd_name(
+    repo_root: &Utf8Path,
+    runner: &mut dyn ToolRunner,
+    serial: &str,
+) -> AtomResult<Option<String>> {
+    let output = capture_tool(
+        runner,
+        repo_root,
+        "adb",
+        &["-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name"],
+    )?;
+    let avd_name = output.trim();
+    if avd_name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(avd_name.to_owned()))
+    }
 }
 
 fn find_android_destination(
@@ -699,19 +725,7 @@ fn running_emulator_serial_for_avd(
         if !destination.is_emulator {
             continue;
         }
-        let output = capture_tool(
-            runner,
-            repo_root,
-            "adb",
-            &[
-                "-s",
-                &destination.serial,
-                "shell",
-                "getprop",
-                "ro.boot.qemu.avd_name",
-            ],
-        )?;
-        if output.trim() == avd_name {
+        if emulator_avd_name(repo_root, runner, &destination.serial)?.as_deref() == Some(avd_name) {
             return Ok(Some(destination.serial));
         }
     }
@@ -1175,11 +1189,81 @@ pub(crate) fn timestamp_suffix() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use atom_backends::DestinationCapability;
+    use atom_ffi::{AtomError, AtomErrorCode};
+    use camino::{Utf8Path, Utf8PathBuf};
 
     use super::{
-        AndroidDestination, BACKEND_ID, destination_descriptor_from_android, parse_adb_devices,
+        AndroidDestination, BACKEND_ID, destination_descriptor_from_android,
+        find_android_destination, list_android_destinations, list_android_devices,
+        parse_adb_devices,
     };
+
+    #[derive(Default)]
+    struct FakeToolRunner {
+        captures: VecDeque<(&'static str, Vec<String>, Result<String, AtomError>)>,
+    }
+
+    impl FakeToolRunner {
+        fn push_capture(
+            &mut self,
+            tool: &'static str,
+            args: &[&str],
+            output: Result<&str, AtomError>,
+        ) {
+            self.captures.push_back((
+                tool,
+                args.iter().map(|arg| (*arg).to_owned()).collect(),
+                output.map(str::to_owned),
+            ));
+        }
+    }
+
+    impl atom_backends::ToolRunner for FakeToolRunner {
+        fn run(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn capture(
+            &mut self,
+            _repo_root: &Utf8Path,
+            tool: &str,
+            args: &[String],
+        ) -> atom_ffi::AtomResult<String> {
+            let (expected_tool, expected_args, output) = self
+                .captures
+                .pop_front()
+                .expect("expected capture invocation");
+            assert_eq!(tool, expected_tool);
+            assert_eq!(args, expected_args.as_slice());
+            output
+        }
+
+        fn capture_json_file(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<String> {
+            Ok(String::new())
+        }
+
+        fn stream(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn parses_adb_devices_into_backend_destinations() {
@@ -1208,7 +1292,9 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
             avd_name: Some("FixtureApi35".to_owned()),
         });
 
+        assert_eq!(descriptor.platform, "android");
         assert_eq!(descriptor.backend_id, BACKEND_ID);
+        assert_eq!(descriptor.id, "avd:FixtureApi35");
         assert_eq!(descriptor.kind, "emulator");
         assert!(
             descriptor
@@ -1241,5 +1327,132 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
         assert_eq!(descriptor.kind, "avd");
         assert_eq!(descriptor.id, "avd:FixtureApi35");
         assert!(descriptor.available);
+    }
+
+    #[test]
+    fn running_emulators_recover_their_avd_names() {
+        let root = Utf8PathBuf::from(".");
+        let mut runner = FakeToolRunner::default();
+        runner.push_capture(
+            "adb",
+            &["devices", "-l"],
+            Ok(
+                "List of devices attached\nemulator-5554 device product:sdk_gphone64_arm64 model:Pixel_9 device:emu64a transport_id:1\nABC123 device model:Pixel_8_Pro device:husky transport_id:2\n",
+            ),
+        );
+        runner.push_capture(
+            "adb",
+            &[
+                "-s",
+                "emulator-5554",
+                "shell",
+                "getprop",
+                "ro.boot.qemu.avd_name",
+            ],
+            Ok("FixtureApi35\n"),
+        );
+
+        let destinations = list_android_devices(&root, &mut runner).expect("devices should load");
+
+        assert_eq!(destinations[0].avd_name.as_deref(), Some("FixtureApi35"));
+        assert_eq!(destinations[0].destination_id(), "avd:FixtureApi35");
+        assert_eq!(destinations[1].avd_name, None);
+        assert!(runner.captures.is_empty());
+    }
+
+    #[test]
+    fn running_emulators_do_not_duplicate_offline_avds() {
+        let root = Utf8PathBuf::from(".");
+        let mut runner = FakeToolRunner::default();
+        runner.push_capture(
+            "adb",
+            &["devices", "-l"],
+            Ok(
+                "List of devices attached\nemulator-5554 device product:sdk_gphone64_arm64 model:Pixel_9 device:emu64a transport_id:1\n",
+            ),
+        );
+        runner.push_capture(
+            "adb",
+            &[
+                "-s",
+                "emulator-5554",
+                "shell",
+                "getprop",
+                "ro.boot.qemu.avd_name",
+            ],
+            Ok("FixtureApi35\n"),
+        );
+        runner.push_capture("emulator", &["-list-avds"], Ok("FixtureApi35\n"));
+
+        let destinations =
+            list_android_destinations(&root, &mut runner).expect("destinations should load");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(destinations[0].destination_id(), "avd:FixtureApi35");
+        assert_eq!(destinations[0].state, "device");
+        assert!(runner.captures.is_empty());
+    }
+
+    #[test]
+    fn avd_identifier_resolves_to_running_emulator() {
+        let root = Utf8PathBuf::from(".");
+        let mut runner = FakeToolRunner::default();
+        runner.push_capture(
+            "adb",
+            &["devices", "-l"],
+            Ok(
+                "List of devices attached\nemulator-5554 device product:sdk_gphone64_arm64 model:Pixel_9 device:emu64a transport_id:1\n",
+            ),
+        );
+        runner.push_capture(
+            "adb",
+            &[
+                "-s",
+                "emulator-5554",
+                "shell",
+                "getprop",
+                "ro.boot.qemu.avd_name",
+            ],
+            Ok("FixtureApi35\n"),
+        );
+
+        let destination = find_android_destination(&root, &mut runner, "avd:FixtureApi35")
+            .expect("lookup should succeed")
+            .expect("destination should resolve");
+
+        assert_eq!(destination.serial, "emulator-5554");
+        assert_eq!(destination.state, "device");
+        assert_eq!(destination.avd_name.as_deref(), Some("FixtureApi35"));
+        assert!(runner.captures.is_empty());
+    }
+
+    #[test]
+    fn emulator_avd_lookup_failures_surface_tool_error() {
+        let root = Utf8PathBuf::from(".");
+        let mut runner = FakeToolRunner::default();
+        runner.push_capture(
+            "adb",
+            &["devices", "-l"],
+            Ok(
+                "List of devices attached\nemulator-5554 device product:sdk_gphone64_arm64 model:Pixel_9 device:emu64a transport_id:1\n",
+            ),
+        );
+        runner.push_capture(
+            "adb",
+            &[
+                "-s",
+                "emulator-5554",
+                "shell",
+                "getprop",
+                "ro.boot.qemu.avd_name",
+            ],
+            Err(AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "adb getprop failed",
+            )),
+        );
+
+        let error = list_android_devices(&root, &mut runner).expect_err("lookup should fail");
+        assert_eq!(error.code, AtomErrorCode::ExternalToolFailed);
     }
 }

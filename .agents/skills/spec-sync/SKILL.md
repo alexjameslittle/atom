@@ -33,6 +33,10 @@ Use this skill when:
 - Backend registry invariants in SPEC.md still match `atom-backends`, `atom-cng`, and `atom-deploy`,
   including the requirement that generic crates stay backend-neutral and config plugins use
   `contribute_backend(...)`.
+- Machine-readable destination and evaluation payloads still preserve the spec-required `platform`
+  field even when additive backend metadata such as `backend_id` is present.
+- `atom run --platform <platform>` still fails before CNG writes when the selected backend is
+  disabled in manifest metadata.
 
 ## Model vs. script split
 

@@ -15,8 +15,8 @@ pub fn deploy_backend(
     launch_mode: LaunchMode,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
+    ensure_backend_enabled(manifest, registry, backend_id)?;
     let backend = resolve_backend(registry, backend_id)?;
-    require_enabled_backend(backend.platform(), backend.is_enabled(manifest))?;
     backend.deploy(repo_root, manifest, requested_device, launch_mode, runner)
 }
 
@@ -31,9 +31,21 @@ pub fn stop_backend(
     requested_device: Option<&str>,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
+    ensure_backend_enabled(manifest, registry, backend_id)?;
     let backend = resolve_backend(registry, backend_id)?;
-    require_enabled_backend(backend.platform(), backend.is_enabled(manifest))?;
     backend.stop(repo_root, manifest, requested_device, runner)
+}
+
+/// # Errors
+///
+/// Returns an error if the backend id is unknown or disabled for the app.
+pub fn ensure_backend_enabled(
+    manifest: &NormalizedManifest,
+    registry: &DeployBackendRegistry,
+    backend_id: &str,
+) -> AtomResult<()> {
+    let backend = resolve_backend(registry, backend_id)?;
+    require_enabled_backend(backend.platform(), backend.is_enabled(manifest))
 }
 
 fn resolve_backend<'a>(

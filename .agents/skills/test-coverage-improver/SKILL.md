@@ -26,6 +26,9 @@ Use this skill when:
    in generic crate tests.
 4. Suggest the smallest test additions that would lock in the new behavior.
 5. Prefer focused unit or integration tests over broad hand-wavy “more coverage” advice.
+6. When destination schemas or backend dispatch change, cover serialized compatibility fields,
+   disabled-backend preflight before generated-tree writes, and backend-specific stable destination
+   ids such as Android `avd:<name>`.
 
 ## Output
 

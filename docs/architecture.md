@@ -48,6 +48,8 @@ Dependency direction should move one way:
   - Device discovery and destination selection
   - Dispatches run/stop/evaluate flows through registered `DeployBackend` contracts
   - Owns generic evidence capture, UI evaluation, and proof-bundle orchestration
+  - Preserves compatibility fields such as serialized destination `platform`; backend ids are
+    additive dispatch data, not replacements for stable machine-readable payload fields
   - Keeps platform deployment orchestration out of `atom-cli`
 - `atom-backend-ios`
   - First-party iOS backend implementation crate
@@ -116,6 +118,8 @@ Dependency direction should move one way:
 - Keep generic backend layers backend-neutral. `atom-backends`, `atom-cng`, and `atom-deploy` must
   not encode concrete first-party backend ids, iOS/Android-specific branching, or backend- specific
   golden tests.
+- Keep disabled-backend failures side-effect free. CLI preflight for
+  `atom run --platform <platform>` must reject disabled backends before CNG writes generated files.
 - Keep backend-specific assertions and fixtures in `atom-backend-*` crates or schema-owning crates.
 - Keep examples representative. The hello-world example should exercise real repo conventions, not a
   toy path that bypasses them.

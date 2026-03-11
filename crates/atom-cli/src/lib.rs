@@ -18,7 +18,10 @@ use atom_deploy::evaluate::{
     capture_logs, capture_screenshot, capture_video, evaluate_run, inspect_ui, interact,
 };
 use atom_deploy::progress::run_step;
-use atom_deploy::{LaunchMode, ProcessRunner, ToolRunner, deploy_backend, run_bazel, stop_backend};
+use atom_deploy::{
+    LaunchMode, ProcessRunner, ToolRunner, deploy_backend, ensure_backend_enabled, run_bazel,
+    stop_backend,
+};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::load_manifest;
 use atom_modules::resolve_modules;
@@ -358,25 +361,20 @@ fn execute_run(
     } else {
         LaunchMode::Attached
     };
-
-    run_step(
-        "Generating build files...",
-        "Build files generated",
-        "Code generation failed",
-        || {
-            let modules = resolve_modules(&repo_root, &manifest.modules)?;
-            let generation_registry = first_party_generation_backend_registry()?;
-            let plan = build_generation_plan(
-                &manifest,
-                &modules,
-                &default_config_plugin_registry(),
-                &generation_registry,
-            )?;
-            emit_host_tree(&repo_root, &plan, &generation_registry)
-        },
-    )?;
-
     let deploy_registry = first_party_deploy_backend_registry()?;
+
+    preflight_run_backend(&manifest, &deploy_registry, platform, || {
+        let modules = resolve_modules(&repo_root, &manifest.modules)?;
+        let generation_registry = first_party_generation_backend_registry()?;
+        let plan = build_generation_plan(
+            &manifest,
+            &modules,
+            &default_config_plugin_registry(),
+            &generation_registry,
+        )?;
+        emit_host_tree(&repo_root, &plan, &generation_registry).map(|_| ())
+    })?;
+
     deploy_backend(
         &repo_root,
         &manifest,
@@ -388,6 +386,21 @@ fn execute_run(
     )?;
 
     Ok(success_output(Vec::new()))
+}
+
+fn preflight_run_backend(
+    manifest: &atom_manifest::NormalizedManifest,
+    deploy_registry: &DeployBackendRegistry,
+    backend_id: &str,
+    generate: impl FnOnce() -> AtomResult<()>,
+) -> AtomResult<()> {
+    ensure_backend_enabled(manifest, deploy_registry, backend_id)?;
+    run_step(
+        "Generating build files...",
+        "Build files generated",
+        "Code generation failed",
+        generate,
+    )
 }
 
 fn execute_stop(
@@ -743,18 +756,89 @@ fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
+    use atom_backends::{
+        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+        LaunchMode, SessionLaunchBehavior, ToolRunner,
+    };
+    use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
     use clap::Parser;
     use tempfile::tempdir;
 
     use super::{
-        Cli, find_workspace_root, resolve_cli_path, resolve_workspace_root_with_workspace_dir,
-        run_from_args,
+        Cli, find_workspace_root, preflight_run_backend, resolve_cli_path,
+        resolve_workspace_root_with_workspace_dir, run_from_args,
     };
+
+    struct DisabledFixtureBackend;
+
+    impl BackendDefinition for DisabledFixtureBackend {
+        fn id(&self) -> &'static str {
+            "fixture"
+        }
+
+        fn platform(&self) -> &'static str {
+            "fixture-platform"
+        }
+    }
+
+    impl DeployBackend for DisabledFixtureBackend {
+        fn is_enabled(&self, _manifest: &NormalizedManifest) -> bool {
+            false
+        }
+
+        fn list_destinations(
+            &self,
+            _repo_root: &Utf8Path,
+            _runner: &mut dyn ToolRunner,
+        ) -> atom_ffi::AtomResult<Vec<atom_backends::DestinationDescriptor>> {
+            Ok(Vec::new())
+        }
+
+        fn deploy(
+            &self,
+            _repo_root: &Utf8Path,
+            _manifest: &NormalizedManifest,
+            _requested_destination: Option<&str>,
+            _launch_mode: LaunchMode,
+            _runner: &mut dyn ToolRunner,
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn stop(
+            &self,
+            _repo_root: &Utf8Path,
+            _manifest: &NormalizedManifest,
+            _requested_destination: Option<&str>,
+            _runner: &mut dyn ToolRunner,
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn new_automation_session<'a>(
+            &self,
+            _repo_root: &'a Utf8Path,
+            _manifest: &'a NormalizedManifest,
+            _destination_id: &'a str,
+            _runner: &'a mut dyn ToolRunner,
+            _launch_behavior: SessionLaunchBehavior,
+        ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+            unreachable!("CLI tests do not construct automation sessions")
+        }
+    }
 
     fn parse_cli(args: &[&str]) {
         Cli::try_parse_from(args).expect("clap should accept the command");
+    }
+
+    fn runnable_manifest(root: &Utf8Path) -> NormalizedManifest {
+        fixture_manifest(root)
     }
 
     #[test]
@@ -866,6 +950,27 @@ mod tests {
     fn devices_command_accepts_platform_and_json_flag() {
         parse_cli(&["atom", "devices", "--platform", "ios", "--json"]);
         parse_cli(&["atom", "devices", "--platform", "android", "--json"]);
+    }
+
+    #[test]
+    fn disabled_run_backend_fails_before_generation() {
+        let mut registry = DeployBackendRegistry::new();
+        registry
+            .register(Box::new(DisabledFixtureBackend))
+            .expect("fixture backend should register");
+        let root = Utf8PathBuf::from(".");
+        let manifest = runnable_manifest(&root);
+        let generated = Arc::new(AtomicBool::new(false));
+        let generated_flag = Arc::clone(&generated);
+
+        let error = preflight_run_backend(&manifest, &registry, "fixture", move || {
+            generated_flag.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect_err("disabled backend should fail before generation");
+
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::ManifestInvalidValue);
+        assert!(!generated.load(Ordering::SeqCst));
     }
 
     #[test]

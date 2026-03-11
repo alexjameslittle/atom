@@ -295,6 +295,7 @@ fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDe
     };
 
     DestinationDescriptor {
+        platform: "ios".to_owned(),
         backend_id: BACKEND_ID.to_owned(),
         id,
         kind: kind.to_owned(),
@@ -1611,6 +1612,7 @@ mod tests {
             is_available: true,
         });
 
+        assert_eq!(descriptor.platform, "ios");
         assert_eq!(descriptor.backend_id, BACKEND_ID);
         assert_eq!(descriptor.kind, "simulator");
         assert!(
@@ -1643,6 +1645,7 @@ mod tests {
             is_available: true,
         });
 
+        assert_eq!(descriptor.platform, "ios");
         assert_eq!(descriptor.kind, "device");
         assert_eq!(descriptor.capabilities, vec![DestinationCapability::Launch]);
     }

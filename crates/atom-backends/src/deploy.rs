@@ -31,6 +31,7 @@ pub enum DestinationCapability {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DestinationDescriptor {
+    pub platform: String,
     pub backend_id: String,
     pub id: String,
     pub kind: String,

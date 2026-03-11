@@ -81,8 +81,9 @@ where
 #[cfg(test)]
 mod tests {
     use atom_ffi::AtomErrorCode;
+    use serde_json::json;
 
-    use super::{BackendDefinition, BackendRegistry};
+    use super::{BackendDefinition, BackendRegistry, DestinationCapability, DestinationDescriptor};
 
     struct FixtureBackend {
         id: &'static str,
@@ -121,6 +122,37 @@ mod tests {
             error
                 .message
                 .contains("backend registry already contains id fixture-backend")
+        );
+    }
+
+    #[test]
+    fn destination_descriptor_serialization_preserves_platform_and_backend_id() {
+        let descriptor = DestinationDescriptor {
+            platform: "fixture-platform".to_owned(),
+            backend_id: "fixture-backend".to_owned(),
+            id: "fixture-1".to_owned(),
+            kind: "fixture-target".to_owned(),
+            display_name: "Fixture Device".to_owned(),
+            available: true,
+            debug_state: "ready".to_owned(),
+            capabilities: vec![DestinationCapability::Launch],
+        };
+
+        let value =
+            serde_json::to_value(&descriptor).expect("destination descriptor should encode");
+
+        assert_eq!(
+            value,
+            json!({
+                "platform": "fixture-platform",
+                "backend_id": "fixture-backend",
+                "id": "fixture-1",
+                "kind": "fixture-target",
+                "display_name": "Fixture Device",
+                "available": true,
+                "debug_state": "ready",
+                "capabilities": ["launch"],
+            })
         );
     }
 }

@@ -1137,6 +1137,8 @@ Rules:
   and Android contracts.
 - Every destination MUST report a stable identifier, platform, destination kind, display name,
   availability, debug state, and capability set.
+- Machine-readable destination payloads MAY add `backend_id` or other backend-owned metadata, but
+  MUST preserve the top-level `platform` field for compatibility with existing consumers.
 - Evidence and interaction commands MUST work against the same runnable targets accepted by
   `atom run`, surfaced through the destination model.
 - Log capture MUST be able to collect Atom runtime logs plus relevant host-process logs for the
@@ -1223,11 +1225,15 @@ consumes Atom via `bzlmod`.
 
 - MUST follow the iOS deployment sequence defined in Section 9.8.3
 - MUST accept `--detach`
+- MUST reject targets whose iOS backend is disabled in manifest metadata before generating or
+  rewriting host files under `build.generated_root`
 
 `atom run --platform android`:
 
 - MUST follow the Android deployment sequence defined in Section 9.8.3
 - MUST accept `--detach`
+- MUST reject targets whose Android backend is disabled in manifest metadata before generating or
+  rewriting host files under `build.generated_root`
 
 `atom stop --platform ios` and `atom stop --platform android`:
 
@@ -1241,12 +1247,17 @@ consumes Atom via `bzlmod`.
 - MUST support a machine-readable output mode suitable for agents
 - MUST report stable destination identifiers, platform, destination kind, display name,
   availability, debug state, and capability set
+- MAY include a backend-specific `backend_id`, but MUST preserve the `platform` field in the
+  serialized payload
 
 `atom devices --platform ios` and `atom devices --platform android`:
 
 - MUST be supported as compatibility commands for mobile-specific destination discovery
 - MUST support a machine-readable output mode suitable for agents
-- MUST report stable destination identifiers, destination kind, display name, and availability
+- MUST report stable destination identifiers, platform, destination kind, display name, and
+  availability
+- MAY include a backend-specific `backend_id`, but MUST preserve the `platform` field in the
+  serialized payload
 - Android emulator destinations MUST use stable `avd:<name>` identifiers rather than ephemeral
   `emulator-5554`-style serials; connected Android devices continue to use their adb serials
 - MUST only return destinations for the requested mobile platform
@@ -1337,6 +1348,8 @@ Evaluation contract rules:
   coordinate descriptor.
 - Evaluation output MUST include a machine-readable bundle manifest with the selected destination
   id, platform, timestamps, executed steps, per-step status, and artifact paths.
+- Evaluation bundle manifests MAY include backend-specific `backend_id` metadata inside the
+  serialized destination descriptor, but MUST preserve the `platform` field.
 
 ### 10.5 Reference Algorithm: `evaluate run`
 

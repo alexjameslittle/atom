@@ -922,6 +922,7 @@ mod tests {
             _runner: &mut dyn ToolRunner,
         ) -> atom_ffi::AtomResult<Vec<DestinationDescriptor>> {
             Ok(vec![DestinationDescriptor {
+                platform: "fixture-platform".to_owned(),
                 backend_id: "fixture".to_owned(),
                 id: "fixture-1".to_owned(),
                 kind: "fixture-target".to_owned(),
@@ -1063,6 +1064,7 @@ mod tests {
     #[test]
     fn plan_capabilities_require_matching_destination_support() {
         let descriptor = DestinationDescriptor {
+            platform: "fixture-platform".to_owned(),
             backend_id: "fixture".to_owned(),
             id: "fixture-1".to_owned(),
             kind: "fixture-target".to_owned(),

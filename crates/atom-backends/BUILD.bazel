@@ -19,4 +19,7 @@ rust_library(
 rust_test(
     name = "atom-backends-test",
     crate = ":atom-backends",
+    deps = [
+        "@crates//:serde_json",
+    ],
 )

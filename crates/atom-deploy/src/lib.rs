@@ -5,7 +5,7 @@ pub mod evaluate;
 pub mod progress;
 mod tools;
 
-pub use crate::deploy::{deploy_backend, generated_target, stop_backend};
+pub use crate::deploy::{deploy_backend, ensure_backend_enabled, generated_target, stop_backend};
 pub use crate::tools::{
     CommandOutput, ProcessRunner, capture_bazel, capture_bazel_owned, capture_json_tool,
     capture_tool, find_bazel_output, find_bazel_output_owned, run_bazel, run_bazel_owned, run_tool,
@@ -23,7 +23,7 @@ mod tests {
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
 
-    use crate::deploy::{deploy_backend, stop_backend};
+    use crate::deploy::{deploy_backend, ensure_backend_enabled, stop_backend};
     use crate::destinations::list_destinations;
 
     #[derive(Default)]
@@ -90,6 +90,7 @@ mod tests {
             _runner: &mut dyn ToolRunner,
         ) -> atom_ffi::AtomResult<Vec<DestinationDescriptor>> {
             Ok(vec![DestinationDescriptor {
+                platform: "fixture-platform".to_owned(),
                 backend_id: "fixture".to_owned(),
                 id: "fixture-1".to_owned(),
                 kind: "fixture-target".to_owned(),
@@ -193,5 +194,83 @@ mod tests {
             &mut runner,
         )
         .expect("stop should dispatch");
+    }
+
+    #[test]
+    fn ensure_backend_enabled_rejects_disabled_backends() {
+        struct DisabledFixtureBackend;
+
+        impl BackendDefinition for DisabledFixtureBackend {
+            fn id(&self) -> &'static str {
+                "fixture"
+            }
+
+            fn platform(&self) -> &'static str {
+                "fixture-platform"
+            }
+        }
+
+        impl DeployBackend for DisabledFixtureBackend {
+            fn is_enabled(&self, _manifest: &NormalizedManifest) -> bool {
+                false
+            }
+
+            fn list_destinations(
+                &self,
+                _repo_root: &Utf8Path,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<Vec<DestinationDescriptor>> {
+                Ok(Vec::new())
+            }
+
+            fn deploy(
+                &self,
+                _repo_root: &Utf8Path,
+                _manifest: &NormalizedManifest,
+                _requested_destination: Option<&str>,
+                _launch_mode: LaunchMode,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<()> {
+                Ok(())
+            }
+
+            fn stop(
+                &self,
+                _repo_root: &Utf8Path,
+                _manifest: &NormalizedManifest,
+                _requested_destination: Option<&str>,
+                _runner: &mut dyn ToolRunner,
+            ) -> atom_ffi::AtomResult<()> {
+                Ok(())
+            }
+
+            fn new_automation_session<'a>(
+                &self,
+                _repo_root: &'a Utf8Path,
+                _manifest: &'a NormalizedManifest,
+                _destination_id: &'a str,
+                _runner: &'a mut dyn ToolRunner,
+                _launch_behavior: SessionLaunchBehavior,
+            ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+                unreachable!("deploy core tests do not construct automation sessions")
+            }
+        }
+
+        let mut registry = DeployBackendRegistry::new();
+        registry
+            .register(Box::new(DisabledFixtureBackend))
+            .expect("fixture backend should register");
+        let root = Utf8PathBuf::from(".");
+        let manifest = runnable_manifest(&root);
+
+        let error = ensure_backend_enabled(&manifest, &registry, "fixture")
+            .expect_err("disabled backend should fail");
+
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::ManifestInvalidValue);
+        assert!(
+            error
+                .message
+                .contains("fixture-platform platform is not enabled")
+        );
     }
 }
