@@ -253,6 +253,15 @@ pub fn build_generation_plan(
         }
     }
 
+    if manifest.android.enabled && manifest.app.automation_fixture {
+        ensure_android_permission(&mut android_manifest, "android.permission.INTERNET");
+        ensure_android_application_attribute(
+            &mut android_manifest,
+            "@android:usesCleartextTraffic",
+            Value::Bool(true),
+        );
+    }
+
     let schema = SchemaPlan {
         aggregate: aggregate_schema.clone(),
         modules: schema_outputs
@@ -704,6 +713,48 @@ fn object_from_value(value: Value) -> JsonMap {
     match value {
         Value::Object(map) => map,
         _ => JsonMap::new(),
+    }
+}
+
+fn ensure_android_permission(manifest: &mut JsonMap, permission: &str) {
+    let key = "uses-permission".to_owned();
+    let entry = json!({
+        "@android:name": permission,
+    });
+    let current = manifest.remove(&key);
+    let next = match current {
+        None => Value::Array(vec![entry]),
+        Some(Value::Array(mut values)) => {
+            if !android_permission_present(&values, permission) {
+                values.push(entry);
+            }
+            Value::Array(values)
+        }
+        Some(Value::Object(map)) => {
+            let mut values = vec![Value::Object(map)];
+            if !android_permission_present(&values, permission) {
+                values.push(entry);
+            }
+            Value::Array(values)
+        }
+        Some(other) => other,
+    };
+    manifest.insert(key, next);
+}
+
+fn android_permission_present(values: &[Value], permission: &str) -> bool {
+    values.iter().any(|value| {
+        value
+            .as_object()
+            .and_then(|map| map.get("@android:name"))
+            .and_then(Value::as_str)
+            == Some(permission)
+    })
+}
+
+fn ensure_android_application_attribute(manifest: &mut JsonMap, key: &str, value: Value) {
+    if let Some(Value::Object(application)) = manifest.get_mut("application") {
+        application.insert(key.to_owned(), value);
     }
 }
 
@@ -1266,6 +1317,10 @@ mod tests {
         let ios_scene_delegate =
             fs::read_to_string(root.join("generated/ios/hello-atom/SceneDelegate.swift"))
                 .expect("ios scene delegate");
+        let android_manifest = fs::read_to_string(
+            root.join("generated/android/hello-atom/AndroidManifest.generated.xml"),
+        )
+        .expect("android manifest");
         let android_main =
             fs::read_to_string(root.join(
                 "generated/android/hello-atom/src/main/kotlin/build/atom/hello/MainActivity.kt",
@@ -1276,6 +1331,8 @@ mod tests {
         assert!(ios_scene_delegate.contains("AtomAutomationRootView"));
         assert!(android_main.contains("atom.fixture.primary_button"));
         assert!(android_main.contains("AutomationClient"));
+        assert!(android_manifest.contains("android.permission.INTERNET"));
+        assert!(android_manifest.contains("android:usesCleartextTraffic=\"true\""));
     }
 
     #[test]

@@ -156,9 +156,11 @@ fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDe
     }
 }
 
-fn destination_descriptor_from_android(destination: AndroidDestination) -> DestinationDescriptor {
+pub(crate) fn android_destination_descriptor(
+    destination: AndroidDestination,
+) -> DestinationDescriptor {
     let display_name = destination.display_label();
-    let id = destination.serial.clone();
+    let id = destination.destination_id();
     let kind = if destination.state == "avd" {
         DestinationKind::Avd
     } else if destination.is_emulator {
@@ -188,4 +190,8 @@ fn destination_descriptor_from_android(destination: AndroidDestination) -> Desti
         debug_state: destination.state,
         capabilities,
     }
+}
+
+fn destination_descriptor_from_android(destination: AndroidDestination) -> DestinationDescriptor {
+    android_destination_descriptor(destination)
 }

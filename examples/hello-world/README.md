@@ -71,14 +71,14 @@ Run it from the repository root:
 mise run ios
 mise run android
 mise run ios -- --destination 00008130-001431E90A78001C
-mise run android -- --destination emulator-5554
+mise run android -- --destination avd:atom_35
 
 bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/tmp/hello-atom.plan
 bazelisk run //:atom -- destinations --json
 bazelisk run //:atom -- run ios --target //examples/hello-world/apps/hello_atom:hello_atom
 bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom
 bazelisk run //:atom -- run ios --target //examples/hello-world/apps/hello_atom:hello_atom --destination 00008130-001431E90A78001C
-bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom --destination emulator-5554
+bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom --destination avd:atom_35
 bazelisk run //:atom -- inspect ui --target //examples/hello-world/apps/hello_atom:hello_atom --destination SIM-123 --output /tmp/hello-atom-ui.json
 bazelisk run //:atom -- evaluate run --target //examples/hello-world/apps/hello_atom:hello_atom --destination SIM-123 --plan examples/hello-world/evaluation/automation_fixture_plan.json --artifacts-dir /tmp/hello-atom-eval
 ```

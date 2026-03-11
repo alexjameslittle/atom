@@ -321,6 +321,7 @@ mod tests {
             calls: Vec::new(),
             captures: VecDeque::from([
                 "bazel-bin/generated/android/hello-atom/app_unsigned.apk\nbazel-bin/generated/android/hello-atom/app.apk\n".to_owned(),
+                "1\n".to_owned(),
                 "4793\n".to_owned(),
             ]),
         };
@@ -353,6 +354,16 @@ mod tests {
                     vec![
                         "-s".to_owned(),
                         "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "getprop".to_owned(),
+                        "sys.boot_completed".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
                         "install".to_owned(),
                         "-r".to_owned(),
                         root.join("bazel-bin/generated/android/hello-atom/app.apk")
@@ -377,6 +388,7 @@ mod tests {
                         "shell".to_owned(),
                         "am".to_owned(),
                         "start".to_owned(),
+                        "-W".to_owned(),
                         "-n".to_owned(),
                         "build.atom.hello/.MainActivity".to_owned(),
                     ],
@@ -473,7 +485,8 @@ mod tests {
                 idb_targets_json("Booted"),
                 "List of devices attached\nemulator-5554\tdevice model:Pixel_9 device:emu64a\n"
                     .to_owned(),
-                "Pixel_9_API_35\n".to_owned(),
+                "atom_35\n".to_owned(),
+                "atom_35\nPixel_9_API_35\n".to_owned(),
             ]),
         };
 
@@ -494,7 +507,7 @@ mod tests {
                 && destination.capabilities == vec![DestinationCapability::Launch]
         }));
         assert!(destinations.iter().any(|destination| {
-            destination.id == "emulator-5554"
+            destination.id == "avd:atom_35"
                 && destination.platform == DestinationPlatform::Android
                 && destination.kind == DestinationKind::Emulator
                 && destination

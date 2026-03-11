@@ -279,16 +279,28 @@ class MainActivity : Activity() {
         private val executor = Executors.newSingleThreadScheduledExecutor()
 
         fun start() {
-            post("register", JSONObject()
-                .put("token", token)
-                .put("platform", "android"))
-            executor.scheduleAtFixedRate({
-                poll()
-            }, 0, 250, TimeUnit.MILLISECONDS)
+            executor.execute {
+                if (!postSafely("register", JSONObject()
+                        .put("token", token)
+                        .put("platform", "android"))) {
+                    return@execute
+                }
+                executor.scheduleAtFixedRate({
+                    pollSafely()
+                }, 0, 250, TimeUnit.MILLISECONDS)
+            }
         }
 
         fun stop() {
             executor.shutdownNow()
+        }
+
+        private fun pollSafely() {
+            try {
+                poll()
+            } catch (_: Exception) {
+                // Keep the app alive even if the host-side bridge is temporarily unavailable.
+            }
         }
 
         private fun poll() {
@@ -304,23 +316,41 @@ class MainActivity : Activity() {
             val command = JSONObject(payload)
             mainHandler.post {
                 val snapshot = handleAutomationCommand(command)
-                post("result", JSONObject()
-                    .put("token", token)
-                    .put("command_id", command.optString("id"))
-                    .put("ok", true)
-                    .put("snapshot", snapshot))
+                executor.execute {
+                    postSafely("result", JSONObject()
+                        .put("token", token)
+                        .put("command_id", command.optString("id"))
+                        .put("ok", true)
+                        .put("snapshot", snapshot))
+                }
+            }
+        }
+
+        private fun postSafely(path: String, payload: JSONObject): Boolean {
+            return try {
+                post(path, payload)
+                true
+            } catch (_: Exception) {
+                mainHandler.post {
+                    automationState.statusText = "automation-bridge-unavailable"
+                    renderAutomationState()
+                }
+                false
             }
         }
 
         private fun post(path: String, payload: JSONObject) {
             val connection = openConnection(path)
-            connection.requestMethod = "POST"
-            connection.doOutput = true
-            OutputStreamWriter(connection.outputStream).use { writer ->
-                writer.write(payload.toString())
+            try {
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                OutputStreamWriter(connection.outputStream).use { writer ->
+                    writer.write(payload.toString())
+                }
+                connection.inputStream.close()
+            } finally {
+                connection.disconnect()
             }
-            connection.inputStream.close()
-            connection.disconnect()
         }
 
         private fun openConnection(path: String): HttpURLConnection {

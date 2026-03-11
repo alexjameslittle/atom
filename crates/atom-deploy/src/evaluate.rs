@@ -13,14 +13,14 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::deploy::{generated_target, ios_bazel_args, resolve_ios_installable_artifact};
+use crate::deploy::{
+    generated_target, ios_bazel_args, resolve_ios_installable_artifact, wait_for_app_pid,
+};
 use crate::destinations::{
     DestinationCapability, DestinationDescriptor, DestinationKind, DestinationPlatform,
-    list_destinations,
+    android_destination_descriptor, list_destinations,
 };
-use crate::devices::android::{
-    list_android_destinations, prepare_android_emulator, resolve_android_device,
-};
+use crate::devices::android::{find_android_destination, prepare_android_emulator};
 use crate::devices::ios::{
     IosDestination, IosDestinationKind, list_ios_destinations, prepare_ios_simulator,
 };
@@ -28,6 +28,10 @@ use crate::tools::{ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_
 
 const AUTOMATION_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const AUTOMATION_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const APP_LAUNCH_READY_TARGET: &str = "atom.fixture.primary_button";
+const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UiBounds {
@@ -673,6 +677,58 @@ fn snapshot_matches(snapshot: &UiSnapshot, target_id: Option<&str>, text: Option
     })
 }
 
+fn snapshot_is_launch_ready(snapshot: &UiSnapshot, manifest: &NormalizedManifest) -> bool {
+    if manifest.app.automation_fixture {
+        return snapshot_matches(snapshot, Some(APP_LAUNCH_READY_TARGET), None);
+    }
+    !snapshot.nodes.is_empty()
+}
+
+fn wait_for_idb_launch_ready(
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    manifest: &NormalizedManifest,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(snapshot) = inspect_ui_with_idb(repo_root, destination_id, runner)
+            && snapshot_is_launch_ready(&snapshot, manifest)
+        {
+            return Ok(());
+        }
+        thread::sleep(APP_LAUNCH_READY_POLL_INTERVAL);
+    }
+    Err(AtomError::new(
+        AtomErrorCode::AutomationUnavailable,
+        "app did not become responsive after launch",
+    ))
+}
+
+fn wait_for_automation_launch_ready(
+    server: &mut AutomationServer,
+    manifest: &NormalizedManifest,
+) -> AtomResult<()> {
+    let result = server
+        .send_command(InteractionRequest::InspectUi)
+        .map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                format!(
+                    "app did not become responsive after launch: {}",
+                    error.message
+                ),
+            )
+        })?;
+    if snapshot_is_launch_ready(&result.snapshot, manifest) {
+        return Ok(());
+    }
+    Err(AtomError::new(
+        AtomErrorCode::AutomationUnavailable,
+        "app launched but did not expose a ready UI snapshot",
+    ))
+}
+
 fn simple_step(index: usize, kind: &str, started_at_ms: u128) -> StepRecord {
     StepRecord {
         index,
@@ -707,16 +763,20 @@ fn resolve_destination_descriptor(
     destination_id: &str,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<DestinationDescriptor> {
-    list_destinations(repo_root, runner)?
+    if let Some(destination) = list_destinations(repo_root, runner)?
         .into_iter()
         .find(|destination| destination.id == destination_id)
-        .ok_or_else(|| {
-            AtomError::with_path(
-                AtomErrorCode::AutomationUnavailable,
-                format!("unknown destination id: {destination_id}"),
-                destination_id,
-            )
-        })
+    {
+        return Ok(destination);
+    }
+    if let Some(destination) = find_android_destination(repo_root, runner, destination_id)? {
+        return Ok(android_destination_descriptor(destination));
+    }
+    Err(AtomError::with_path(
+        AtomErrorCode::AutomationUnavailable,
+        format!("unknown destination id: {destination_id}"),
+        destination_id,
+    ))
 }
 
 fn require_capability(
@@ -836,13 +896,20 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
             return Ok(());
         }
         if uses_idb_ios_simulator(&self.descriptor) {
-            self.launch = Some(AppLaunch::launch(
+            let launch = AppLaunch::launch(
                 self.repo_root,
                 self.manifest,
                 self.destination_id,
                 self.runner,
                 None,
-            )?);
+            )?;
+            wait_for_idb_launch_ready(
+                self.repo_root,
+                self.destination_id,
+                self.manifest,
+                self.runner,
+            )?;
+            self.launch = Some(launch);
             return Ok(());
         }
         if !self.manifest.app.automation_fixture {
@@ -852,7 +919,7 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
             ));
         }
 
-        let server = AutomationServer::new()?;
+        let mut server = AutomationServer::new()?;
         let launch_parameters = server.launch_parameters(self.descriptor.platform);
         let launch = AppLaunch::launch(
             self.repo_root,
@@ -862,6 +929,7 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
             Some(&launch_parameters),
         )?;
         server.wait_for_registration(AUTOMATION_CONNECT_TIMEOUT)?;
+        wait_for_automation_launch_ready(&mut server, self.manifest)?;
         self.automation_server = Some(server);
         self.launch = Some(launch);
         Ok(())
@@ -1526,9 +1594,16 @@ fn idb_args(destination_id: &str, subcommand: &[String]) -> Vec<String> {
 }
 
 enum AppLaunch {
-    IosSimulator { destination_id: String },
-    IosDevice { destination_id: String },
-    Android { serial: String },
+    IosSimulator {
+        destination_id: String,
+    },
+    IosDevice {
+        destination_id: String,
+    },
+    Android {
+        serial: String,
+        application_id: String,
+    },
 }
 
 impl AppLaunch {
@@ -1545,14 +1620,11 @@ impl AppLaunch {
         {
             return launch_ios_app(repo_root, manifest, destination, runner, launch_parameters);
         }
-        if list_android_destinations(repo_root, runner)?
-            .into_iter()
-            .any(|destination| destination.serial == destination_id)
-        {
+        if let Some(destination) = find_android_destination(repo_root, runner, destination_id)? {
             return launch_android_app(
                 repo_root,
                 manifest,
-                destination_id,
+                &destination,
                 runner,
                 launch_parameters,
             );
@@ -1656,7 +1728,7 @@ fn launch_ios_app(
 fn launch_android_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
-    destination_id: &str,
+    destination: &crate::devices::android::AndroidDestination,
     runner: &mut impl ToolRunner,
     launch_parameters: Option<&LaunchParameters>,
 ) -> AtomResult<AppLaunch> {
@@ -1667,8 +1739,7 @@ fn launch_android_app(
         ));
     }
 
-    let destination = resolve_android_device(repo_root, runner, Some(destination_id))?;
-    let serial = prepare_android_emulator(repo_root, runner, &destination)?;
+    let serial = prepare_android_emulator(repo_root, runner, destination)?;
     let target = generated_target(manifest, "android");
     let build_args = vec![
         "build".to_owned(),
@@ -1717,6 +1788,7 @@ fn launch_android_app(
         "shell".to_owned(),
         "am".to_owned(),
         "start".to_owned(),
+        "-W".to_owned(),
         "-n".to_owned(),
         component,
     ];
@@ -1729,9 +1801,12 @@ fn launch_android_app(
         args.push(parameters.token.clone());
     }
     runner.run(repo_root, "adb", &args)?;
+    wait_for_app_pid(runner, repo_root, &serial, &application_id)?;
 
-    let _ = application_id;
-    Ok(AppLaunch::Android { serial })
+    Ok(AppLaunch::Android {
+        serial,
+        application_id,
+    })
 }
 
 fn capture_screenshot_for_launch(
@@ -1799,8 +1874,17 @@ fn capture_logs_for_launch(
                 ],
             )
         }
-        AppLaunch::Android { serial } => {
-            capture_tool(runner, repo_root, "adb", &["-s", serial, "logcat", "-d"])
+        AppLaunch::Android {
+            serial,
+            application_id,
+        } => {
+            let pid = wait_for_app_pid(runner, repo_root, serial, application_id)?;
+            capture_tool(
+                runner,
+                repo_root,
+                "adb",
+                &["-s", serial, "logcat", "--pid", &pid, "-d"],
+            )
         }
     }
     .map_err(|error| {
@@ -1831,11 +1915,11 @@ fn capture_video_for_launch(
         AppLaunch::IosSimulator { destination_id } | AppLaunch::IosDevice { destination_id } => {
             let mut child = spawn_idb_video(repo_root, destination_id, output_path)?;
             thread::sleep(Duration::from_secs(seconds));
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_recording_process(repo_root, &mut child, DestinationPlatform::Ios)?;
+            ensure_video_artifact(output_path)?;
             Ok(())
         }
-        AppLaunch::Android { serial } => {
+        AppLaunch::Android { serial, .. } => {
             let remote = format!("/sdcard/atom-video-{}.mp4", timestamp_suffix());
             run_tool(
                 runner,
@@ -1893,7 +1977,7 @@ fn start_video_capture(
                 serial: None,
             })
         }
-        AppLaunch::Android { serial } => {
+        AppLaunch::Android { serial, .. } => {
             let remote_path = format!("/sdcard/atom-video-{}.mp4", timestamp_suffix());
             let child = Command::new("adb")
                 .args(["-s", serial, "shell", "screenrecord", &remote_path])
@@ -1943,8 +2027,7 @@ fn stop_video_capture(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<Utf8PathBuf> {
     let mut child = video.child;
-    let _ = child.kill();
-    let _ = child.wait();
+    stop_recording_process(repo_root, &mut child, video.platform)?;
 
     if video.platform == DestinationPlatform::Android
         && let (Some(serial), Some(remote_path)) =
@@ -1970,7 +2053,94 @@ fn stop_video_capture(
         )?;
     }
 
+    ensure_video_artifact(&video.output_path)?;
     Ok(video.output_path)
+}
+
+fn stop_recording_process(
+    repo_root: &Utf8Path,
+    child: &mut Child,
+    platform: DestinationPlatform,
+) -> AtomResult<()> {
+    if wait_for_child_exit(child, Duration::from_millis(100))? {
+        return Ok(());
+    }
+
+    let (primary_signal, secondary_signal) = match platform {
+        DestinationPlatform::Ios => ("TERM", "INT"),
+        DestinationPlatform::Android => ("INT", "TERM"),
+    };
+
+    let _ = signal_child(repo_root, child, primary_signal);
+    if wait_for_child_exit(child, VIDEO_STOP_TIMEOUT)? {
+        return Ok(());
+    }
+
+    let _ = signal_child(repo_root, child, secondary_signal);
+    if wait_for_child_exit(child, VIDEO_STOP_TIMEOUT)? {
+        return Ok(());
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
+}
+
+fn signal_child(repo_root: &Utf8Path, child: &Child, signal: &str) -> AtomResult<()> {
+    let status = Command::new("/bin/kill")
+        .args([format!("-{signal}"), child.id().to_string()])
+        .current_dir(repo_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to signal recorder process: {error}"),
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("failed to signal recorder process with SIG{signal}"),
+        ))
+    }
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> AtomResult<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait().map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to poll recorder process: {error}"),
+            )
+        })? {
+            Some(_) => return Ok(true),
+            None if Instant::now() >= deadline => return Ok(false),
+            None => thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+fn ensure_video_artifact(path: &Utf8Path) -> AtomResult<()> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        AtomError::with_path(
+            AtomErrorCode::ExternalToolFailed,
+            format!("video recording did not produce an output file: {error}"),
+            path.as_str(),
+        )
+    })?;
+    if metadata.len() == 0 {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ExternalToolFailed,
+            "video recording produced an empty output file",
+            path.as_str(),
+        ));
+    }
+    Ok(())
 }
 
 fn write_json<T: Serialize>(path: &Utf8Path, value: &T) -> AtomResult<()> {

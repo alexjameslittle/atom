@@ -16,6 +16,9 @@ use crate::tools::{
     ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool, stream_tool,
 };
 
+const ANDROID_APP_PID_WAIT_ATTEMPTS: usize = 30;
+const ANDROID_APP_PID_WAIT_INTERVAL: Duration = Duration::from_millis(500);
+
 /// # Errors
 ///
 /// Returns an error if device resolution, building, or installation fails.
@@ -203,7 +206,9 @@ pub fn deploy_android(
             runner,
             repo_root,
             "adb",
-            &["-s", &serial, "shell", "am", "start", "-n", &component],
+            &[
+                "-s", &serial, "shell", "am", "start", "-W", "-n", &component,
+            ],
         )
     })?;
 
@@ -234,7 +239,7 @@ pub(crate) fn wait_for_app_pid(
     serial: &str,
     application_id: &str,
 ) -> AtomResult<String> {
-    for _ in 0..10 {
+    for _ in 0..ANDROID_APP_PID_WAIT_ATTEMPTS {
         if let Ok(output) = capture_tool(
             runner,
             repo_root,
@@ -246,7 +251,7 @@ pub(crate) fn wait_for_app_pid(
                 return Ok(pid.to_owned());
             }
         }
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(ANDROID_APP_PID_WAIT_INTERVAL);
     }
     Err(AtomError::new(
         AtomErrorCode::ExternalToolFailed,

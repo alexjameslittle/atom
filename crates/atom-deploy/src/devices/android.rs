@@ -6,7 +6,10 @@ use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8Path;
 
 use crate::devices::{choose_from_menu, should_prompt_interactively};
-use crate::tools::{ToolRunner, capture_tool, run_tool};
+use crate::tools::{ToolRunner, capture_tool};
+
+const ANDROID_BOOT_TIMEOUT_ATTEMPTS: usize = 60;
+const ANDROID_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AndroidDestination {
@@ -20,6 +23,13 @@ pub struct AndroidDestination {
 
 impl AndroidDestination {
     #[must_use]
+    pub fn destination_id(&self) -> String {
+        self.avd_name
+            .as_deref()
+            .map_or_else(|| self.serial.clone(), |avd| format!("avd:{avd}"))
+    }
+
+    #[must_use]
     pub fn display_label(&self) -> String {
         if self.state == "avd" {
             let avd = self.avd_name.as_deref().unwrap_or("unknown");
@@ -31,11 +41,51 @@ impl AndroidDestination {
             "Device"
         };
         let model = self.model.as_deref().or(self.device_name.as_deref());
+        if self.is_emulator
+            && let Some(avd) = self.avd_name.as_deref()
+        {
+            return match model {
+                Some(model) => format!("Emulator: {model} [AVD: {avd}; {}]", self.serial),
+                None => format!("Emulator: {avd} [{}]", self.serial),
+            };
+        }
         match model {
             Some(model) => format!("{kind}: {model} [{kind}; {}]", self.serial),
             None => format!("{kind}: {} [{}]", self.serial, self.state),
         }
     }
+}
+
+pub(crate) fn find_android_destination(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+    requested: &str,
+) -> AtomResult<Option<AndroidDestination>> {
+    let running_devices = list_android_devices(repo_root, runner)?;
+    if let Some(avd_name) = requested.strip_prefix("avd:") {
+        if let Some(destination) = running_devices
+            .iter()
+            .find(|destination| destination.avd_name.as_deref() == Some(avd_name))
+            .cloned()
+        {
+            return Ok(Some(destination));
+        }
+        let avds = list_avds(repo_root, runner)?;
+        return Ok(avds
+            .into_iter()
+            .find(|candidate| candidate == avd_name)
+            .map(|avd_name| AndroidDestination {
+                serial: format!("avd:{avd_name}"),
+                state: "avd".to_owned(),
+                model: None,
+                device_name: None,
+                is_emulator: true,
+                avd_name: Some(avd_name),
+            }));
+    }
+    Ok(running_devices
+        .into_iter()
+        .find(|destination| destination.serial == requested))
 }
 
 /// # Errors
@@ -47,15 +97,15 @@ pub fn resolve_android_device(
     requested_device: Option<&str>,
 ) -> AtomResult<AndroidDestination> {
     if let Some(requested) = requested_device {
-        if let Some(avd_name) = requested.strip_prefix("avd:") {
-            return Ok(AndroidDestination {
-                serial: requested.to_owned(),
-                state: "avd".to_owned(),
-                model: None,
-                device_name: None,
-                is_emulator: true,
-                avd_name: Some(avd_name.to_owned()),
-            });
+        if requested.strip_prefix("avd:").is_some() {
+            if let Some(destination) = find_android_destination(repo_root, runner, requested)? {
+                return Ok(destination);
+            }
+            return Err(AtomError::with_path(
+                AtomErrorCode::ExternalToolFailed,
+                format!("unknown Android destination id: {requested}"),
+                requested,
+            ));
         }
         return Ok(AndroidDestination {
             serial: requested.to_owned(),
@@ -168,6 +218,9 @@ pub fn prepare_android_emulator(
     destination: &AndroidDestination,
 ) -> AtomResult<String> {
     if destination.state == "device" {
+        if destination.is_emulator {
+            wait_for_android_boot(repo_root, runner, &destination.serial)?;
+        }
         return Ok(destination.serial.clone());
     }
 
@@ -178,8 +231,13 @@ pub fn prepare_android_emulator(
         )
     })?;
 
+    if let Some(serial) = running_emulator_serial_for_avd(repo_root, runner, avd)? {
+        wait_for_android_boot(repo_root, runner, &serial)?;
+        return Ok(serial);
+    }
+
     Command::new("emulator")
-        .args(["-avd", avd])
+        .args(["-avd", avd, "-no-snapshot-load"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -191,36 +249,26 @@ pub fn prepare_android_emulator(
             )
         })?;
 
-    // Wait for the emulator to appear as a device.
-    run_tool(runner, repo_root, "adb", &["wait-for-device"])?;
-
-    // Wait for boot to complete.
-    wait_for_android_boot(repo_root, runner)?;
-
-    // Return the serial of the emulator.
-    let devices = list_android_devices(repo_root, runner)?;
-    devices
-        .into_iter()
-        .find(|d| d.is_emulator)
-        .map(|d| d.serial)
-        .ok_or_else(|| {
-            AtomError::new(
-                AtomErrorCode::ExternalToolFailed,
-                "Android emulator started but was not found by adb",
-            )
-        })
+    let serial = wait_for_android_emulator_serial(repo_root, runner, avd)?;
+    wait_for_android_boot(repo_root, runner, &serial)?;
+    Ok(serial)
 }
 
 pub(crate) fn list_android_devices(
     repo_root: &Utf8Path,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<Vec<AndroidDestination>> {
-    Ok(
+    let mut destinations =
         parse_android_devices(&capture_tool(runner, repo_root, "adb", &["devices", "-l"])?)
             .into_iter()
             .filter(|destination| destination.state == "device")
-            .collect(),
-    )
+            .collect::<Vec<_>>();
+    for destination in &mut destinations {
+        if destination.is_emulator {
+            destination.avd_name = emulator_avd_name(repo_root, runner, &destination.serial);
+        }
+    }
+    Ok(destinations)
 }
 
 #[must_use]
@@ -268,21 +316,249 @@ pub(crate) fn list_avds(
         .collect())
 }
 
-fn wait_for_android_boot(repo_root: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<()> {
-    for _ in 0..60 {
+fn running_emulator_serial_for_avd(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+    avd_name: &str,
+) -> AtomResult<Option<String>> {
+    Ok(list_android_devices(repo_root, runner)?
+        .into_iter()
+        .find(|destination| {
+            destination.is_emulator && destination.avd_name.as_deref() == Some(avd_name)
+        })
+        .map(|destination| destination.serial))
+}
+
+fn wait_for_android_emulator_serial(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+    avd_name: &str,
+) -> AtomResult<String> {
+    for _ in 0..ANDROID_BOOT_TIMEOUT_ATTEMPTS {
+        if let Some(serial) = running_emulator_serial_for_avd(repo_root, runner, avd_name)? {
+            return Ok(serial);
+        }
+        thread::sleep(ANDROID_POLL_INTERVAL);
+    }
+    Err(AtomError::new(
+        AtomErrorCode::ExternalToolFailed,
+        format!("Android emulator {avd_name} started but was not found by adb"),
+    ))
+}
+
+fn wait_for_android_boot(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+    serial: &str,
+) -> AtomResult<()> {
+    for _ in 0..ANDROID_BOOT_TIMEOUT_ATTEMPTS {
         if let Ok(output) = capture_tool(
             runner,
             repo_root,
             "adb",
-            &["shell", "getprop", "sys.boot_completed"],
+            &["-s", serial, "shell", "getprop", "sys.boot_completed"],
         ) && output.trim() == "1"
         {
             return Ok(());
         }
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(ANDROID_POLL_INTERVAL);
     }
     Err(AtomError::new(
         AtomErrorCode::ExternalToolFailed,
-        "Android emulator did not finish booting within 120 seconds",
+        format!("Android emulator {serial} did not finish booting within 120 seconds"),
     ))
+}
+
+fn emulator_avd_name(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+    serial: &str,
+) -> Option<String> {
+    capture_tool(
+        runner,
+        repo_root,
+        "adb",
+        &["-s", serial, "emu", "avd", "name"],
+    )
+    .ok()
+    .and_then(|output| parse_emulator_avd_name(&output))
+}
+
+fn parse_emulator_avd_name(output: &str) -> Option<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.eq_ignore_ascii_case("ok"))
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use camino::{Utf8Path, Utf8PathBuf};
+
+    use super::{
+        AndroidDestination, find_android_destination, parse_emulator_avd_name,
+        prepare_android_emulator,
+    };
+    use crate::tools::ToolRunner;
+
+    #[derive(Default)]
+    struct FakeToolRunner {
+        calls: Vec<(String, Vec<String>)>,
+        captures: VecDeque<String>,
+    }
+
+    impl ToolRunner for FakeToolRunner {
+        fn run(
+            &mut self,
+            _repo_root: &Utf8Path,
+            tool: &str,
+            args: &[String],
+        ) -> atom_ffi::AtomResult<()> {
+            self.calls.push((tool.to_owned(), args.to_vec()));
+            Ok(())
+        }
+
+        fn capture(
+            &mut self,
+            _repo_root: &Utf8Path,
+            tool: &str,
+            args: &[String],
+        ) -> atom_ffi::AtomResult<String> {
+            self.calls.push((tool.to_owned(), args.to_vec()));
+            Ok(self
+                .captures
+                .pop_front()
+                .expect("expected captured output for command"))
+        }
+
+        fn capture_json_file(
+            &mut self,
+            _repo_root: &Utf8Path,
+            tool: &str,
+            args: &[String],
+        ) -> atom_ffi::AtomResult<String> {
+            self.calls.push((tool.to_owned(), args.to_vec()));
+            Ok(self
+                .captures
+                .pop_front()
+                .expect("expected captured output for command"))
+        }
+
+        fn stream(
+            &mut self,
+            _repo_root: &Utf8Path,
+            tool: &str,
+            args: &[String],
+        ) -> atom_ffi::AtomResult<()> {
+            self.calls.push((tool.to_owned(), args.to_vec()));
+            Ok(())
+        }
+    }
+
+    fn root() -> Utf8PathBuf {
+        Utf8PathBuf::from(".")
+    }
+
+    #[test]
+    fn running_emulator_uses_stable_avd_destination_id() {
+        let destination = AndroidDestination {
+            serial: "emulator-5554".to_owned(),
+            state: "device".to_owned(),
+            model: Some("Pixel 9".to_owned()),
+            device_name: None,
+            is_emulator: true,
+            avd_name: Some("atom_35".to_owned()),
+        };
+
+        assert_eq!(destination.destination_id(), "avd:atom_35");
+        assert_eq!(
+            destination.display_label(),
+            "Emulator: Pixel 9 [AVD: atom_35; emulator-5554]"
+        );
+    }
+
+    #[test]
+    fn requested_avd_resolves_to_running_emulator() {
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                "List of devices attached\nemulator-5554\tdevice model:Pixel_9 device:emu64a\n"
+                    .to_owned(),
+                "atom_35\n".to_owned(),
+            ]),
+        };
+
+        let destination = find_android_destination(&root(), &mut runner, "avd:atom_35")
+            .expect("lookup")
+            .expect("destination");
+
+        assert_eq!(destination.serial, "emulator-5554");
+        assert_eq!(destination.avd_name.as_deref(), Some("atom_35"));
+    }
+
+    #[test]
+    fn prepare_android_emulator_reuses_matching_running_avd() {
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                "List of devices attached\nemulator-5554\tdevice model:Pixel_9 device:emu64a\n"
+                    .to_owned(),
+                "atom_35\n".to_owned(),
+                "1\n".to_owned(),
+            ]),
+        };
+        let destination = AndroidDestination {
+            serial: "avd:atom_35".to_owned(),
+            state: "avd".to_owned(),
+            model: None,
+            device_name: None,
+            is_emulator: true,
+            avd_name: Some("atom_35".to_owned()),
+        };
+
+        let serial =
+            prepare_android_emulator(&root(), &mut runner, &destination).expect("reuse emulator");
+
+        assert_eq!(serial, "emulator-5554");
+        assert_eq!(
+            runner.calls,
+            vec![
+                (
+                    "adb".to_owned(),
+                    vec!["devices".to_owned(), "-l".to_owned()],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "emu".to_owned(),
+                        "avd".to_owned(),
+                        "name".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "getprop".to_owned(),
+                        "sys.boot_completed".to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_emulator_avd_name_ignores_empty_and_ok_lines() {
+        assert_eq!(
+            parse_emulator_avd_name("\nOK\natom_35\n"),
+            Some("atom_35".to_owned())
+        );
+    }
 }

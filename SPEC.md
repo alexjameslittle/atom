@@ -1076,7 +1076,8 @@ Android deployment sequence:
 
 1. `bazel build //<build.generated_root>/android/<slug>:app` to produce the APK.
 2. `adb install -r <path-to-.apk>` to install on the running emulator or connected device.
-3. `adb shell am start -n <application_id>/.MainActivity` to launch.
+3. `adb shell am start -W -n <application_id>/.MainActivity` to launch and wait for Activity Manager
+   completion.
 
 Rules:
 
@@ -1218,6 +1219,8 @@ consumes Atom via `bzlmod`.
 - MUST be supported as compatibility commands for mobile-specific destination discovery
 - MUST support a machine-readable output mode suitable for agents
 - MUST report stable destination identifiers, destination kind, display name, and availability
+- Android emulator destinations MUST use stable `avd:<name>` identifiers rather than ephemeral
+  `emulator-5554`-style serials; connected Android devices continue to use their adb serials
 - MUST only return destinations for the requested mobile platform
 
 `atom evidence screenshot`:
@@ -1254,6 +1257,8 @@ consumes Atom via `bzlmod`.
 - MUST execute a machine-readable evaluation plan against one selected destination
 - MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
   interactions
+- A `launch` step MUST not report success until the selected app process is running and the
+  evaluation backend can obtain an initial UI snapshot from that launched app
 - MUST write a machine-readable artifact manifest plus referenced artifacts under the requested
   output directory
 - MUST stop on the first failed required step and surface the underlying automation or tool failure
