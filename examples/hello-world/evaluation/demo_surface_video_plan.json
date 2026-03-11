@@ -5,17 +5,21 @@
     },
     {
       "kind": "wait_for_ui",
-      "target_id": "atom.fixture.primary_button",
+      "target_id": "atom.demo.primary_button",
       "timeout_ms": 5000
     },
     {
+      "kind": "start_video",
+      "name": "session.mp4"
+    },
+    {
       "kind": "type_text",
-      "target_id": "atom.fixture.input",
-      "text": "hello from atom"
+      "target_id": "atom.demo.input",
+      "text": "phase 6 comprehensive typing proof"
     },
     {
       "kind": "tap",
-      "target_id": "atom.fixture.primary_button"
+      "target_id": "atom.demo.primary_button"
     },
     {
       "kind": "inspect_ui",
@@ -24,6 +28,9 @@
     {
       "kind": "screenshot",
       "name": "after-tap.png"
+    },
+    {
+      "kind": "stop_video"
     }
   ]
 }

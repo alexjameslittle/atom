@@ -253,15 +253,6 @@ pub fn build_generation_plan(
         }
     }
 
-    if manifest.android.enabled && manifest.app.automation_fixture {
-        ensure_android_permission(&mut android_manifest, "android.permission.INTERNET");
-        ensure_android_application_attribute(
-            &mut android_manifest,
-            "@android:usesCleartextTraffic",
-            Value::Bool(true),
-        );
-    }
-
     let schema = SchemaPlan {
         aggregate: aggregate_schema.clone(),
         modules: schema_outputs
@@ -716,48 +707,6 @@ fn object_from_value(value: Value) -> JsonMap {
     }
 }
 
-fn ensure_android_permission(manifest: &mut JsonMap, permission: &str) {
-    let key = "uses-permission".to_owned();
-    let entry = json!({
-        "@android:name": permission,
-    });
-    let current = manifest.remove(&key);
-    let next = match current {
-        None => Value::Array(vec![entry]),
-        Some(Value::Array(mut values)) => {
-            if !android_permission_present(&values, permission) {
-                values.push(entry);
-            }
-            Value::Array(values)
-        }
-        Some(Value::Object(map)) => {
-            let mut values = vec![Value::Object(map)];
-            if !android_permission_present(&values, permission) {
-                values.push(entry);
-            }
-            Value::Array(values)
-        }
-        Some(other) => other,
-    };
-    manifest.insert(key, next);
-}
-
-fn android_permission_present(values: &[Value], permission: &str) -> bool {
-    values.iter().any(|value| {
-        value
-            .as_object()
-            .and_then(|map| map.get("@android:name"))
-            .and_then(Value::as_str)
-            == Some(permission)
-    })
-}
-
-fn ensure_android_application_attribute(manifest: &mut JsonMap, key: &str, value: Value) {
-    if let Some(Value::Object(application)) = manifest.get_mut("application") {
-        application.insert(key.to_owned(), value);
-    }
-}
-
 fn render_plist_value(output: &mut String, value: &Value, indent: usize) -> AtomResult<()> {
     let prefix = "  ".repeat(indent);
     match value {
@@ -1023,7 +972,6 @@ mod tests {
                 slug: "hello-atom".to_owned(),
                 entry_crate_label: "//apps/hello_atom:hello_atom".to_owned(),
                 entry_crate_name: "hello_atom".to_owned(),
-                automation_fixture: false,
             },
             ios: IosConfig {
                 enabled: true,
@@ -1211,7 +1159,8 @@ mod tests {
         assert!(swift_app_delegate.contains("configurationForConnecting"));
         assert!(swift_main.contains("UIApplicationMain("));
         assert!(swift_main.contains("NSStringFromClass(AtomAppDelegate.self)"));
-        assert!(swift_scene_delegate.contains("UIHostingController(rootView: AtomRootView())"));
+        assert!(swift_scene_delegate.contains("resolveRootViewController()"));
+        assert!(swift_scene_delegate.contains("AtomHostRootViewProvider"));
         assert!(swift_scene_delegate.contains("Text(\"Hello Atom\")"));
         assert!(android_build.contains("rust_shared_library("));
         assert!(
@@ -1235,6 +1184,7 @@ mod tests {
         assert!(android_app.contains("System.loadLibrary(\"atom_runtime_jni\")"));
         assert!(android_app.contains("object AtomRuntimeBridge"));
         assert!(android_main.contains("class MainActivity : Activity()"));
+        assert!(android_main.contains("interface AtomHostViewFactory"));
         assert!(android_main.contains("atomApp?.sendLifecycle("));
         assert!(android_build.contains("kt_jvm_library("));
         assert!(android_build.contains("@androidsdk//:platforms/android-"));
@@ -1301,38 +1251,6 @@ mod tests {
         assert!(android_manifest.contains("android:icon=\"@mipmap/ic_launcher\""));
         assert!(android_build.contains("resource_files = ["));
         assert!(android_build.contains("\"res/mipmap-xxxhdpi/ic_launcher.png\""));
-    }
-
-    #[test]
-    fn automation_fixture_renders_probe_ui_for_both_platforms() {
-        let directory = tempdir().expect("tempdir");
-        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (mut manifest, modules) = write_fixture(&root);
-        manifest.app.automation_fixture = true;
-
-        let plan =
-            build_generation_plan(&manifest, &modules, &ConfigPluginRegistry::new()).expect("plan");
-        emit_host_tree(&root, &plan).expect("host tree");
-
-        let ios_scene_delegate =
-            fs::read_to_string(root.join("generated/ios/hello-atom/SceneDelegate.swift"))
-                .expect("ios scene delegate");
-        let android_manifest = fs::read_to_string(
-            root.join("generated/android/hello-atom/AndroidManifest.generated.xml"),
-        )
-        .expect("android manifest");
-        let android_main =
-            fs::read_to_string(root.join(
-                "generated/android/hello-atom/src/main/kotlin/build/atom/hello/MainActivity.kt",
-            ))
-            .expect("android main");
-
-        assert!(ios_scene_delegate.contains("atom.fixture.primary_button"));
-        assert!(ios_scene_delegate.contains("AtomAutomationRootView"));
-        assert!(android_main.contains("atom.fixture.primary_button"));
-        assert!(android_main.contains("AutomationClient"));
-        assert!(android_manifest.contains("android.permission.INTERNET"));
-        assert!(android_manifest.contains("android:usesCleartextTraffic=\"true\""));
     }
 
     #[test]

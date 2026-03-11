@@ -794,7 +794,7 @@ mod tests {
             "--destination",
             "SIM-123",
             "--target-id",
-            "atom.fixture.primary_button",
+            "atom.demo.primary_button",
         ]);
         parse_cli(&[
             "atom",
@@ -805,7 +805,7 @@ mod tests {
             "--destination",
             "SIM-123",
             "--target-id",
-            "atom.fixture.input",
+            "atom.demo.input",
             "--text",
             "hello",
         ]);

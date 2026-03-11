@@ -72,7 +72,6 @@ def atom_app(
         modules = [],
         generated_root = "generated",
         watch = False,
-        automation_fixture = False,
         config_plugins = [],
         ios_enabled = True,
         ios_bundle_id = None,
@@ -107,7 +106,6 @@ def atom_app(
         "entry_crate_name": crate_name if crate_name != None else name.replace("-", "_"),
         "generated_root": generated_root,
         "watch": watch,
-        "automation_fixture": automation_fixture,
         "ios": {
             "enabled": ios_enabled,
             "bundle_id": ios_bundle_id,

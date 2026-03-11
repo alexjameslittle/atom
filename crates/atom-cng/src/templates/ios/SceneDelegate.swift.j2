@@ -2,10 +2,16 @@ import Foundation
 import SwiftUI
 import UIKit
 
+@objc class AtomHostRootViewProvider: NSObject {
+    @objc required override init() {}
+
+    @objc func makeRootViewController() -> UIViewController {
+        UIHostingController(rootView: AtomRootView())
+    }
+}
+
 final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
-    private let automationState = AtomAutomationState()
-    private var automationClient: AtomAutomationClient?
 
     func scene(
         _ scene: UIScene,
@@ -18,24 +24,10 @@ final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         window.frame = windowScene.coordinateSpace.bounds
         window.backgroundColor = .systemBackground
-{% if automation_fixture %}
-        let screenBounds = windowScene.coordinateSpace.bounds
-        automationState.screenSize = screenBounds.size
-        window.rootViewController = UIHostingController(
-            rootView: AtomAutomationRootView(state: automationState)
-        )
-{% else %}
-        window.rootViewController = UIHostingController(rootView: AtomRootView())
-{% endif %}
+        window.rootViewController = resolveRootViewController()
         self.window = window
         window.makeKeyAndVisible()
         runtimeDelegate?.initializeRuntime()
-{% if automation_fixture %}
-        if let config = AtomAutomationClient.Config.fromLaunchArguments() {
-            automationClient = AtomAutomationClient(config: config, state: automationState)
-            automationClient?.start()
-        }
-{% endif %}
     }
 
     func sceneDidEnterBackground(_ scene: UIScene) {
@@ -47,7 +39,6 @@ final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
-        automationClient?.stop()
         runtimeDelegate?.sendLifecycle(5, action: "terminate")
         runtimeDelegate?.shutdownRuntime()
     }
@@ -55,344 +46,17 @@ final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var runtimeDelegate: AtomAppDelegate? {
         UIApplication.shared.delegate as? AtomAppDelegate
     }
-}
-
-{% if automation_fixture %}
-private enum AtomAutomationElement: String {
-    case title = "atom.fixture.title"
-    case slug = "atom.fixture.slug"
-    case status = "atom.fixture.status"
-    case input = "atom.fixture.input"
-    case button = "atom.fixture.primary_button"
-    case echo = "atom.fixture.echo"
-}
-
-private final class AtomAutomationState: ObservableObject {
-    @Published var statusText = "ready"
-    @Published var inputText = ""
-    @Published var echoText = "Typed: "
-    @Published var tapCount = 0
-    var screenSize = CGSize(width: 393, height: 852)
-
-    func snapshot() -> [String: Any] {
-        let width = max(Double(screenSize.width), 1)
-        let height = max(Double(screenSize.height), 1)
-
-        return [
-            "screen": [
-                "width": width,
-                "height": height,
-            ],
-            "nodes": [
-                node(
-                    id: AtomAutomationElement.title.rawValue,
-                    role: "text",
-                    label: "{{ name }}",
-                    text: "{{ name }}",
-                    x: 24,
-                    y: 112,
-                    width: width - 48,
-                    height: 32
-                ),
-                node(
-                    id: AtomAutomationElement.slug.rawValue,
-                    role: "text",
-                    label: "{{ slug }}",
-                    text: "{{ slug }}",
-                    x: 24,
-                    y: 156,
-                    width: width - 48,
-                    height: 20
-                ),
-                node(
-                    id: AtomAutomationElement.status.rawValue,
-                    role: "text",
-                    label: statusText,
-                    text: statusText,
-                    x: 24,
-                    y: 204,
-                    width: width - 48,
-                    height: 24
-                ),
-                node(
-                    id: AtomAutomationElement.input.rawValue,
-                    role: "text_field",
-                    label: "Automation Input",
-                    text: inputText,
-                    x: 24,
-                    y: 264,
-                    width: width - 48,
-                    height: 44
-                ),
-                node(
-                    id: AtomAutomationElement.button.rawValue,
-                    role: "button",
-                    label: "Primary Action",
-                    text: "Primary Action",
-                    x: 24,
-                    y: 324,
-                    width: width - 48,
-                    height: 50
-                ),
-                node(
-                    id: AtomAutomationElement.echo.rawValue,
-                    role: "text",
-                    label: echoText,
-                    text: echoText,
-                    x: 24,
-                    y: 394,
-                    width: width - 48,
-                    height: 24
-                ),
-            ],
-        ]
-    }
-
-    func apply(command: [String: Any]) -> [String: Any] {
-        let kind = command["kind"] as? String ?? "unknown"
-        let targetId = command["target_id"] as? String
-        let x = command["x"] as? Double
-        let y = command["y"] as? Double
-        let text = command["text"] as? String
-
-        switch kind {
-        case "inspect_ui":
-            break
-        case "tap":
-            handleTap(targetId: targetId, x: x, y: y, isLongPress: false)
-        case "long_press":
-            handleTap(targetId: targetId, x: x, y: y, isLongPress: true)
-        case "type_text":
-            if targetId == nil || targetId == AtomAutomationElement.input.rawValue {
-                inputText = text ?? ""
-                echoText = "Typed: \(inputText)"
-                statusText = "typed-text"
-            } else {
-                statusText = "unsupported-text-target"
-            }
-        case "swipe":
-            statusText = "swipe(\(formatPoint(x: x, y: y)))"
-        case "drag":
-            statusText = "drag(\(formatPoint(x: x, y: y)))"
-        default:
-            statusText = "unknown-command"
+    
+    private func resolveRootViewController() -> UIViewController {
+        if let providerType = NSClassFromString("AtomHostRootViewProviderImpl")
+            as? AtomHostRootViewProvider.Type
+        {
+            return providerType.init().makeRootViewController()
         }
-
-        return snapshot()
-    }
-
-    private func handleTap(targetId: String?, x: Double?, y: Double?, isLongPress: Bool) {
-        let resolvedTarget = targetId ?? resolveTargetId(x: x, y: y)
-        switch resolvedTarget {
-        case AtomAutomationElement.button.rawValue:
-            tapCount += 1
-            let action = isLongPress ? "long-pressed" : "tapped"
-            statusText = "primary-button-\(action)-\(tapCount)"
-        case AtomAutomationElement.input.rawValue:
-            statusText = isLongPress ? "input-long-press" : "input-focused"
-        default:
-            statusText = "tap-unmapped"
-        }
-    }
-
-    private func resolveTargetId(x: Double?, y: Double?) -> String? {
-        guard let x, let y else {
-            return nil
-        }
-        let snapshot = snapshot()
-        guard let nodes = snapshot["nodes"] as? [[String: Any]] else {
-            return nil
-        }
-        for node in nodes {
-            guard
-                let id = node["id"] as? String,
-                let bounds = node["bounds"] as? [String: Any],
-                let nodeX = bounds["x"] as? Double,
-                let nodeY = bounds["y"] as? Double,
-                let width = bounds["width"] as? Double,
-                let height = bounds["height"] as? Double
-            else {
-                continue
-            }
-            if x >= nodeX && x <= nodeX + width && y >= nodeY && y <= nodeY + height {
-                return id
-            }
-        }
-        return nil
-    }
-
-    private func node(
-        id: String,
-        role: String,
-        label: String,
-        text: String,
-        x: Double,
-        y: Double,
-        width: Double,
-        height: Double
-    ) -> [String: Any] {
-        [
-            "id": id,
-            "role": role,
-            "label": label,
-            "text": text,
-            "visible": true,
-            "enabled": true,
-            "bounds": [
-                "x": x,
-                "y": y,
-                "width": width,
-                "height": height,
-            ],
-        ]
-    }
-
-    private func formatPoint(x: Double?, y: Double?) -> String {
-        "\(x ?? 0),\(y ?? 0)"
+        return UIHostingController(rootView: AtomRootView())
     }
 }
 
-private struct AtomAutomationRootView: View {
-    @ObservedObject var state: AtomAutomationState
-
-    var body: some View {
-        ZStack {
-            Color(uiColor: .systemBackground)
-                .ignoresSafeArea()
-            VStack(spacing: 16) {
-                Text("{{ name }}")
-                    .font(.title2.weight(.semibold))
-                    .accessibilityIdentifier(AtomAutomationElement.title.rawValue)
-                Text("{{ slug }}")
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(AtomAutomationElement.slug.rawValue)
-                Text(state.statusText)
-                    .font(.subheadline.monospaced())
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(AtomAutomationElement.status.rawValue)
-                TextField("Automation Input", text: $state.inputText)
-                    .textFieldStyle(.roundedBorder)
-                    .padding(.horizontal, 24)
-                    .accessibilityIdentifier(AtomAutomationElement.input.rawValue)
-                Button("Primary Action") {
-                    state.tapCount += 1
-                    state.statusText = "primary-button-tapped-\(state.tapCount)"
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier(AtomAutomationElement.button.rawValue)
-                Text(state.echoText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(AtomAutomationElement.echo.rawValue)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, 96)
-        }
-    }
-}
-
-private final class AtomAutomationClient {
-    struct Config {
-        let url: URL
-        let token: String
-
-        static func fromLaunchArguments() -> Config? {
-            let arguments = ProcessInfo.processInfo.arguments
-            guard
-                let urlValue = value(named: "--atom-automation-url", in: arguments),
-                let url = URL(string: urlValue),
-                let token = value(named: "--atom-automation-token", in: arguments)
-            else {
-                return nil
-            }
-            return Config(url: url, token: token)
-        }
-
-        private static func value(named flag: String, in arguments: [String]) -> String? {
-            guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else {
-                return nil
-            }
-            return arguments[index + 1]
-        }
-    }
-
-    private let config: Config
-    private let state: AtomAutomationState
-    private let session = URLSession(configuration: .default)
-    private var timer: Timer?
-
-    init(config: Config, state: AtomAutomationState) {
-        self.config = config
-        self.state = state
-    }
-
-    func start() {
-        register()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.poll()
-        }
-    }
-
-    func stop() {
-        timer?.invalidate()
-        timer = nil
-    }
-
-    private func register() {
-        post(
-            path: "register",
-            payload: [
-                "token": config.token,
-                "platform": "ios",
-            ]
-        )
-    }
-
-    private func poll() {
-        guard let url = URL(string: "next?token=\(config.token)", relativeTo: config.url) else {
-            return
-        }
-        let task = session.dataTask(with: url) { [weak self] data, response, _ in
-            guard
-                let self,
-                let http = response as? HTTPURLResponse,
-                http.statusCode == 200,
-                let data,
-                let object = try? JSONSerialization.jsonObject(with: data),
-                let command = object as? [String: Any]
-            else {
-                return
-            }
-            Task { @MainActor in
-                let snapshot = self.state.apply(command: command)
-                self.post(
-                    path: "result",
-                    payload: [
-                        "token": self.config.token,
-                        "command_id": command["id"] as? String ?? "",
-                        "ok": true,
-                        "snapshot": snapshot,
-                    ]
-                )
-            }
-        }
-        task.resume()
-    }
-
-    private func post(path: String, payload: [String: Any]) {
-        guard let url = URL(string: path, relativeTo: config.url) else {
-            return
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        let task = session.dataTask(with: request)
-        task.resume()
-    }
-}
-{% else %}
 private struct AtomRootView: View {
     var body: some View {
         ZStack {
@@ -414,4 +78,3 @@ private struct AtomRootView: View {
         }
     }
 }
-{% endif %}

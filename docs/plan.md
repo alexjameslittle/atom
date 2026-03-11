@@ -790,10 +790,11 @@ Deliverables:
 - `atom inspect ui`
 - `atom interact` for tap, long-press, swipe, drag, and text entry
 - `atom evaluate run`
-- `automation_fixture` opt-in on `atom_app(...)` for the example-only proof surface
+- hello-world-owned demo surface module plus a plain app variant that proves automation does not
+  depend on app-specific hooks
 - Repo-local skills for destination discovery, evidence capture, and UI evaluation
 - Framework-owned iOS automation backend built on `idb`
-- Framework-owned Android automation backend for semantic automation
+- Framework-owned Android UIAutomator-backed automation backend
 - Proof bundles that capture logs, screenshots, video, UI snapshots, and step transcripts
 
 Exit criteria:
@@ -849,7 +850,7 @@ surface. The next slice should harden the evaluation workflow end to end:
    parity with the iOS path.
 3. Ship repo-local skills for destination discovery, evidence capture, and UI evaluation alongside
    the CLI so agents can use the framework the same way humans do.
-4. Keep the spec, docs, example plan, and hello-world automation fixture aligned as the proof model
+4. Keep the spec, docs, example plans, and hello-world demo surface aligned as the proof model
    expands to more destinations.
 
 That sequence preserves the current public contract, raises the quality of runtime proof, and keeps

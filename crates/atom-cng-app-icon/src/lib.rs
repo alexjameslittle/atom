@@ -206,7 +206,6 @@ mod tests {
                 slug: "hello-atom".to_owned(),
                 entry_crate_label: "//apps/hello_atom:hello_atom".to_owned(),
                 entry_crate_name: "hello_atom".to_owned(),
-                automation_fixture: false,
             }),
             repo_root: root,
             generated_root: Utf8Path::new("generated"),

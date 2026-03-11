@@ -125,7 +125,7 @@ fn install_and_launch_with_idb(
         runner,
         repo_root,
         "idb",
-        &["launch", "-w", "-f", "--udid", destination_id, bundle_id],
+        &["launch", "-f", "--udid", destination_id, bundle_id],
     )
 }
 

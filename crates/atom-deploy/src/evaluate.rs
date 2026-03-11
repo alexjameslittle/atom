@@ -1,9 +1,5 @@
-use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +9,11 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod android_uiautomator;
+
+use self::android_uiautomator::{
+    inspect_ui_with_android_uiautomator, interact_with_android_uiautomator,
+};
 use crate::deploy::{
     generated_target, ios_bazel_args, resolve_ios_installable_artifact, wait_for_app_pid,
 };
@@ -26,10 +27,7 @@ use crate::devices::ios::{
 };
 use crate::tools::{ToolRunner, capture_tool, find_bazel_output_owned, run_bazel_owned, run_tool};
 
-const AUTOMATION_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const AUTOMATION_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
-const APP_LAUNCH_READY_TARGET: &str = "atom.fixture.primary_button";
 const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -232,7 +230,7 @@ pub fn inspect_ui(
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::InspectUi)?;
     let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor);
+        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
     session.ensure_launched()?;
     let mut snapshot = session.interact(InteractionRequest::InspectUi)?;
     session.shutdown_video()?;
@@ -256,7 +254,7 @@ pub fn interact(
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Interact)?;
     let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor);
+        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
     session.ensure_launched()?;
     let result = session.interact(request)?;
     session.shutdown_video()?;
@@ -275,8 +273,11 @@ pub fn capture_screenshot(
 ) -> AtomResult<()> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Screenshot)?;
-    let app = AppLaunch::launch(repo_root, manifest, destination_id, runner, None)?;
-    capture_screenshot_for_launch(repo_root, &app, output_path, runner)
+    let mut session =
+        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    session.ensure_launched()?;
+    let launch = session.active_launch()?;
+    capture_screenshot_for_launch(repo_root, &launch, output_path, session.runner)
 }
 
 /// # Errors
@@ -292,8 +293,11 @@ pub fn capture_logs(
 ) -> AtomResult<()> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Logs)?;
-    let app = AppLaunch::launch(repo_root, manifest, destination_id, runner, None)?;
-    capture_logs_for_launch(repo_root, &app, output_path, seconds, runner)
+    let mut session =
+        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    session.ensure_launched()?;
+    let launch = session.active_launch()?;
+    capture_logs_for_launch(repo_root, &launch, output_path, seconds, session.runner)
 }
 
 /// # Errors
@@ -309,8 +313,11 @@ pub fn capture_video(
 ) -> AtomResult<()> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Video)?;
-    let app = AppLaunch::launch(repo_root, manifest, destination_id, runner, None)?;
-    capture_video_for_launch(repo_root, &app, output_path, seconds, runner)
+    let mut session =
+        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    session.ensure_launched()?;
+    let launch = session.active_launch()?;
+    capture_video_for_launch(repo_root, &launch, output_path, seconds, session.runner)
 }
 
 /// # Errors
@@ -333,7 +340,7 @@ pub fn evaluate_run(
 
     let started_at_ms = timestamp_millis();
     let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor);
+        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
     let mut steps = Vec::new();
     let mut artifacts = Vec::new();
 
@@ -516,12 +523,8 @@ fn execute_screenshot_step<R: ToolRunner>(
     session.ensure_launched()?;
     let artifact_name = artifact_name(name, index, "screenshot", "png");
     let output_path = artifacts_dir.join(&artifact_name);
-    capture_screenshot_for_launch(
-        session.repo_root,
-        session.launch.as_ref().expect("launch"),
-        &output_path,
-        session.runner,
-    )?;
+    let launch = session.active_launch()?;
+    capture_screenshot_for_launch(session.repo_root, &launch, &output_path, session.runner)?;
     artifacts.push(ArtifactRecord {
         name: artifact_name.clone(),
         kind: "screenshot".to_owned(),
@@ -549,12 +552,8 @@ fn execute_inspect_ui_step<R: ToolRunner>(
     let mut snapshot = session.interact(InteractionRequest::InspectUi)?.snapshot;
     let screenshot_name = artifact_name(None, index, "inspect", "png");
     let screenshot_path = artifacts_dir.join(&screenshot_name);
-    capture_screenshot_for_launch(
-        session.repo_root,
-        session.launch.as_ref().expect("launch"),
-        &screenshot_path,
-        session.runner,
-    )?;
+    let launch = session.active_launch()?;
+    capture_screenshot_for_launch(session.repo_root, &launch, &screenshot_path, session.runner)?;
     snapshot.screenshot_path = Some(screenshot_path.as_str().to_owned());
     write_json(&output_path, &snapshot)?;
     artifacts.push(ArtifactRecord {
@@ -629,9 +628,10 @@ fn execute_collect_logs_step<R: ToolRunner>(
     session.ensure_launched()?;
     let artifact_name = artifact_name(name, index, "logs", "txt");
     let output_path = artifacts_dir.join(&artifact_name);
+    let launch = session.active_launch()?;
     capture_logs_for_launch(
         session.repo_root,
-        session.launch.as_ref().expect("launch"),
+        &launch,
         &output_path,
         seconds,
         session.runner,
@@ -677,23 +677,23 @@ fn snapshot_matches(snapshot: &UiSnapshot, target_id: Option<&str>, text: Option
     })
 }
 
-fn snapshot_is_launch_ready(snapshot: &UiSnapshot, manifest: &NormalizedManifest) -> bool {
-    if manifest.app.automation_fixture {
-        return snapshot_matches(snapshot, Some(APP_LAUNCH_READY_TARGET), None);
-    }
-    !snapshot.nodes.is_empty()
+fn snapshot_is_launch_ready(snapshot: &UiSnapshot) -> bool {
+    snapshot.nodes.iter().any(|node| {
+        !node.role.eq_ignore_ascii_case("application")
+            && (node.bounds.width > 1.0 || node.bounds.height > 1.0)
+            && (!node.label.is_empty() || !node.text.is_empty())
+    })
 }
 
 fn wait_for_idb_launch_ready(
     repo_root: &Utf8Path,
     destination_id: &str,
-    manifest: &NormalizedManifest,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
     let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
     while Instant::now() < deadline {
         if let Ok(snapshot) = inspect_ui_with_idb(repo_root, destination_id, runner)
-            && snapshot_is_launch_ready(&snapshot, manifest)
+            && snapshot_is_launch_ready(&snapshot)
         {
             return Ok(());
         }
@@ -705,28 +705,113 @@ fn wait_for_idb_launch_ready(
     ))
 }
 
-fn wait_for_automation_launch_ready(
-    server: &mut AutomationServer,
-    manifest: &NormalizedManifest,
+fn wait_for_android_launch_ready(
+    repo_root: &Utf8Path,
+    serial: &str,
+    application_id: &str,
+    runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let result = server
-        .send_command(InteractionRequest::InspectUi)
-        .map_err(|error| {
-            AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                format!(
-                    "app did not become responsive after launch: {}",
-                    error.message
-                ),
-            )
-        })?;
-    if snapshot_is_launch_ready(&result.snapshot, manifest) {
-        return Ok(());
+    let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(snapshot) = inspect_ui_with_android_uiautomator(repo_root, serial, runner)
+            && snapshot_is_launch_ready(&snapshot.snapshot)
+            && snapshot
+                .packages
+                .iter()
+                .any(|package| package == application_id)
+        {
+            return Ok(());
+        }
+        thread::sleep(APP_LAUNCH_READY_POLL_INTERVAL);
     }
     Err(AtomError::new(
         AtomErrorCode::AutomationUnavailable,
-        "app launched but did not expose a ready UI snapshot",
+        "app did not become responsive after launch",
     ))
+}
+
+enum AutomationDriver {
+    IosIdb { destination_id: String },
+    AndroidUiAutomator { destination_id: String },
+}
+
+impl AutomationDriver {
+    fn for_descriptor(descriptor: &DestinationDescriptor) -> AtomResult<Self> {
+        match (descriptor.platform, &descriptor.kind) {
+            (DestinationPlatform::Ios, DestinationKind::Simulator) => Ok(Self::IosIdb {
+                destination_id: descriptor.id.clone(),
+            }),
+            (
+                DestinationPlatform::Android,
+                DestinationKind::Avd | DestinationKind::Emulator | DestinationKind::Device,
+            ) => Ok(Self::AndroidUiAutomator {
+                destination_id: descriptor.id.clone(),
+            }),
+            _ => Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                format!("destination {} does not support automation", descriptor.id),
+            )),
+        }
+    }
+
+    fn launch(
+        &self,
+        repo_root: &Utf8Path,
+        manifest: &NormalizedManifest,
+        runner: &mut impl ToolRunner,
+    ) -> AtomResult<AppLaunch> {
+        match self {
+            Self::IosIdb { destination_id } | Self::AndroidUiAutomator { destination_id } => {
+                AppLaunch::launch(repo_root, manifest, destination_id, runner)
+            }
+        }
+    }
+
+    fn wait_until_ready(
+        &self,
+        repo_root: &Utf8Path,
+        launch: &AppLaunch,
+        runner: &mut impl ToolRunner,
+    ) -> AtomResult<()> {
+        match (self, launch) {
+            (Self::IosIdb { destination_id }, _) => {
+                wait_for_idb_launch_ready(repo_root, destination_id, runner)
+            }
+            (
+                Self::AndroidUiAutomator { .. },
+                AppLaunch::Android {
+                    serial,
+                    application_id,
+                },
+            ) => wait_for_android_launch_ready(repo_root, serial, application_id, runner),
+            _ => Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "launched app does not match the selected automation backend",
+            )),
+        }
+    }
+
+    fn interact(
+        &self,
+        repo_root: &Utf8Path,
+        launch: &AppLaunch,
+        runner: &mut impl ToolRunner,
+        request: InteractionRequest,
+    ) -> AtomResult<InteractionResult> {
+        match (self, launch) {
+            (
+                Self::IosIdb { destination_id },
+                AppLaunch::IosSimulator { .. } | AppLaunch::IosDevice { .. },
+            ) => interact_with_idb(repo_root, destination_id, runner, request),
+            (Self::AndroidUiAutomator { .. }, AppLaunch::Android { serial, .. }) => {
+                interact_with_android_uiautomator(repo_root, serial, runner, request)
+            }
+            _ => Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "launched app does not match the selected automation backend",
+            )),
+        }
+    }
 }
 
 fn simple_step(index: usize, kind: &str, started_at_ms: u128) -> StepRecord {
@@ -863,11 +948,10 @@ fn load_evaluation_plan(path: &Utf8Path) -> AtomResult<EvaluationPlan> {
 struct AutomationSession<'a, R: ToolRunner> {
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
-    destination_id: &'a str,
     runner: &'a mut R,
     descriptor: DestinationDescriptor,
+    driver: AutomationDriver,
     launch: Option<AppLaunch>,
-    automation_server: Option<AutomationServer>,
     video_capture: Option<VideoCapture>,
 }
 
@@ -878,87 +962,55 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
         destination_id: &'a str,
         runner: &'a mut R,
         descriptor: DestinationDescriptor,
-    ) -> Self {
-        Self {
+    ) -> AtomResult<Self> {
+        let driver = AutomationDriver::for_descriptor(&descriptor)?;
+        debug_assert_eq!(descriptor.id, destination_id);
+        Ok(Self {
             repo_root,
             manifest,
-            destination_id,
             runner,
             descriptor,
+            driver,
             launch: None,
-            automation_server: None,
             video_capture: None,
-        }
+        })
     }
 
     fn ensure_launched(&mut self) -> AtomResult<()> {
         if self.launch.is_some() {
             return Ok(());
         }
-        if uses_idb_ios_simulator(&self.descriptor) {
-            let launch = AppLaunch::launch(
-                self.repo_root,
-                self.manifest,
-                self.destination_id,
-                self.runner,
-                None,
-            )?;
-            wait_for_idb_launch_ready(
-                self.repo_root,
-                self.destination_id,
-                self.manifest,
-                self.runner,
-            )?;
-            self.launch = Some(launch);
-            return Ok(());
-        }
-        if !self.manifest.app.automation_fixture {
-            return Err(AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                "this app target does not enable the automation fixture",
-            ));
-        }
-
-        let mut server = AutomationServer::new()?;
-        let launch_parameters = server.launch_parameters(self.descriptor.platform);
-        let launch = AppLaunch::launch(
-            self.repo_root,
-            self.manifest,
-            self.destination_id,
-            self.runner,
-            Some(&launch_parameters),
-        )?;
-        server.wait_for_registration(AUTOMATION_CONNECT_TIMEOUT)?;
-        wait_for_automation_launch_ready(&mut server, self.manifest)?;
-        self.automation_server = Some(server);
+        let launch = self
+            .driver
+            .launch(self.repo_root, self.manifest, self.runner)?;
+        self.driver
+            .wait_until_ready(self.repo_root, &launch, self.runner)?;
         self.launch = Some(launch);
         Ok(())
     }
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
         self.ensure_launched()?;
-        if uses_idb_ios_simulator(&self.descriptor) {
-            return interact_with_idb(
-                self.repo_root,
-                self.descriptor.id.as_str(),
-                self.runner,
-                request,
-            );
-        }
-        let server = self.automation_server.as_mut().expect("automation server");
-        server.send_command(request)
+        let launch = self.active_launch()?;
+        self.driver
+            .interact(self.repo_root, &launch, self.runner, request)
+    }
+
+    fn active_launch(&self) -> AtomResult<AppLaunch> {
+        self.launch.clone().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::InternalBug,
+                "automation session expected a launch after ensure_launched",
+            )
+        })
     }
 
     fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
         let root = self.repo_root.join("cng-output").join("artifacts");
         write_parent_dir(&root)?;
         let path = root.join(format!("inspect-{}.png", timestamp_suffix()));
-        capture_screenshot_for_launch(
-            self.repo_root,
-            self.launch.as_ref().expect("launch"),
-            &path,
-            self.runner,
-        )?;
+        let launch = self.active_launch()?;
+        capture_screenshot_for_launch(self.repo_root, &launch, &path, self.runner)?;
         Ok(path)
     }
 
@@ -989,320 +1041,6 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
         }
         Ok(())
     }
-}
-
-#[derive(Clone)]
-struct LaunchParameters {
-    base_url: String,
-    token: String,
-}
-
-struct AutomationServer {
-    shared: Arc<(Mutex<ServerState>, Condvar)>,
-    handle: Option<thread::JoinHandle<()>>,
-    port: u16,
-    token: String,
-}
-
-#[derive(Default)]
-struct ServerState {
-    connected: bool,
-    stop: bool,
-    next_command: Option<ServerCommand>,
-    completed: BTreeMap<String, InteractionResult>,
-    command_index: u64,
-}
-
-struct ServerCommand {
-    payload: String,
-    claimed: bool,
-}
-
-impl AutomationServer {
-    fn new() -> AtomResult<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| {
-            AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                format!("failed to bind automation session port: {error}"),
-            )
-        })?;
-        listener.set_nonblocking(true).map_err(|error| {
-            AtomError::new(AtomErrorCode::AutomationUnavailable, error.to_string())
-        })?;
-        let port = listener
-            .local_addr()
-            .map_err(|error| {
-                AtomError::new(AtomErrorCode::AutomationUnavailable, error.to_string())
-            })?
-            .port();
-        let shared = Arc::new((Mutex::new(ServerState::default()), Condvar::new()));
-        let thread_shared = Arc::clone(&shared);
-        let handle = thread::spawn(move || {
-            server_loop(&listener, &thread_shared);
-        });
-
-        Ok(Self {
-            shared,
-            handle: Some(handle),
-            port,
-            token: format!("atom-{}", timestamp_suffix()),
-        })
-    }
-
-    fn launch_parameters(&self, _platform: DestinationPlatform) -> LaunchParameters {
-        let base_url = format!("http://127.0.0.1:{}/", self.port);
-        LaunchParameters {
-            base_url,
-            token: self.token.clone(),
-        }
-    }
-
-    fn wait_for_registration(&self, timeout: Duration) -> AtomResult<()> {
-        let (lock, cvar) = &*self.shared;
-        let deadline = Instant::now() + timeout;
-        let mut state = lock.lock().expect("lock");
-        while !state.connected {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            let (next_state, _) = cvar.wait_timeout(state, remaining).expect("wait");
-            state = next_state;
-        }
-        if state.connected {
-            Ok(())
-        } else {
-            Err(AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                "automation fixture did not connect back to the host session",
-            ))
-        }
-    }
-
-    fn send_command(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
-        let command_id = {
-            let (lock, cvar) = &*self.shared;
-            let mut state = lock.lock().expect("lock");
-            state.command_index += 1;
-            let id = format!("cmd-{}", state.command_index);
-            let envelope = AutomationCommandEnvelope {
-                id: id.clone(),
-                request,
-            };
-            let payload = serde_json::to_string(&envelope).map_err(|error| {
-                AtomError::new(
-                    AtomErrorCode::AutomationUnavailable,
-                    format!("failed to encode automation command: {error}"),
-                )
-            })?;
-            state.next_command = Some(ServerCommand {
-                payload: payload.clone(),
-                claimed: false,
-            });
-            cvar.notify_all();
-            id
-        };
-
-        let (lock, cvar) = &*self.shared;
-        let deadline = Instant::now() + AUTOMATION_COMMAND_TIMEOUT;
-        let mut state = lock.lock().expect("lock");
-        while !state.completed.contains_key(&command_id) {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            let (next_state, _) = cvar.wait_timeout(state, remaining).expect("wait");
-            state = next_state;
-        }
-        state.completed.remove(&command_id).ok_or_else(|| {
-            AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                "automation command timed out waiting for the app fixture",
-            )
-        })
-    }
-}
-
-impl Drop for AutomationServer {
-    fn drop(&mut self) {
-        let (lock, cvar) = &*self.shared;
-        if let Ok(mut state) = lock.lock() {
-            state.stop = true;
-            cvar.notify_all();
-        }
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-fn server_loop(listener: &TcpListener, shared: &Arc<(Mutex<ServerState>, Condvar)>) {
-    loop {
-        {
-            let (lock, _) = &**shared;
-            if lock.lock().map(|state| state.stop).unwrap_or(true) {
-                break;
-            }
-        }
-
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let _ = handle_stream(stream, shared);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => break,
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "The lightweight host HTTP bridge keeps request parsing and dispatch together."
-)]
-fn handle_stream(
-    mut stream: TcpStream,
-    shared: &Arc<(Mutex<ServerState>, Condvar)>,
-) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-    if request_line.trim().is_empty() {
-        return Ok(());
-    }
-    let mut headers = BTreeMap::new();
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = trimmed.split_once(':') {
-            headers.insert(name.to_ascii_lowercase(), value.trim().to_owned());
-        }
-    }
-    let content_length = headers
-        .get("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    let mut body = vec![0_u8; content_length];
-    if content_length > 0 {
-        reader.read_exact(&mut body)?;
-    }
-    let body = String::from_utf8_lossy(&body).to_string();
-
-    let mut segments = request_line.split_whitespace();
-    let method = segments.next().unwrap_or_default();
-    let path = segments.next().unwrap_or_default();
-
-    let response = match (method, path.split('?').next().unwrap_or_default()) {
-        ("POST", "/register") => {
-            if let Ok(payload) = serde_json::from_str::<Value>(&body) {
-                let token = payload
-                    .get("token")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let (lock, cvar) = &**shared;
-                let mut state = lock.lock().expect("lock");
-                if !token.is_empty() {
-                    state.connected = true;
-                    cvar.notify_all();
-                }
-            }
-            http_response(200, "{\"status\":\"ok\"}")
-        }
-        ("GET", "/next") => {
-            let token = path
-                .split_once('?')
-                .map(|(_, query)| query)
-                .unwrap_or_default();
-            if token.contains("token=") {
-                let (lock, cvar) = &**shared;
-                let mut state = lock.lock().expect("lock");
-                if let Some(command) = &mut state.next_command
-                    && !command.claimed
-                {
-                    command.claimed = true;
-                    cvar.notify_all();
-                    http_response(200, &command.payload)
-                } else {
-                    http_empty_response(204)
-                }
-            } else {
-                http_empty_response(400)
-            }
-        }
-        ("POST", "/result") => {
-            if let Ok(payload) = serde_json::from_str::<Value>(&body) {
-                let command_id = payload
-                    .get("command_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
-                let message = payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let snapshot = payload.get("snapshot").cloned().unwrap_or(Value::Null);
-                if !command_id.is_empty()
-                    && let Ok(snapshot) = serde_json::from_value::<UiSnapshot>(snapshot)
-                {
-                    let result = InteractionResult {
-                        ok,
-                        snapshot,
-                        message,
-                    };
-                    let (lock, cvar) = &**shared;
-                    let mut state = lock.lock().expect("lock");
-                    state.completed.insert(command_id.clone(), result);
-                    state.next_command = None;
-                    cvar.notify_all();
-                }
-            }
-            http_response(200, "{\"status\":\"ok\"}")
-        }
-        _ => http_empty_response(404),
-    };
-
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
-    Ok(())
-}
-
-fn http_response(status: u16, body: &str) -> String {
-    let reason = match status {
-        400 => "Bad Request",
-        404 => "Not Found",
-        _ => "OK",
-    };
-    format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    )
-}
-
-fn http_empty_response(status: u16) -> String {
-    let reason = match status {
-        204 => "No Content",
-        400 => "Bad Request",
-        404 => "Not Found",
-        _ => "OK",
-    };
-    format!("HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AutomationCommandEnvelope {
-    id: String,
-    #[serde(flatten)]
-    request: InteractionRequest,
-}
-
-fn uses_idb_ios_simulator(descriptor: &DestinationDescriptor) -> bool {
-    descriptor.platform == DestinationPlatform::Ios && descriptor.kind == DestinationKind::Simulator
 }
 
 #[expect(
@@ -1485,6 +1223,7 @@ fn idb_node_from_value(entry: &Value, index: usize) -> Option<UiNode> {
             .or_else(|| json_string(entry.get("identifier")))
             .unwrap_or_else(|| format!("idb-node-{index}")),
         role: json_string(entry.get("type"))
+            .or_else(|| json_string(entry.get("role_description")))
             .or_else(|| json_string(entry.get("AXRoleDescription")))
             .unwrap_or_else(|| "unknown".to_owned()),
         label,
@@ -1593,6 +1332,7 @@ fn idb_args(destination_id: &str, subcommand: &[String]) -> Vec<String> {
     args
 }
 
+#[derive(Clone)]
 enum AppLaunch {
     IosSimulator {
         destination_id: String,
@@ -1612,22 +1352,15 @@ impl AppLaunch {
         manifest: &NormalizedManifest,
         destination_id: &str,
         runner: &mut impl ToolRunner,
-        launch_parameters: Option<&LaunchParameters>,
     ) -> AtomResult<Self> {
         if let Some(destination) = list_ios_destinations(repo_root, runner)?
             .into_iter()
             .find(|destination| destination.id == destination_id)
         {
-            return launch_ios_app(repo_root, manifest, destination, runner, launch_parameters);
+            return launch_ios_app(repo_root, manifest, destination, runner);
         }
         if let Some(destination) = find_android_destination(repo_root, runner, destination_id)? {
-            return launch_android_app(
-                repo_root,
-                manifest,
-                &destination,
-                runner,
-                launch_parameters,
-            );
+            return launch_android_app(repo_root, manifest, &destination, runner);
         }
         Err(AtomError::new(
             AtomErrorCode::AutomationUnavailable,
@@ -1641,7 +1374,6 @@ fn launch_ios_app(
     manifest: &NormalizedManifest,
     destination: IosDestination,
     runner: &mut impl ToolRunner,
-    launch_parameters: Option<&LaunchParameters>,
 ) -> AtomResult<AppLaunch> {
     if !manifest.ios.enabled {
         return Err(AtomError::new(
@@ -1649,13 +1381,6 @@ fn launch_ios_app(
             "iOS is not enabled for this target",
         ));
     }
-    if destination.kind == IosDestinationKind::Device && launch_parameters.is_some() {
-        return Err(AtomError::new(
-            AtomErrorCode::AutomationUnavailable,
-            "automation sessions are only supported on iOS simulators in this phase",
-        ));
-    }
-
     let target = generated_target(manifest, "ios");
     let build_args = ios_bazel_args(&target, &destination);
     run_bazel_owned(runner, repo_root, &build_args)?;
@@ -1730,7 +1455,6 @@ fn launch_android_app(
     manifest: &NormalizedManifest,
     destination: &crate::devices::android::AndroidDestination,
     runner: &mut impl ToolRunner,
-    launch_parameters: Option<&LaunchParameters>,
 ) -> AtomResult<AppLaunch> {
     if !manifest.android.enabled {
         return Err(AtomError::new(
@@ -1764,25 +1488,8 @@ fn launch_android_app(
         "adb",
         &["-s", &serial, "install", "-r", apk.as_str()],
     )?;
-    if let Some(parameters) = launch_parameters
-        && let Some(port) = parameters.base_url.rsplit(':').next()
-    {
-        let port = port.trim_end_matches('/');
-        run_tool(
-            runner,
-            repo_root,
-            "adb",
-            &[
-                "-s",
-                &serial,
-                "reverse",
-                &format!("tcp:{port}"),
-                &format!("tcp:{port}"),
-            ],
-        )?;
-    }
     let component = format!("{application_id}/.MainActivity");
-    let mut args = vec![
+    let args = vec![
         "-s".to_owned(),
         serial.clone(),
         "shell".to_owned(),
@@ -1792,14 +1499,6 @@ fn launch_android_app(
         "-n".to_owned(),
         component,
     ];
-    if let Some(parameters) = launch_parameters {
-        args.push("--es".to_owned());
-        args.push("atomAutomationUrl".to_owned());
-        args.push(parameters.base_url.clone());
-        args.push("--es".to_owned());
-        args.push("atomAutomationToken".to_owned());
-        args.push(parameters.token.clone());
-    }
     runner.run(repo_root, "adb", &args)?;
     wait_for_app_pid(runner, repo_root, &serial, &application_id)?;
 
@@ -2027,7 +1726,15 @@ fn stop_video_capture(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<Utf8PathBuf> {
     let mut child = video.child;
-    stop_recording_process(repo_root, &mut child, video.platform)?;
+    if video.platform == DestinationPlatform::Android {
+        if let Some(serial) = video.serial.as_deref() {
+            stop_android_screenrecord(repo_root, serial, &mut child, runner)?;
+        } else {
+            stop_recording_process(repo_root, &mut child, video.platform)?;
+        }
+    } else {
+        stop_recording_process(repo_root, &mut child, video.platform)?;
+    }
 
     if video.platform == DestinationPlatform::Android
         && let (Some(serial), Some(remote_path)) =
@@ -2055,6 +1762,41 @@ fn stop_video_capture(
 
     ensure_video_artifact(&video.output_path)?;
     Ok(video.output_path)
+}
+
+fn stop_android_screenrecord(
+    repo_root: &Utf8Path,
+    serial: &str,
+    child: &mut Child,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    if wait_for_child_exit(child, Duration::from_millis(100))? {
+        return Ok(());
+    }
+
+    if let Ok(pids) = capture_tool(
+        runner,
+        repo_root,
+        "adb",
+        &["-s", serial, "shell", "pidof", "screenrecord"],
+    ) {
+        for pid in pids.split_whitespace() {
+            let _ = run_tool(
+                runner,
+                repo_root,
+                "adb",
+                &["-s", serial, "shell", "kill", "-2", pid],
+            );
+        }
+    }
+
+    if wait_for_child_exit(child, VIDEO_STOP_TIMEOUT)? {
+        return Ok(());
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
 }
 
 fn stop_recording_process(
@@ -2193,23 +1935,18 @@ fn timestamp_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::thread;
-    use std::time::Duration;
 
     use crate::destinations::DestinationKind;
     use crate::tools::ToolRunner;
     use atom_ffi::{AtomError, AtomErrorCode};
     use camino::Utf8PathBuf;
-    use serde_json::{Value, json};
     use tempfile::tempdir;
 
     use super::{
-        AppLaunch, AutomationServer, DestinationCapability, DestinationDescriptor,
-        DestinationPlatform, EvaluationPlan, EvaluationStep, InteractionRequest,
-        capture_logs_for_launch, interact_with_idb, load_evaluation_plan,
-        require_plan_capabilities,
+        AppLaunch, DestinationCapability, DestinationDescriptor, DestinationPlatform,
+        EvaluationPlan, EvaluationStep, InteractionRequest, ScreenInfo, UiBounds, UiNode,
+        UiSnapshot, capture_logs_for_launch, interact_with_idb, load_evaluation_plan,
+        require_plan_capabilities, snapshot_is_launch_ready,
     };
 
     #[derive(Default)]
@@ -2270,22 +2007,6 @@ mod tests {
         }
     }
 
-    fn send_http_request(port: u16, request_line: &str, body: &str) -> String {
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-        let request = format!(
-            "{request_line}\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(request.as_bytes()).expect("write request");
-        let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read response");
-        response
-    }
-
-    fn response_body(response: &str) -> &str {
-        response.split("\r\n\r\n").nth(1).unwrap_or_default()
-    }
-
     #[test]
     fn load_evaluation_plan_reads_json_steps() {
         let directory = tempdir().expect("tempdir");
@@ -2293,7 +2014,7 @@ mod tests {
         let plan_path = root.join("plan.json");
         std::fs::write(
             &plan_path,
-            r#"{"steps":[{"kind":"launch"},{"kind":"tap","target_id":"atom.fixture.primary_button"}]}"#,
+            r#"{"steps":[{"kind":"launch"},{"kind":"tap","target_id":"atom.demo.primary_button"}]}"#,
         )
         .expect("plan");
 
@@ -2305,7 +2026,7 @@ mod tests {
                 steps: vec![
                     EvaluationStep::Launch,
                     EvaluationStep::Tap {
-                        target_id: Some("atom.fixture.primary_button".to_owned()),
+                        target_id: Some("atom.demo.primary_button".to_owned()),
                         x: None,
                         y: None,
                     },
@@ -2340,93 +2061,13 @@ mod tests {
     }
 
     #[test]
-    fn automation_server_registers_and_completes_commands() {
-        let mut server = AutomationServer::new().expect("server");
-        let launch = server.launch_parameters(DestinationPlatform::Ios);
-        let port = server.port;
-        let token = launch.token.clone();
-
-        let worker = thread::spawn(move || {
-            let register_body = json!({
-                "token": token,
-                "platform": "ios",
-            })
-            .to_string();
-            let register_response =
-                send_http_request(port, "POST /register HTTP/1.1", &register_body);
-            assert!(register_response.contains("200 OK"));
-
-            let command_payload = loop {
-                let response = send_http_request(
-                    port,
-                    &format!("GET /next?token={} HTTP/1.1", launch.token),
-                    "",
-                );
-                if response.contains("204 No Content") {
-                    thread::sleep(Duration::from_millis(20));
-                    continue;
-                }
-                break response_body(&response).to_owned();
-            };
-            let command: Value =
-                serde_json::from_str(&command_payload).expect("command payload should parse");
-            assert_eq!(
-                command.get("kind").and_then(Value::as_str),
-                Some("inspect_ui")
-            );
-
-            let result_body = json!({
-                "token": launch.token,
-                "command_id": command.get("id").and_then(Value::as_str).unwrap_or_default(),
-                "ok": true,
-                "snapshot": {
-                    "screen": {
-                        "width": 393.0,
-                        "height": 852.0
-                    },
-                    "nodes": [
-                        {
-                            "id": "atom.fixture.title",
-                            "role": "text",
-                            "label": "Hello Atom",
-                            "text": "Hello Atom",
-                            "visible": true,
-                            "enabled": true,
-                            "bounds": {
-                                "x": 24.0,
-                                "y": 112.0,
-                                "width": 200.0,
-                                "height": 32.0
-                            }
-                        }
-                    ]
-                }
-            })
-            .to_string();
-            let result_response = send_http_request(port, "POST /result HTTP/1.1", &result_body);
-            assert!(result_response.contains("200 OK"));
-        });
-
-        server
-            .wait_for_registration(Duration::from_secs(2))
-            .expect("fixture should register");
-        let result = server
-            .send_command(InteractionRequest::InspectUi)
-            .expect("command should complete");
-
-        assert!(result.ok);
-        assert_eq!(result.snapshot.nodes[0].id, "atom.fixture.title");
-        worker.join().expect("worker should exit cleanly");
-    }
-
-    #[test]
     fn idb_interactions_round_coordinates_to_integer_strings() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let mut runner = FakeToolRunner {
             calls: Vec::new(),
             captures: VecDeque::from([
-                r#"{"elements":[{"AXUniqueId":"atom.fixture.primary_button","type":"button","AXLabel":"Tap me","AXValue":"Tap me","visible":true,"enabled":true,"frame":{"x":100.4,"y":240.6,"width":201.2,"height":84.8}}]}"#
+                r#"{"elements":[{"AXUniqueId":"atom.demo.primary_button","type":"button","AXLabel":"Tap me","AXValue":"Tap me","visible":true,"enabled":true,"frame":{"x":100.4,"y":240.6,"width":201.2,"height":84.8}}]}"#
                     .to_owned(),
                 r#"{"elements":[]}"#.to_owned(),
             ]),
@@ -2438,7 +2079,7 @@ mod tests {
             "SIM-123",
             &mut runner,
             InteractionRequest::Tap {
-                target_id: Some("atom.fixture.primary_button".to_owned()),
+                target_id: Some("atom.demo.primary_button".to_owned()),
                 x: None,
                 y: None,
             },
@@ -2488,5 +2129,57 @@ mod tests {
 
         assert_eq!(error.code, AtomErrorCode::AutomationLogCaptureFailed);
         assert!(error.message.contains("failed to collect logs"));
+    }
+
+    #[test]
+    fn launch_readiness_requires_visible_content_beyond_application_root() {
+        let root_only = UiSnapshot {
+            screen: ScreenInfo {
+                width: 402.0,
+                height: 874.0,
+            },
+            nodes: vec![UiNode {
+                id: "idb-node-0".to_owned(),
+                role: "Application".to_owned(),
+                label: "Hello Atom Plain".to_owned(),
+                text: "Hello Atom Plain".to_owned(),
+                visible: true,
+                enabled: true,
+                bounds: UiBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 402.0,
+                    height: 874.0,
+                },
+            }],
+            screenshot_path: None,
+        };
+        let ready = UiSnapshot {
+            screen: ScreenInfo {
+                width: 402.0,
+                height: 874.0,
+            },
+            nodes: vec![
+                root_only.nodes[0].clone(),
+                UiNode {
+                    id: "idb-node-1".to_owned(),
+                    role: "StaticText".to_owned(),
+                    label: "hello-atom-plain".to_owned(),
+                    text: "hello-atom-plain".to_owned(),
+                    visible: true,
+                    enabled: true,
+                    bounds: UiBounds {
+                        x: 136.0,
+                        y: 448.0,
+                        width: 128.0,
+                        height: 15.0,
+                    },
+                },
+            ],
+            screenshot_path: None,
+        };
+
+        assert!(!snapshot_is_launch_ready(&root_only));
+        assert!(snapshot_is_launch_ready(&ready));
     }
 }

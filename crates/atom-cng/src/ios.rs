@@ -86,7 +86,6 @@ pub(crate) fn render_swift_scene_delegate(app: &AppConfig) -> AtomResult<String>
         context! {
             name => &app.name,
             slug => &app.slug,
-            automation_fixture => app.automation_fixture,
         },
     )
 }

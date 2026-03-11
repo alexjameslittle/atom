@@ -20,7 +20,6 @@ pub(crate) struct RawDocument {
     pub(crate) entry_crate_name: String,
     pub(crate) generated_root: Option<String>,
     pub(crate) watch: Option<bool>,
-    pub(crate) automation_fixture: Option<bool>,
     pub(crate) ios: Option<RawIos>,
     pub(crate) android: Option<RawAndroid>,
     #[serde(default)]
@@ -87,7 +86,6 @@ pub(crate) fn validate_app(raw: &RawDocument) -> AtomResult<AppConfig> {
         slug: raw.slug.clone(),
         entry_crate_label: raw.entry_crate_label.clone(),
         entry_crate_name: raw.entry_crate_name.clone(),
-        automation_fixture: raw.automation_fixture.unwrap_or(false),
     })
 }
 

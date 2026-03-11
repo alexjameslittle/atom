@@ -93,7 +93,6 @@ mod tests {
                 slug: "hello-atom".to_owned(),
                 entry_crate_label: "//examples/hello-world/apps/hello_atom:hello_atom".to_owned(),
                 entry_crate_name: "hello_atom".to_owned(),
-                automation_fixture: false,
             },
             ios: IosConfig {
                 enabled: true,
@@ -189,7 +188,6 @@ mod tests {
                     "idb".to_owned(),
                     vec![
                         "launch".to_owned(),
-                        "-w".to_owned(),
                         "-f".to_owned(),
                         "--udid".to_owned(),
                         "SIM-123".to_owned(),
@@ -269,7 +267,6 @@ mod tests {
                     "idb".to_owned(),
                     vec![
                         "launch".to_owned(),
-                        "-w".to_owned(),
                         "-f".to_owned(),
                         "--udid".to_owned(),
                         "00008130-001431E90A78001C".to_owned(),

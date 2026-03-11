@@ -2,122 +2,26 @@ package {{ package_name }}
 
 import android.app.Activity
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
-import android.widget.Button
-import android.widget.EditText
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
+
+interface AtomHostViewFactory {
+    fun build(activity: Activity): View
+}
 
 class MainActivity : Activity() {
-{% if automation_fixture %}
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val automationState = AutomationState()
-    private var automationClient: AutomationClient? = null
-    private lateinit var statusView: TextView
-    private lateinit var inputView: EditText
-    private lateinit var echoView: TextView
-{% endif %}
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            setPadding(48, 96, 48, 48)
-        }
-
-        layout.addView(TextView(this).apply {
-            text = "{{ name }}"
-            textSize = 24f
-            gravity = Gravity.CENTER
-{% if automation_fixture %}
-            contentDescription = AutomationElement.TITLE.id
-{% endif %}
-        })
-        layout.addView(TextView(this).apply {
-            text = "{{ slug }}"
-            textSize = 14f
-            gravity = Gravity.CENTER
-            alpha = 0.6f
-{% if automation_fixture %}
-            contentDescription = AutomationElement.SLUG.id
-{% endif %}
-        })
-{% if automation_fixture %}
-        statusView = TextView(this).apply {
-            text = automationState.statusText
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            gravity = Gravity.CENTER
-            alpha = 0.8f
-            contentDescription = AutomationElement.STATUS.id
-        }
-        layout.addView(statusView)
-        inputView = EditText(this).apply {
-            hint = "Automation Input"
-            setText(automationState.inputText)
-            contentDescription = AutomationElement.INPUT.id
-        }
-        layout.addView(inputView)
-        layout.addView(Button(this).apply {
-            text = "Primary Action"
-            contentDescription = AutomationElement.BUTTON.id
-            setOnClickListener {
-                automationState.tapCount += 1
-                automationState.statusText = "primary-button-tapped-${automationState.tapCount}"
-                renderAutomationState()
-            }
-        })
-        echoView = TextView(this).apply {
-            text = automationState.echoText
-            gravity = Gravity.CENTER
-            alpha = 0.7f
-            contentDescription = AutomationElement.ECHO.id
-        }
-        layout.addView(echoView)
-{% else %}
-        layout.addView(TextView(this).apply {
-            text = AtomBindings.moduleSummary
-            textSize = 12f
-            gravity = Gravity.CENTER
-            alpha = 0.6f
-        })
-{% endif %}
-        setContentView(layout)
-
-{% if automation_fixture %}
-        val automationUrl = intent.getStringExtra("atomAutomationUrl")
-        val automationToken = intent.getStringExtra("atomAutomationToken")
-        if (automationUrl != null && automationToken != null) {
-            automationClient = AutomationClient(automationUrl, automationToken).also { client ->
-                client.start()
-            }
-        }
-{% endif %}
+        setContentView(resolveRootView())
     }
 
-{% if automation_fixture %}
-    override fun onDestroy() {
-        automationClient?.stop()
-        atomApp?.sendLifecycle(5, "terminate")
-        super.onDestroy()
-    }
-{% else %}
     override fun onDestroy() {
         atomApp?.sendLifecycle(5, "terminate")
         super.onDestroy()
     }
-{% endif %}
 
     override fun onResume() {
         super.onResume()
@@ -132,236 +36,44 @@ class MainActivity : Activity() {
     private val atomApp: AtomApplication?
         get() = application as? AtomApplication
 
-{% if automation_fixture %}
-    private fun renderAutomationState() {
-        inputView.setText(automationState.inputText)
-        statusView.text = automationState.statusText
-        echoView.text = automationState.echoText
+    private fun resolveRootView(): View {
+        return loadHostViewFactory()?.build(this) ?: defaultRootView()
     }
 
-    private fun snapshotJson(): JSONObject {
-        val width = resources.displayMetrics.widthPixels.toDouble()
-        val height = resources.displayMetrics.heightPixels.toDouble()
-        val nodes = JSONArray()
-        nodes.put(node(AutomationElement.TITLE.id, "text", "{{ name }}", "{{ name }}", 24.0, 112.0, width - 48.0, 32.0))
-        nodes.put(node(AutomationElement.SLUG.id, "text", "{{ slug }}", "{{ slug }}", 24.0, 156.0, width - 48.0, 20.0))
-        nodes.put(node(AutomationElement.STATUS.id, "text", automationState.statusText, automationState.statusText, 24.0, 204.0, width - 48.0, 24.0))
-        nodes.put(node(AutomationElement.INPUT.id, "text_field", "Automation Input", automationState.inputText, 24.0, 264.0, width - 48.0, 56.0))
-        nodes.put(node(AutomationElement.BUTTON.id, "button", "Primary Action", "Primary Action", 24.0, 336.0, width - 48.0, 50.0))
-        nodes.put(node(AutomationElement.ECHO.id, "text", automationState.echoText, automationState.echoText, 24.0, 404.0, width - 48.0, 24.0))
-        return JSONObject()
-            .put("screen", JSONObject().put("width", width).put("height", height))
-            .put("nodes", nodes)
+    // App-owned native sources can provide a richer root view without modifying shared templates.
+    private fun loadHostViewFactory(): AtomHostViewFactory? {
+        return try {
+            val factoryClass = Class.forName("{{ package_name }}.AtomHostViewFactoryImpl")
+            val factory = factoryClass.getDeclaredConstructor().newInstance()
+            factory as? AtomHostViewFactory
+        } catch (_: ReflectiveOperationException) {
+            null
+        }
     }
 
-    private fun node(
-        id: String,
-        role: String,
-        label: String,
-        text: String,
-        x: Double,
-        y: Double,
-        width: Double,
-        height: Double,
-    ): JSONObject {
-        return JSONObject()
-            .put("id", id)
-            .put("role", role)
-            .put("label", label)
-            .put("text", text)
-            .put("visible", true)
-            .put("enabled", true)
-            .put("bounds", JSONObject()
-                .put("x", x)
-                .put("y", y)
-                .put("width", width)
-                .put("height", height))
+    private fun defaultRootView(): View {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            setPadding(48, 96, 48, 48)
+        }
+        layout.addView(TextView(this).apply {
+            text = "{{ name }}"
+            textSize = 24f
+            gravity = Gravity.CENTER
+        })
+        layout.addView(TextView(this).apply {
+            text = "{{ slug }}"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            alpha = 0.6f
+        })
+        layout.addView(TextView(this).apply {
+            text = AtomBindings.moduleSummary
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER
+            alpha = 0.6f
+        })
+        return layout
     }
-
-    private fun handleAutomationCommand(command: JSONObject): JSONObject {
-        val kind = command.optString("kind")
-        val targetId = command.optString("target_id", null)
-        val text = command.optString("text", null)
-        val x = command.optDouble("x", Double.NaN)
-        val y = command.optDouble("y", Double.NaN)
-
-        when (kind) {
-            "inspect_ui" -> Unit
-            "tap" -> handleTap(targetId, x, y, false)
-            "long_press" -> handleTap(targetId, x, y, true)
-            "type_text" -> {
-                if (targetId == null || targetId == AutomationElement.INPUT.id) {
-                    automationState.inputText = text ?: ""
-                    automationState.echoText = "Typed: ${automationState.inputText}"
-                    automationState.statusText = "typed-text"
-                } else {
-                    automationState.statusText = "unsupported-text-target"
-                }
-                renderAutomationState()
-            }
-            "swipe" -> {
-                automationState.statusText = "swipe(${pointText(x, y)})"
-                renderAutomationState()
-            }
-            "drag" -> {
-                automationState.statusText = "drag(${pointText(x, y)})"
-                renderAutomationState()
-            }
-            else -> {
-                automationState.statusText = "unknown-command"
-                renderAutomationState()
-            }
-        }
-
-        return snapshotJson()
-    }
-
-    private fun handleTap(targetId: String?, x: Double, y: Double, isLongPress: Boolean) {
-        val resolvedTarget = targetId ?: resolveTargetId(x, y)
-        when (resolvedTarget) {
-            AutomationElement.BUTTON.id -> {
-                automationState.tapCount += 1
-                val action = if (isLongPress) "long-pressed" else "tapped"
-                automationState.statusText = "primary-button-${action}-${automationState.tapCount}"
-            }
-            AutomationElement.INPUT.id -> {
-                automationState.statusText = if (isLongPress) "input-long-press" else "input-focused"
-            }
-            else -> {
-                automationState.statusText = "tap-unmapped"
-            }
-        }
-        renderAutomationState()
-    }
-
-    private fun resolveTargetId(x: Double, y: Double): String? {
-        val snapshot = snapshotJson().getJSONArray("nodes")
-        for (index in 0 until snapshot.length()) {
-            val node = snapshot.getJSONObject(index)
-            val bounds = node.getJSONObject("bounds")
-            val nodeX = bounds.getDouble("x")
-            val nodeY = bounds.getDouble("y")
-            val width = bounds.getDouble("width")
-            val height = bounds.getDouble("height")
-            if (!x.isNaN() && !y.isNaN() && x >= nodeX && x <= nodeX + width && y >= nodeY && y <= nodeY + height) {
-                return node.getString("id")
-            }
-        }
-        return null
-    }
-
-    private fun pointText(x: Double, y: Double): String {
-        val safeX = if (x.isNaN()) 0.0 else x
-        val safeY = if (y.isNaN()) 0.0 else y
-        return "${safeX},${safeY}"
-    }
-
-    private enum class AutomationElement(val id: String) {
-        TITLE("atom.fixture.title"),
-        SLUG("atom.fixture.slug"),
-        STATUS("atom.fixture.status"),
-        INPUT("atom.fixture.input"),
-        BUTTON("atom.fixture.primary_button"),
-        ECHO("atom.fixture.echo"),
-    }
-
-    private data class AutomationState(
-        var statusText: String = "ready",
-        var inputText: String = "",
-        var echoText: String = "Typed: ",
-        var tapCount: Int = 0,
-    )
-
-    private inner class AutomationClient(
-        private val baseUrl: String,
-        private val token: String,
-    ) {
-        private val executor = Executors.newSingleThreadScheduledExecutor()
-
-        fun start() {
-            executor.execute {
-                if (!postSafely("register", JSONObject()
-                        .put("token", token)
-                        .put("platform", "android"))) {
-                    return@execute
-                }
-                executor.scheduleAtFixedRate({
-                    pollSafely()
-                }, 0, 250, TimeUnit.MILLISECONDS)
-            }
-        }
-
-        fun stop() {
-            executor.shutdownNow()
-        }
-
-        private fun pollSafely() {
-            try {
-                poll()
-            } catch (_: Exception) {
-                // Keep the app alive even if the host-side bridge is temporarily unavailable.
-            }
-        }
-
-        private fun poll() {
-            val connection = openConnection("next?token=${token}")
-            connection.requestMethod = "GET"
-            val status = connection.responseCode
-            if (status != 200) {
-                connection.disconnect()
-                return
-            }
-            val payload = connection.inputStream.bufferedReader().use { it.readText() }
-            connection.disconnect()
-            val command = JSONObject(payload)
-            mainHandler.post {
-                val snapshot = handleAutomationCommand(command)
-                executor.execute {
-                    postSafely("result", JSONObject()
-                        .put("token", token)
-                        .put("command_id", command.optString("id"))
-                        .put("ok", true)
-                        .put("snapshot", snapshot))
-                }
-            }
-        }
-
-        private fun postSafely(path: String, payload: JSONObject): Boolean {
-            return try {
-                post(path, payload)
-                true
-            } catch (_: Exception) {
-                mainHandler.post {
-                    automationState.statusText = "automation-bridge-unavailable"
-                    renderAutomationState()
-                }
-                false
-            }
-        }
-
-        private fun post(path: String, payload: JSONObject) {
-            val connection = openConnection(path)
-            try {
-                connection.requestMethod = "POST"
-                connection.doOutput = true
-                OutputStreamWriter(connection.outputStream).use { writer ->
-                    writer.write(payload.toString())
-                }
-                connection.inputStream.close()
-            } finally {
-                connection.disconnect()
-            }
-        }
-
-        private fun openConnection(path: String): HttpURLConnection {
-            val url = URL("${baseUrl}${path}")
-            return (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 2_000
-                readTimeout = 2_000
-                setRequestProperty("Content-Type", "application/json")
-            }
-        }
-
-    }
-{% endif %}
 }

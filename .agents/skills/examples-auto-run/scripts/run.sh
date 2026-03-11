@@ -5,7 +5,13 @@ repo_root=$(cd -- "$(dirname "$0")/../../../.." && pwd)
 cd "$repo_root"
 
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
-DEFAULT_PLAN="examples/hello-world/evaluation/automation_fixture_plan.json"
+PLAIN_TARGET="//examples/hello-world/apps/hello_atom:hello_atom_plain"
+DEFAULT_PLAN="examples/hello-world/evaluation/demo_surface_plan.json"
+
+run_atom() {
+  mise exec -- bazelisk run //:atom -- "$@"
+}
+
 mode=${1:-smoke}
 
 detect_generated_root() {
@@ -23,10 +29,10 @@ echo "==> examples-auto-run mode: $mode"
 
 case "$mode" in
   smoke)
-    bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET" --dry-run
+    run_atom prebuild --target "$PLAIN_TARGET" --dry-run
     ;;
   generated-tree)
-    bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+    run_atom prebuild --target "$EXAMPLE_TARGET"
     if generated_root=$(detect_generated_root); then
       echo "  generated root: $generated_root"
       find "$generated_root" -maxdepth 3 -type f | sort | sed 's#^#  #'
@@ -38,18 +44,18 @@ case "$mode" in
     destination=${2:?destination id required}
     artifacts_dir=${3:?artifacts dir required}
     plan=${4:-$DEFAULT_PLAN}
-    bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
-    bazelisk run //:atom -- evaluate run \
+    run_atom prebuild --target "$EXAMPLE_TARGET"
+    run_atom evaluate run \
       --target "$EXAMPLE_TARGET" \
       --destination "$destination" \
       --plan "$plan" \
       --artifacts-dir "$artifacts_dir"
     ;;
   android)
-    ./scripts/verify.sh build-android
+    mise exec -- ./scripts/verify.sh build-android
     ;;
   ios)
-    ./scripts/verify.sh build-ios
+    mise exec -- ./scripts/verify.sh build-ios
     ;;
   *)
     echo "unknown mode: $mode" >&2

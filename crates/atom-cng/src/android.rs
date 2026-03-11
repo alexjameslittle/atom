@@ -102,7 +102,7 @@ pub(crate) fn render_kotlin_bindings(
 
 pub(crate) fn render_kotlin_main_activity(
     app: &AppConfig,
-    generated_root: &Utf8Path,
+    _generated_root: &Utf8Path,
     android: &AndroidConfig,
 ) -> AtomResult<String> {
     render(
@@ -111,8 +111,6 @@ pub(crate) fn render_kotlin_main_activity(
             package_name => android.application_id.as_deref().unwrap_or_default(),
             name => &app.name,
             slug => &app.slug,
-            generated_root => generated_root.as_str(),
-            automation_fixture => app.automation_fixture,
         },
     )
 }

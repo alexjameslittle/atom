@@ -16,7 +16,7 @@ Use this skill when:
 
 - You need to tap, long-press, swipe, drag, or type text through Atom's public CLI.
 - You need one proof bundle from `atom evaluate run`.
-- The hello-world automation fixture is the proof surface for a framework change.
+- The hello-world demo surface is the proof surface for a framework change.
 
 ## Steps
 
@@ -24,7 +24,7 @@ Use this skill when:
    `[$destination-discovery](../destination-discovery/SKILL.md)`.
 2. Run `scripts/run.sh tap`, `long-press`, `swipe`, `drag`, or `type-text` for one-step actions.
 3. Run `scripts/run.sh evaluate` for a full proof bundle. The default plan is
-   `../../../examples/hello-world/evaluation/automation_fixture_plan.json`.
+   `../../../examples/hello-world/evaluation/demo_surface_plan.json`.
 
 ## Output
 
