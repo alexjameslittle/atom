@@ -17,7 +17,7 @@ types across crate boundaries.
 ## Intended dependency flow
 
 ```
-atom-ffi -> atom-manifest -> atom-modules -> atom-cng -> atom-deploy -> atom-cli
+atom-ffi -> atom-manifest -> atom-modules -> atom-backends -> atom-cng -> atom-deploy -> atom-backend-{ios,android} -> atom-cli
 ```
 
 `atom-runtime` stays separate from CLI/CNG orchestration code.
@@ -26,13 +26,16 @@ atom-ffi -> atom-manifest -> atom-modules -> atom-cng -> atom-deploy -> atom-cli
 
 1. Run `scripts/check-deps.sh`.
 2. Compare against the intended flow above.
-3. Flag any reverse or unintended cross-layer dependencies.
-4. If a new dependency is intentional, require that it be documented in `docs/architecture.md`.
+3. Confirm generic crates (`atom-backends`, `atom-cng`, `atom-deploy`) stay free of concrete
+   first-party backend ids and backend-specific hook names.
+4. Flag any reverse or unintended cross-layer dependencies.
+5. If a new dependency is intentional, require that it be documented in `docs/architecture.md`.
 
 ## What to check
 
 - No crate lower in the chain depends on one higher up.
 - `atom-runtime` does not depend on `atom-cli`, `atom-cng`, or `atom-deploy`.
+- `atom-backends`, `atom-cng`, and `atom-deploy` remain backend-neutral orchestration layers.
 - New `use` or `extern crate` statements don't introduce cycles.
 - Public types stay in the crate that owns them per the architecture doc.
 

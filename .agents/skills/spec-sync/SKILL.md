@@ -30,6 +30,9 @@ Use this skill when:
 - Lifecycle states in `atom-runtime` match the state machine in SPEC.md.
 - Module metadata fields in `atom-modules` match the module manifest section in SPEC.md.
 - Exit codes used by `atom-cli` match the exit code table in SPEC.md.
+- Backend registry invariants in SPEC.md still match `atom-backends`, `atom-cng`, and `atom-deploy`,
+  including the requirement that generic crates stay backend-neutral and config plugins use
+  `contribute_backend(...)`.
 
 ## Model vs. script split
 

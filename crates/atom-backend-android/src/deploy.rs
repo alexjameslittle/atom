@@ -1172,3 +1172,74 @@ pub(crate) fn timestamp_suffix() -> String {
         .as_millis()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use atom_backends::DestinationCapability;
+
+    use super::{
+        AndroidDestination, BACKEND_ID, destination_descriptor_from_android, parse_adb_devices,
+    };
+
+    #[test]
+    fn parses_adb_devices_into_backend_destinations() {
+        let output = r#"List of devices attached
+emulator-5554 device product:sdk_gphone64_arm64 model:Pixel_9 device:emu64a transport_id:1
+ABC123 device model:Pixel_8_Pro device:husky transport_id:2
+"#;
+
+        let destinations = parse_adb_devices(output);
+
+        assert_eq!(destinations.len(), 2);
+        assert!(destinations[0].is_emulator);
+        assert_eq!(destinations[0].model.as_deref(), Some("Pixel 9"));
+        assert_eq!(destinations[1].serial, "ABC123");
+        assert_eq!(destinations[1].device_name.as_deref(), Some("husky"));
+    }
+
+    #[test]
+    fn emulator_descriptors_expose_automation_capabilities() {
+        let descriptor = destination_descriptor_from_android(AndroidDestination {
+            serial: "emulator-5554".to_owned(),
+            state: "device".to_owned(),
+            model: Some("Pixel 9".to_owned()),
+            device_name: Some("emu64a".to_owned()),
+            is_emulator: true,
+            avd_name: Some("FixtureApi35".to_owned()),
+        });
+
+        assert_eq!(descriptor.backend_id, BACKEND_ID);
+        assert_eq!(descriptor.kind, "emulator");
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::InspectUi)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Interact)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Evaluate)
+        );
+    }
+
+    #[test]
+    fn avd_descriptors_preserve_backend_specific_kind() {
+        let descriptor = destination_descriptor_from_android(AndroidDestination {
+            serial: "avd:FixtureApi35".to_owned(),
+            state: "avd".to_owned(),
+            model: None,
+            device_name: None,
+            is_emulator: false,
+            avd_name: Some("FixtureApi35".to_owned()),
+        });
+
+        assert_eq!(descriptor.kind, "avd");
+        assert_eq!(descriptor.id, "avd:FixtureApi35");
+        assert!(descriptor.available);
+    }
+}

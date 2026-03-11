@@ -113,6 +113,10 @@ Dependency direction should move one way:
 - Keep user-facing error mapping in `atom-ffi`.
 - Keep validation close to the loader that owns the data.
 - Keep codegen deterministic. Two identical inputs should produce the same plan and output tree.
+- Keep generic backend layers backend-neutral. `atom-backends`, `atom-cng`, and `atom-deploy` must
+  not encode concrete first-party backend ids, iOS/Android-specific branching, or backend- specific
+  golden tests.
+- Keep backend-specific assertions and fixtures in `atom-backend-*` crates or schema-owning crates.
 - Keep examples representative. The hello-world example should exercise real repo conventions, not a
   toy path that bypasses them.
 - Keep first-party plugins outside `atom-runtime`. The kernel owns lifecycle and registration, while

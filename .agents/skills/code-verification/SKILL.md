@@ -35,15 +35,16 @@ This skill is **mandatory** when a change touches any of:
 
 ## What it checks
 
-| Step                | Command                            | Purpose                                       |
-| ------------------- | ---------------------------------- | --------------------------------------------- |
-| Unverified packages | `check_for_unverified_packages`    | Ensures new BUILD dirs are in VERIFY_PACKAGES |
-| Lint                | `bazelisk build --config=lint ...` | Clippy and lint rules                         |
-| Format              | `bazelisk run //:format.check`     | Rustfmt via Bazel                             |
-| Shell lint          | `shellcheck`                       | Shell script correctness                      |
-| Action lint         | `actionlint`                       | GitHub Actions correctness                    |
-| Tests               | `bazelisk test`                    | Unit and integration tests                    |
-| Smoke prebuild      | `atom prebuild --dry-run`          | CNG generation doesn't crash                  |
+| Step                | Command                                  | Purpose                                                       |
+| ------------------- | ---------------------------------------- | ------------------------------------------------------------- |
+| Backend neutrality  | `scripts/check-generic-backend-leaks.sh` | Prevents concrete first-party backend leaks in generic crates |
+| Unverified packages | `check_for_unverified_packages`          | Ensures new BUILD dirs are in VERIFY_PACKAGES                 |
+| Lint                | `bazelisk build --config=lint ...`       | Clippy and lint rules                                         |
+| Format              | `bazelisk run //:format.check`           | Rustfmt via Bazel                                             |
+| Shell lint          | `shellcheck`                             | Shell script correctness                                      |
+| Action lint         | `actionlint`                             | GitHub Actions correctness                                    |
+| Tests               | `bazelisk test`                          | Unit and integration tests                                    |
+| Smoke prebuild      | `atom prebuild --dry-run`                | CNG generation doesn't crash                                  |
 
 ## Model vs. script split
 

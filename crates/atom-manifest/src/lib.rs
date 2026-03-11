@@ -20,6 +20,9 @@ pub const FRAMEWORK_VERSION: &str = "0.1.0";
 
 pub type JsonMap = Map<String, Value>;
 
+#[doc(hidden)]
+pub mod testing;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub name: String,

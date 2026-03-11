@@ -24,8 +24,6 @@ rust_test(
     name = "atom-deploy-test",
     crate = ":atom-deploy",
     deps = [
-        "//crates/atom-backend-android",
-        "//crates/atom-backend-ios",
         "@crates//:tempfile",
     ],
 )

@@ -20,7 +20,7 @@ mod tests {
         DestinationCapability, DestinationDescriptor, LaunchMode, SessionLaunchBehavior,
         ToolRunner,
     };
-    use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, IosConfig, NormalizedManifest};
+    use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
 
     use crate::deploy::{deploy_backend, stop_backend};
@@ -92,7 +92,7 @@ mod tests {
             Ok(vec![DestinationDescriptor {
                 backend_id: "fixture".to_owned(),
                 id: "fixture-1".to_owned(),
-                kind: "device".to_owned(),
+                kind: "fixture-target".to_owned(),
                 display_name: "Fixture Device".to_owned(),
                 available: true,
                 debug_state: "ready".to_owned(),
@@ -134,34 +134,7 @@ mod tests {
     }
 
     fn runnable_manifest(root: &Utf8PathBuf) -> NormalizedManifest {
-        NormalizedManifest {
-            repo_root: root.clone(),
-            target_label: "//apps/fixture:fixture".to_owned(),
-            metadata_path: root.join("fixture.atom.app.json"),
-            app: AppConfig {
-                name: "Fixture".to_owned(),
-                slug: "fixture".to_owned(),
-                entry_crate_label: "//apps/fixture:fixture".to_owned(),
-                entry_crate_name: "fixture".to_owned(),
-            },
-            ios: IosConfig {
-                enabled: true,
-                bundle_id: Some("build.atom.fixture".to_owned()),
-                deployment_target: Some("17.0".to_owned()),
-            },
-            android: AndroidConfig {
-                enabled: true,
-                application_id: Some("build.atom.fixture".to_owned()),
-                min_sdk: Some(28),
-                target_sdk: Some(35),
-            },
-            build: BuildConfig {
-                generated_root: Utf8PathBuf::from("generated"),
-                watch: false,
-            },
-            modules: Vec::new(),
-            config_plugins: Vec::new(),
-        }
+        fixture_manifest(root)
     }
 
     #[test]
@@ -176,7 +149,7 @@ mod tests {
         let destinations = list_destinations(&root, &registry, &mut runner).expect("list");
         assert_eq!(destinations.len(), 1);
         assert_eq!(destinations[0].backend_id, "fixture");
-        assert_eq!(destinations[0].kind, "device");
+        assert_eq!(destinations[0].kind, "fixture-target");
     }
 
     #[test]

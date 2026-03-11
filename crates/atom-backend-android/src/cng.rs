@@ -461,3 +461,93 @@ fn emit_android_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomRe
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use atom_backends::{BackendDefinition, GenerationBackendRegistry};
+    use atom_cng::{ConfigPluginRegistry, build_generation_plan, emit_host_tree};
+    use atom_manifest::testing::fixture_manifest;
+    use atom_modules::testing::fixture_resolved_module;
+    use camino::Utf8PathBuf;
+    use tempfile::tempdir;
+
+    use super::{BACKEND_ID, register};
+
+    #[test]
+    fn registers_generation_backend() {
+        let mut registry = GenerationBackendRegistry::new();
+        register(&mut registry).expect("android backend should register");
+
+        assert_eq!(
+            registry
+                .get(BACKEND_ID)
+                .expect("android backend should be available")
+                .id(),
+            BACKEND_ID
+        );
+    }
+
+    #[test]
+    fn emits_expected_android_host_tree() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8");
+        let manifest = fixture_manifest(&root);
+        let modules = Vec::new();
+        let mut registry = GenerationBackendRegistry::new();
+        register(&mut registry).expect("android backend should register");
+
+        let plan = build_generation_plan(
+            &manifest,
+            &modules,
+            &ConfigPluginRegistry::default(),
+            &registry,
+        )
+        .expect("plan");
+        emit_host_tree(&root, &plan, &registry).expect("host tree");
+
+        let build_file =
+            fs::read_to_string(root.join("generated/android/fixture/BUILD.bazel")).expect("build");
+        let manifest_xml = fs::read_to_string(
+            root.join("generated/android/fixture/AndroidManifest.generated.xml"),
+        )
+        .expect("manifest");
+        let bridge = fs::read_to_string(root.join("generated/android/fixture/atom_runtime_jni.rs"))
+            .expect("bridge");
+        let app = fs::read_to_string(root.join(
+            "generated/android/fixture/src/main/kotlin/build/atom/fixture/AtomApplication.kt",
+        ))
+        .expect("application");
+
+        assert!(build_file.contains("android_binary("));
+        assert!(build_file.contains("custom_package = \"build.atom.fixture\""));
+        assert!(manifest_xml.contains("android:minSdkVersion=\"28\""));
+        assert!(manifest_xml.contains("android:targetSdkVersion=\"35\""));
+        assert!(bridge.contains("fixture::atom_runtime_config()"));
+        assert!(app.contains("class AtomApplication : Application()"));
+    }
+
+    #[test]
+    fn rejects_modules_that_require_higher_min_sdk() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8");
+        let manifest = fixture_manifest(&root);
+        let mut module = fixture_resolved_module(&root);
+        module.manifest.android_min_sdk = Some(36);
+        let modules = vec![module];
+        let mut registry = GenerationBackendRegistry::new();
+        register(&mut registry).expect("android backend should register");
+
+        let error = build_generation_plan(
+            &manifest,
+            &modules,
+            &ConfigPluginRegistry::default(),
+            &registry,
+        )
+        .expect_err("higher min sdk should fail");
+
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::ExtensionIncompatible);
+        assert!(error.message.contains("min_sdk"));
+    }
+}

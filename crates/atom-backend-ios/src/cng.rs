@@ -430,3 +430,91 @@ fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use atom_backends::{BackendDefinition, GenerationBackendRegistry};
+    use atom_cng::{ConfigPluginRegistry, build_generation_plan, emit_host_tree};
+    use atom_manifest::testing::fixture_manifest;
+    use atom_modules::testing::fixture_resolved_module;
+    use camino::Utf8PathBuf;
+    use tempfile::tempdir;
+
+    use super::{BACKEND_ID, register};
+
+    #[test]
+    fn registers_generation_backend() {
+        let mut registry = GenerationBackendRegistry::new();
+        register(&mut registry).expect("ios backend should register");
+
+        assert_eq!(
+            registry
+                .get(BACKEND_ID)
+                .expect("ios backend should be available")
+                .id(),
+            BACKEND_ID
+        );
+    }
+
+    #[test]
+    fn emits_expected_ios_host_tree() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8");
+        let manifest = fixture_manifest(&root);
+        let modules = Vec::new();
+        let mut registry = GenerationBackendRegistry::new();
+        register(&mut registry).expect("ios backend should register");
+
+        let plan = build_generation_plan(
+            &manifest,
+            &modules,
+            &ConfigPluginRegistry::default(),
+            &registry,
+        )
+        .expect("plan");
+        emit_host_tree(&root, &plan, &registry).expect("host tree");
+
+        let build_file =
+            fs::read_to_string(root.join("generated/ios/fixture/BUILD.bazel")).expect("build");
+        let plist = fs::read_to_string(root.join("generated/ios/fixture/Info.generated.plist"))
+            .expect("plist");
+        let bridge =
+            fs::read_to_string(root.join("generated/ios/fixture/atom_runtime_app_bridge.rs"))
+                .expect("bridge");
+        let scene = fs::read_to_string(root.join("generated/ios/fixture/SceneDelegate.swift"))
+            .expect("scene");
+
+        assert!(build_file.contains("ios_application("));
+        assert!(build_file.contains("bundle_id = \"build.atom.fixture\""));
+        assert!(build_file.contains("minimum_os_version = \"17.0\""));
+        assert!(plist.contains("<key>CFBundleIdentifier</key>"));
+        assert!(plist.contains("<string>build.atom.fixture</string>"));
+        assert!(bridge.contains("fixture::atom_runtime_config()"));
+        assert!(scene.contains("AtomHostRootViewProvider"));
+    }
+
+    #[test]
+    fn rejects_modules_that_require_higher_deployment_targets() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8");
+        let manifest = fixture_manifest(&root);
+        let mut module = fixture_resolved_module(&root);
+        module.manifest.ios_min_deployment_target = Some("18.0".to_owned());
+        let modules = vec![module];
+        let mut registry = GenerationBackendRegistry::new();
+        register(&mut registry).expect("ios backend should register");
+
+        let error = build_generation_plan(
+            &manifest,
+            &modules,
+            &ConfigPluginRegistry::default(),
+            &registry,
+        )
+        .expect_err("higher deployment target should fail");
+
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::ExtensionIncompatible);
+        assert!(error.message.contains("deployment target"));
+    }
+}

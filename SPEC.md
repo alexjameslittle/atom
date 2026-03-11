@@ -779,6 +779,18 @@ Rules:
   manifest before host generation begins
 - compatibility failures MUST identify the offending target label and field
 
+### 9.1.3 Backend Registry Boundaries
+
+Rules:
+
+- `atom-backends`, `atom-cng`, and `atom-deploy` MUST remain backend-neutral orchestration layers.
+- Those generic crates MUST dispatch through registered backend contracts and MUST NOT hard-code
+  concrete first-party backend ids or iOS/Android-specific branching.
+- Backend-specific CNG emission, destination parsing, deploy/evaluate behavior, and golden-file
+  assertions MUST live in first-party backend crates.
+- Generic crate tests SHOULD use neutral fixture backend ids. Backend-specific tests SHOULD live in
+  backend crate test targets.
+
 ### 9.2 Merge Rules
 
 | Artifact              | Rule                               | Conflict Behavior                                  |
@@ -1490,6 +1502,9 @@ A config plugin crate MUST implement:
 - `validate() -> AtomResult<()>` for plugin-owned config validation
 - `contribute_backend(backend_id, ctx) -> AtomResult<BackendContribution>` for backend-owned host
   customization
+
+`atom-cng` MUST call only `contribute_backend(...)` on config plugins. It MUST NOT define or rely on
+hard-coded per-backend hook names such as `contribute_ios(...)` or `contribute_android(...)`.
 
 A `BackendContribution` MUST contain:
 

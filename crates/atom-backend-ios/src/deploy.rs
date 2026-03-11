@@ -1574,3 +1574,76 @@ fn timestamp_suffix() -> String {
         .as_millis()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use atom_backends::DestinationCapability;
+
+    use super::{
+        BACKEND_ID, IosDestination, IosDestinationKind, destination_descriptor_from_ios,
+        parse_idb_targets,
+    };
+
+    #[test]
+    fn parses_idb_targets_into_backend_destinations() {
+        let json = r#"{"udid":"SIM-1","name":"Fixture Sim","state":"Booted","type":"simulator","os_version":"17.0","architecture":"arm64"}
+{"udid":"DEV-1","name":"Fixture Phone","state":"Shutdown","type":"device","device":"physical-1"}"#;
+
+        let destinations = parse_idb_targets(json).expect("targets should parse");
+
+        assert_eq!(destinations.len(), 2);
+        assert_eq!(destinations[0].id, "SIM-1");
+        assert_eq!(destinations[0].kind, IosDestinationKind::Simulator);
+        assert_eq!(destinations[1].alternate_id.as_deref(), Some("physical-1"));
+        assert_eq!(destinations[1].kind, IosDestinationKind::Device);
+    }
+
+    #[test]
+    fn simulator_descriptors_expose_automation_capabilities() {
+        let descriptor = destination_descriptor_from_ios(IosDestination {
+            kind: IosDestinationKind::Simulator,
+            id: "SIM-1".to_owned(),
+            alternate_id: None,
+            name: "Fixture Sim".to_owned(),
+            state: "Booted".to_owned(),
+            runtime: Some("17.0".to_owned()),
+            architecture: Some("arm64".to_owned()),
+            is_available: true,
+        });
+
+        assert_eq!(descriptor.backend_id, BACKEND_ID);
+        assert_eq!(descriptor.kind, "simulator");
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::InspectUi)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Interact)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Evaluate)
+        );
+    }
+
+    #[test]
+    fn device_descriptors_limit_capabilities_to_launch() {
+        let descriptor = destination_descriptor_from_ios(IosDestination {
+            kind: IosDestinationKind::Device,
+            id: "DEV-1".to_owned(),
+            alternate_id: None,
+            name: "Fixture Phone".to_owned(),
+            state: "Ready".to_owned(),
+            runtime: None,
+            architecture: None,
+            is_available: true,
+        });
+
+        assert_eq!(descriptor.kind, "device");
+        assert_eq!(descriptor.capabilities, vec![DestinationCapability::Launch]);
+    }
+}

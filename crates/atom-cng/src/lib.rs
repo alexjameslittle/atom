@@ -556,20 +556,18 @@ fn render_aggregate_schema(plan: &GenerationPlan) -> AtomResult<String> {
 mod tests {
     use std::fs;
 
-    use atom_backend_android::register_generation_backend as register_android_generation_backend;
-    use atom_backend_ios::register_generation_backend as register_ios_generation_backend;
     use atom_backends::BackendDefinition;
     use atom_backends::{
         BackendContribution, BackendPlan, ContributedFile, FileSource, GenerationBackend,
         GenerationBackendRegistry, GenerationPlan,
     };
     use atom_manifest::{
-        AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, JsonMap,
-        ModuleRequest, NormalizedManifest,
+        NormalizedManifest,
+        testing::{fixture_config_plugin_request, fixture_manifest, fixture_module_request},
     };
-    use atom_modules::{MethodSpec, ModuleKind, ModuleManifest, ResolvedModule};
+    use atom_modules::{ResolvedModule, testing::fixture_schema_module};
     use camino::{Utf8Path, Utf8PathBuf};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use tempfile::tempdir;
 
     use super::{
@@ -594,37 +592,34 @@ mod tests {
             ctx: &ConfigPluginContext<'_>,
         ) -> atom_ffi::AtomResult<BackendContribution> {
             match backend_id {
-                "ios" => Ok(BackendContribution {
+                "alpha" => Ok(BackendContribution {
                     files: vec![ContributedFile {
-                        source: FileSource::Copy(Utf8PathBuf::from("assets/AppIcon.icon")),
+                        source: FileSource::Copy(Utf8PathBuf::from("assets/alpha")),
                         output: ctx
                             .generated_root
-                            .join("ios")
-                            .join(&ctx.app.slug)
+                            .join("alpha")
                             .join("resources")
-                            .join("AppIcon.icon"),
+                            .join("alpha"),
                     }],
                     metadata_entries: object_from_value(json!({
-                        "CFBundleIconName": "AppIcon"
+                        "plugin_marker": "alpha"
                     })),
-                    bazel_resources: Vec::new(),
-                    bazel_resource_globs: vec!["resources/AppIcon.icon/**".to_owned()],
+                    bazel_resources: vec!["resources/alpha/logo.txt".to_owned()],
+                    bazel_resource_globs: vec!["resources/alpha/**".to_owned()],
                 }),
-                "android" => Ok(BackendContribution {
+                "beta" => Ok(BackendContribution {
                     files: vec![ContributedFile {
-                        source: FileSource::Copy(Utf8PathBuf::from("assets/ic_launcher.png")),
+                        source: FileSource::Copy(Utf8PathBuf::from("assets/beta.txt")),
                         output: ctx
                             .generated_root
-                            .join("android")
-                            .join(&ctx.app.slug)
-                            .join("res/mipmap-xxxhdpi/ic_launcher.png"),
+                            .join("beta")
+                            .join("resources")
+                            .join("beta.txt"),
                     }],
                     metadata_entries: object_from_value(json!({
-                        "application": {
-                            "@android:icon": "@mipmap/ic_launcher"
-                        }
+                        "plugin_marker": "beta"
                     })),
-                    bazel_resources: vec!["res/mipmap-xxxhdpi/ic_launcher.png".to_owned()],
+                    bazel_resources: vec!["resources/beta.txt".to_owned()],
                     bazel_resource_globs: Vec::new(),
                 }),
                 _ => Ok(BackendContribution::default()),
@@ -636,85 +631,74 @@ mod tests {
         registry.register("fixture_plugin", |_entry| Ok(Box::new(FixturePlugin)));
     }
 
-    fn write_fixture(root: &Utf8PathBuf) -> (NormalizedManifest, Vec<ResolvedModule>) {
-        fs::create_dir_all(root.join("modules/device_info/schema")).expect("module dir");
+    struct FixtureBackend {
+        id: &'static str,
+    }
+
+    impl BackendDefinition for FixtureBackend {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn platform(&self) -> &'static str {
+            self.id
+        }
+    }
+
+    impl GenerationBackend for FixtureBackend {
+        fn initialize_backend(
+            &self,
+            _manifest: &NormalizedManifest,
+        ) -> atom_ffi::AtomResult<Option<BackendContribution>> {
+            Ok(Some(BackendContribution::default()))
+        }
+
+        fn build_backend_plan(&self, manifest: &NormalizedManifest) -> Option<BackendPlan> {
+            let generated_root = manifest.build.generated_root.join(self.id);
+            Some(BackendPlan {
+                generated_root: generated_root.clone(),
+                target: format!("//{}:app", generated_root.as_str()),
+                files: vec![generated_root.join("FIXTURE.txt")],
+            })
+        }
+
+        fn emit_host_tree(
+            &self,
+            repo_root: &Utf8Path,
+            plan: &GenerationPlan,
+        ) -> atom_ffi::AtomResult<()> {
+            crate::emit::write_file(
+                &repo_root.join(
+                    plan.backend(self.id)
+                        .expect("fixture backend should populate backend plan")
+                        .plan
+                        .generated_root
+                        .join("FIXTURE.txt"),
+                ),
+                self.id,
+            )
+        }
+
+        fn generated_root(&self, plan: &GenerationPlan) -> Option<Utf8PathBuf> {
+            plan.backend(self.id)
+                .map(|backend| backend.plan.generated_root.clone())
+        }
+    }
+
+    fn fixture_manifest_and_modules(
+        root: &Utf8PathBuf,
+    ) -> (NormalizedManifest, Vec<ResolvedModule>) {
+        fs::create_dir_all(root.join("modules/schema")).expect("module dir");
         fs::write(
-            root.join("modules/device_info/schema/device_info.fbs"),
-            "namespace atom.device_info;\n",
+            root.join("modules/schema/fixture.fbs"),
+            "namespace atom.fixture;\n",
         )
         .expect("schema");
 
-        let manifest = NormalizedManifest {
-            repo_root: root.clone(),
-            target_label: "//apps/hello_atom:hello_atom".to_owned(),
-            metadata_path: root.join("bazel-out/hello_atom.atom.app.json"),
-            app: AppConfig {
-                name: "Hello Atom".to_owned(),
-                slug: "hello-atom".to_owned(),
-                entry_crate_label: "//apps/hello_atom:hello_atom".to_owned(),
-                entry_crate_name: "hello_atom".to_owned(),
-            },
-            ios: IosConfig {
-                enabled: true,
-                bundle_id: Some("build.atom.hello".to_owned()),
-                deployment_target: Some("17.0".to_owned()),
-            },
-            android: AndroidConfig {
-                enabled: true,
-                application_id: Some("build.atom.hello".to_owned()),
-                min_sdk: Some(28),
-                target_sdk: Some(35),
-            },
-            build: BuildConfig {
-                generated_root: Utf8PathBuf::from("generated"),
-                watch: false,
-            },
-            modules: vec![ModuleRequest {
-                target_label: "//modules/device_info:device_info".to_owned(),
-            }],
-            config_plugins: Vec::new(),
-        };
+        let mut manifest = fixture_manifest(root);
+        manifest.modules = vec![fixture_module_request("//modules/schema:schema")];
 
-        let modules = vec![ResolvedModule {
-            request: ModuleRequest {
-                target_label: "//modules/device_info:device_info".to_owned(),
-            },
-            metadata_path: root.join("bazel-out/device_info.atom.module.json"),
-            manifest: ModuleManifest {
-                kind: ModuleKind::Rust,
-                target_label: "//modules/device_info:device_info".to_owned(),
-                id: "device_info".to_owned(),
-                atom_api_level: 1,
-                min_atom_version: Some("0.1.0".to_owned()),
-                ios_min_deployment_target: Some("17.0".to_owned()),
-                android_min_sdk: Some(28),
-                depends_on: Vec::new(),
-                schema_files: vec![Utf8PathBuf::from(
-                    "modules/device_info/schema/device_info.fbs",
-                )],
-                methods: vec![MethodSpec {
-                    name: "get".to_owned(),
-                    request_table: "atom.device_info.GetDeviceInfoRequest".to_owned(),
-                    response_table: "atom.device_info.GetDeviceInfoResponse".to_owned(),
-                }],
-                permissions: Vec::new(),
-                plist: JsonMap::new(),
-                android_manifest: JsonMap::new(),
-                entitlements: JsonMap::new(),
-                generated_sources: Vec::new(),
-                init_priority: 0,
-                ios_srcs: vec![Utf8PathBuf::from(
-                    "modules/device_info/ios/DeviceInfoModule.swift",
-                )],
-                android_srcs: vec![Utf8PathBuf::from(
-                    "modules/device_info/android/DeviceInfoModule.kt",
-                )],
-            },
-            resolution_index: 0,
-            layer: 0,
-            init_order: 0,
-        }];
-
+        let modules = vec![fixture_schema_module(root, "modules/schema/fixture.fbs")];
         (manifest, modules)
     }
 
@@ -722,140 +706,67 @@ mod tests {
         ConfigPluginRegistry::default()
     }
 
-    fn first_party_generation_registry() -> GenerationBackendRegistry {
+    fn generation_registry(ids: &[&'static str]) -> GenerationBackendRegistry {
         let mut registry = GenerationBackendRegistry::new();
-        register_ios_generation_backend(&mut registry).expect("ios backend should register");
-        register_android_generation_backend(&mut registry)
-            .expect("android backend should register");
+        for id in ids {
+            registry
+                .register(Box::new(FixtureBackend { id }))
+                .expect("fixture backend should register");
+        }
         registry
     }
 
     #[test]
-    fn plan_contains_required_generated_files() {
+    fn plan_contains_schema_and_registered_backend_files() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (manifest, modules) = write_fixture(&root);
-        let generation_registry = first_party_generation_registry();
+        let (manifest, modules) = fixture_manifest_and_modules(&root);
+        let registry = generation_registry(&["fixture"]);
 
-        let plan = build_generation_plan(
-            &manifest,
-            &modules,
-            &fixture_registry(),
-            &generation_registry,
-        )
-        .expect("plan");
+        let plan = build_generation_plan(&manifest, &modules, &fixture_registry(), &registry)
+            .expect("plan");
 
         assert!(
             plan.generated_files
                 .contains(&Utf8PathBuf::from("generated/schema/atom.fbs"))
         );
+        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
+            "generated/schema/modules/schema_module/fixture.fbs"
+        )));
         assert!(
             plan.generated_files
-                .contains(&Utf8PathBuf::from("generated/ios/hello-atom/BUILD.bazel"))
+                .contains(&Utf8PathBuf::from("generated/fixture/FIXTURE.txt"))
         );
-        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
-            "generated/ios/hello-atom/atom_runtime_app_bridge.rs"
-        )));
-        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
-            "generated/android/hello-atom/AndroidManifest.generated.xml"
-        )));
-        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
-            "generated/android/hello-atom/atom_runtime_jni.rs"
-        )));
         assert!(!render_prebuild_plan(&plan).is_empty());
     }
 
     #[test]
-    fn emit_host_tree_writes_expected_files() {
+    fn emit_host_tree_writes_schema_and_backend_files() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (manifest, modules) = write_fixture(&root);
-        let generation_registry = first_party_generation_registry();
+        let (manifest, modules) = fixture_manifest_and_modules(&root);
+        let registry = generation_registry(&["fixture"]);
 
-        let plan = build_generation_plan(
-            &manifest,
-            &modules,
-            &fixture_registry(),
-            &generation_registry,
-        )
-        .expect("plan");
+        let plan = build_generation_plan(&manifest, &modules, &fixture_registry(), &registry)
+            .expect("plan");
 
-        emit_host_tree(&root, &plan, &generation_registry).expect("host tree");
+        let roots = emit_host_tree(&root, &plan, &registry).expect("host tree");
 
         assert!(root.join("generated/schema/atom.fbs").exists());
-        assert!(root.join("generated/ios/hello-atom/BUILD.bazel").exists());
         assert!(
-            root.join("generated/android/hello-atom/BUILD.bazel")
+            root.join("generated/schema/modules/schema_module/fixture.fbs")
                 .exists()
         );
+        assert!(root.join("generated/fixture/FIXTURE.txt").exists());
+        assert_eq!(roots, vec![Utf8PathBuf::from("generated/fixture")]);
     }
 
     #[test]
     fn cng_uses_registered_backends_for_planning_and_emission() {
-        struct FixtureBackend;
-
-        impl BackendDefinition for FixtureBackend {
-            fn id(&self) -> &'static str {
-                "fixture"
-            }
-
-            fn platform(&self) -> &'static str {
-                "fixture"
-            }
-        }
-
-        impl GenerationBackend for FixtureBackend {
-            fn initialize_backend(
-                &self,
-                _manifest: &NormalizedManifest,
-            ) -> atom_ffi::AtomResult<Option<BackendContribution>> {
-                Ok(Some(BackendContribution::default()))
-            }
-
-            fn build_backend_plan(&self, manifest: &NormalizedManifest) -> Option<BackendPlan> {
-                Some(BackendPlan {
-                    generated_root: manifest.build.generated_root.join("fixture"),
-                    target: "//generated/fixture:app".to_owned(),
-                    files: vec![
-                        manifest
-                            .build
-                            .generated_root
-                            .join("fixture")
-                            .join("FIXTURE.txt"),
-                    ],
-                })
-            }
-
-            fn emit_host_tree(
-                &self,
-                repo_root: &Utf8Path,
-                plan: &GenerationPlan,
-            ) -> atom_ffi::AtomResult<()> {
-                crate::emit::write_file(
-                    &repo_root.join(
-                        plan.backend("fixture")
-                            .expect("fixture backend should populate backend plan")
-                            .plan
-                            .generated_root
-                            .join("FIXTURE.txt"),
-                    ),
-                    "fixture backend",
-                )
-            }
-
-            fn generated_root(&self, plan: &GenerationPlan) -> Option<Utf8PathBuf> {
-                plan.backend("fixture")
-                    .map(|backend| backend.plan.generated_root.clone())
-            }
-        }
-
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (manifest, modules) = write_fixture(&root);
-        let mut registry = GenerationBackendRegistry::new();
-        registry
-            .register(Box::new(FixtureBackend))
-            .expect("fixture backend should register");
+        let (manifest, modules) = fixture_manifest_and_modules(&root);
+        let registry = generation_registry(&["fixture"]);
 
         let plan = build_generation_plan(&manifest, &modules, &fixture_registry(), &registry)
             .expect("plan");
@@ -866,7 +777,7 @@ mod tests {
                 .generated_root,
             Utf8PathBuf::from("generated/fixture")
         );
-        assert!(plan.backend("android").is_none());
+        assert!(plan.backend("secondary").is_none());
         assert!(
             plan.generated_files
                 .contains(&Utf8PathBuf::from("generated/fixture/FIXTURE.txt"))
@@ -876,242 +787,97 @@ mod tests {
         assert_eq!(roots, vec![Utf8PathBuf::from("generated/fixture")]);
         assert_eq!(
             fs::read_to_string(root.join("generated/fixture/FIXTURE.txt")).expect("fixture"),
-            "fixture backend"
+            "fixture"
         );
     }
 
     #[test]
-    fn emit_host_tree_writes_phase_five_build_targets() {
+    fn config_plugins_contribute_backend_owned_files_and_metadata() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (manifest, modules) = write_fixture(&root);
-        let generation_registry = first_party_generation_registry();
-
-        let plan = build_generation_plan(
-            &manifest,
-            &modules,
-            &fixture_registry(),
-            &generation_registry,
-        )
-        .expect("plan");
-        emit_host_tree(&root, &plan, &generation_registry).expect("host tree");
-
-        let ios_build =
-            fs::read_to_string(root.join("generated/ios/hello-atom/BUILD.bazel")).expect("ios");
-        let ios_plist =
-            fs::read_to_string(root.join("generated/ios/hello-atom/Info.generated.plist"))
-                .expect("ios plist");
-        let ios_launch_storyboard =
-            fs::read_to_string(root.join("generated/ios/hello-atom/LaunchScreen.storyboard"))
-                .expect("ios launch storyboard");
-        let ios_runtime_header =
-            fs::read_to_string(root.join("generated/ios/hello-atom/atom_runtime.h"))
-                .expect("ios runtime header");
-        let ios_runtime_bridge =
-            fs::read_to_string(root.join("generated/ios/hello-atom/atom_runtime_app_bridge.rs"))
-                .expect("ios runtime bridge");
-        let swift_app_delegate =
-            fs::read_to_string(root.join("generated/ios/hello-atom/AtomAppDelegate.swift"))
-                .expect("swift app delegate");
-        let swift_scene_delegate =
-            fs::read_to_string(root.join("generated/ios/hello-atom/SceneDelegate.swift"))
-                .expect("swift scene delegate");
-        let swift_main = fs::read_to_string(root.join("generated/ios/hello-atom/main.swift"))
-            .expect("swift main");
-        let android_build =
-            fs::read_to_string(root.join("generated/android/hello-atom/BUILD.bazel"))
-                .expect("android build");
-        let android_manifest = fs::read_to_string(
-            root.join("generated/android/hello-atom/AndroidManifest.generated.xml"),
-        )
-        .expect("android manifest");
-        let android_runtime_bridge =
-            fs::read_to_string(root.join("generated/android/hello-atom/atom_runtime_jni.rs"))
-                .expect("android runtime bridge");
-        let android_main =
-            fs::read_to_string(root.join(
-                "generated/android/hello-atom/src/main/kotlin/build/atom/hello/MainActivity.kt",
-            ))
-            .expect("android main");
-
-        assert!(ios_build.contains("ios_application("));
-        assert!(ios_build.contains("bundle_id = \"build.atom.hello\""));
-        assert!(ios_build.contains("minimum_os_version = \"17.0\""));
-        assert!(ios_build.contains("swift_interop_hint("));
-        assert!(ios_build.contains("rust_static_library("));
-        assert!(ios_build.contains("hdrs = [\"atom_runtime.h\"]"));
-        assert!(ios_build.contains("\":atom_runtime_swift_bridge\""));
-        assert!(!ios_build.contains("swift_binary("));
-        assert!(ios_build.contains("resources = ["));
-        assert!(ios_build.contains("\"LaunchScreen.storyboard\""));
-        assert!(ios_plist.contains("<key>CFBundleShortVersionString</key>"));
-        assert!(ios_plist.contains("<string>1.0</string>"));
-        assert!(ios_plist.contains("<key>CFBundleVersion</key>"));
-        assert!(ios_plist.contains("<string>1</string>"));
-        assert!(ios_plist.contains("<key>UIApplicationSceneManifest</key>"));
-        assert!(ios_plist.contains("<key>UILaunchStoryboardName</key>"));
-        assert!(ios_plist.contains("<string>LaunchScreen.storyboard</string>"));
-        assert!(ios_plist.contains("<key>UISceneDelegateClassName</key>"));
-        assert!(ios_plist.contains("atom_hello_atom_support.AtomSceneDelegate"));
-        assert!(ios_launch_storyboard.contains("launchScreen=\"YES\""));
-        assert!(ios_runtime_header.contains("typedef struct AtomSlice"));
-        assert!(ios_runtime_bridge.contains("hello_atom::atom_runtime_config()"));
-        assert!(swift_app_delegate.contains("configurationForConnecting"));
-        assert!(swift_main.contains("UIApplicationMain("));
-        assert!(swift_main.contains("NSStringFromClass(AtomAppDelegate.self)"));
-        assert!(swift_scene_delegate.contains("resolveRootViewController()"));
-        assert!(swift_scene_delegate.contains("AtomHostRootViewProvider"));
-        assert!(swift_scene_delegate.contains(
-            "NSClassFromString(\"atom_hello_atom_support.AtomHostRootViewProviderImpl\")"
+        let (mut manifest, modules) = fixture_manifest_and_modules(&root);
+        fs::create_dir_all(root.join("assets/alpha")).expect("alpha assets");
+        fs::write(root.join("assets/alpha/logo.txt"), "alpha").expect("alpha asset");
+        fs::write(root.join("assets/beta.txt"), "beta").expect("beta asset");
+        manifest.config_plugins.push(fixture_config_plugin_request(
+            "fixture_plugin",
+            "//tests:fixture_plugin",
         ));
-        assert!(swift_scene_delegate.contains("Text(\"Hello Atom\")"));
-        assert!(android_build.contains("rust_shared_library("));
-        assert!(
-            android_build.contains("load(\"@rules_android//rules:rules.bzl\", \"android_binary\")")
-        );
-        assert!(android_build.contains("android_binary("));
-        assert!(android_build.contains("manifest = \"AndroidManifest.generated.xml\""));
-        assert!(android_build.contains("custom_package = \"build.atom.hello\""));
-        assert!(android_build.contains("srcs = [\"atom_runtime_jni.rs\"]"));
-        assert!(!android_build.contains("java_binary("));
-        assert!(!android_build.contains("AppEntry.kt"));
-        assert!(android_manifest.contains("android:minSdkVersion=\"28\""));
-        assert!(android_manifest.contains("android:targetSdkVersion=\"35\""));
-        assert!(android_runtime_bridge.contains("hello_atom::atom_runtime_config()"));
-
-        let android_app = fs::read_to_string(root.join(
-            "generated/android/hello-atom/src/main/kotlin/build/atom/hello/AtomApplication.kt",
-        ))
-        .expect("android application");
-        assert!(android_app.contains("class AtomApplication : Application()"));
-        assert!(android_app.contains("System.loadLibrary(\"atom_runtime_jni\")"));
-        assert!(android_app.contains("object AtomRuntimeBridge"));
-        assert!(android_main.contains("class MainActivity : Activity()"));
-        assert!(android_main.contains("interface AtomHostViewFactory"));
-        assert!(android_main.contains("override fun onStart()"));
-        assert!(android_main.contains("override fun onStop()"));
-        assert!(!android_main.contains("override fun onDestroy()"));
-        assert!(!android_main.contains("override fun onPause()"));
-        assert!(!android_main.contains("override fun onResume()"));
-        assert!(android_main.contains("atomApp?.sendLifecycle(1, \"foreground\")"));
-        assert!(android_main.contains("atomApp?.sendLifecycle(2, \"background\")"));
-        assert!(android_build.contains("kt_jvm_library("));
-        assert!(android_build.contains("@androidsdk//:platforms/android-"));
-        assert!(!android_build.contains("cc_import("));
-        assert!(
-            !root
-                .join("generated/android/hello-atom/src/main/kotlin/build/atom/hello/AppEntry.kt")
-                .exists()
-        );
-    }
-
-    #[test]
-    fn config_plugins_can_contribute_files_and_resources() {
-        let directory = tempdir().expect("tempdir");
-        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (mut manifest, modules) = write_fixture(&root);
-        fs::create_dir_all(root.join("assets/AppIcon.icon")).expect("icon dir");
-        fs::write(
-            root.join("assets/AppIcon.icon/icon.json"),
-            "{\"name\":\"AppIcon\"}",
-        )
-        .expect("icon json");
-        fs::write(root.join("assets/ic_launcher.png"), "png").expect("png");
-        manifest.config_plugins.push(ConfigPluginRequest {
-            target_label: "//tests:fixture_plugin".to_owned(),
-            id: "fixture_plugin".to_owned(),
-            atom_api_level: 1,
-            min_atom_version: Some("0.1.0".to_owned()),
-            ios_min_deployment_target: Some("17.0".to_owned()),
-            android_min_sdk: Some(28),
-            config: JsonMap::new(),
-        });
 
         let mut registry = fixture_registry();
         register_fixture_plugin(&mut registry);
-        let generation_registry = first_party_generation_registry();
+        let generation_registry = generation_registry(&["alpha", "beta"]);
         let plan = build_generation_plan(&manifest, &modules, &registry, &generation_registry)
             .expect("plan");
         emit_host_tree(&root, &plan, &generation_registry).expect("host tree");
 
-        let ios_plist =
-            fs::read_to_string(root.join("generated/ios/hello-atom/Info.generated.plist"))
-                .expect("ios plist");
-        let ios_build =
-            fs::read_to_string(root.join("generated/ios/hello-atom/BUILD.bazel")).expect("ios");
-        let android_manifest = fs::read_to_string(
-            root.join("generated/android/hello-atom/AndroidManifest.generated.xml"),
-        )
-        .expect("android manifest");
-        let android_build =
-            fs::read_to_string(root.join("generated/android/hello-atom/BUILD.bazel"))
-                .expect("android build");
-
         assert!(
-            root.join("generated/ios/hello-atom/resources/AppIcon.icon/icon.json")
+            root.join("generated/alpha/resources/alpha/logo.txt")
                 .exists()
         );
-        assert!(
-            root.join("generated/android/hello-atom/res/mipmap-xxxhdpi/ic_launcher.png")
-                .exists()
+        assert!(root.join("generated/beta/resources/beta.txt").exists());
+        assert_eq!(
+            plan.backend("alpha")
+                .and_then(|backend| backend.metadata.get("plugin_marker"))
+                .cloned(),
+            Some(Value::String("alpha".to_owned()))
         );
-        assert!(ios_plist.contains("<key>CFBundleIconName</key>"));
-        assert!(ios_plist.contains("<string>AppIcon</string>"));
-        assert!(ios_build.contains("glob(["));
-        assert!(ios_build.contains("\"resources/AppIcon.icon/**\""));
-        assert!(android_manifest.contains("android:icon=\"@mipmap/ic_launcher\""));
-        assert!(android_build.contains("resource_files = ["));
-        assert!(android_build.contains("\"res/mipmap-xxxhdpi/ic_launcher.png\""));
+        assert_eq!(
+            plan.backend("beta")
+                .and_then(|backend| backend.metadata.get("plugin_marker"))
+                .cloned(),
+            Some(Value::String("beta".to_owned()))
+        );
+        assert_eq!(
+            plan.backend("alpha")
+                .expect("alpha backend")
+                .bazel_resource_globs,
+            vec!["resources/alpha/**".to_owned()]
+        );
+        assert_eq!(
+            plan.backend("beta").expect("beta backend").bazel_resources,
+            vec!["resources/beta.txt".to_owned()]
+        );
     }
 
     #[test]
     fn config_plugin_directory_copies_do_not_leave_stale_files() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (mut manifest, modules) = write_fixture(&root);
+        let (mut manifest, modules) = fixture_manifest_and_modules(&root);
         manifest.build.generated_root = Utf8PathBuf::from("cng-output");
 
-        fs::create_dir_all(root.join("assets/AppIcon.icon/Assets")).expect("assets dir");
-        fs::write(
-            root.join("assets/AppIcon.icon/icon.json"),
-            "{\"name\":\"AppIcon\"}",
-        )
-        .expect("icon json");
-        fs::write(root.join("assets/AppIcon.icon/Assets/atom.svg"), "<svg />").expect("atom svg");
-        fs::write(root.join("assets/ic_launcher.png"), "png").expect("png");
-        manifest.config_plugins.push(ConfigPluginRequest {
-            target_label: "//tests:fixture_plugin".to_owned(),
-            id: "fixture_plugin".to_owned(),
-            atom_api_level: 1,
-            min_atom_version: Some("0.1.0".to_owned()),
-            ios_min_deployment_target: Some("17.0".to_owned()),
-            android_min_sdk: Some(28),
-            config: JsonMap::new(),
-        });
+        fs::create_dir_all(root.join("assets/alpha/subdir")).expect("assets dir");
+        fs::write(root.join("assets/alpha/logo.txt"), "alpha").expect("alpha file");
+        fs::write(root.join("assets/alpha/subdir/detail.txt"), "detail").expect("detail file");
+        fs::write(root.join("assets/beta.txt"), "beta").expect("beta");
+        manifest.config_plugins.push(fixture_config_plugin_request(
+            "fixture_plugin",
+            "//tests:fixture_plugin",
+        ));
 
         let mut registry = fixture_registry();
         register_fixture_plugin(&mut registry);
 
-        let generation_registry = first_party_generation_registry();
+        let generation_registry = generation_registry(&["alpha"]);
         let initial_plan =
             build_generation_plan(&manifest, &modules, &registry, &generation_registry)
                 .expect("plan");
         emit_host_tree(&root, &initial_plan, &generation_registry).expect("host tree");
 
-        let generated_svg =
-            root.join("cng-output/ios/hello-atom/resources/AppIcon.icon/Assets/atom.svg");
-        assert!(generated_svg.exists());
+        let generated_detail = root.join("cng-output/alpha/resources/alpha/subdir/detail.txt");
+        assert!(generated_detail.exists());
 
-        fs::remove_file(root.join("assets/AppIcon.icon/Assets/atom.svg")).expect("remove svg");
+        fs::remove_file(root.join("assets/alpha/subdir/detail.txt")).expect("remove detail");
 
         let second_plan =
             build_generation_plan(&manifest, &modules, &registry, &generation_registry)
                 .expect("plan");
         emit_host_tree(&root, &second_plan, &generation_registry).expect("host tree");
 
-        assert!(!generated_svg.exists());
+        assert!(!generated_detail.exists());
         assert!(
-            root.join("cng-output/ios/hello-atom/resources/AppIcon.icon/Assets")
+            root.join("cng-output/alpha/resources/alpha/subdir")
                 .exists()
         );
     }
@@ -1120,10 +886,10 @@ mod tests {
     fn incompatible_module_metadata_fails_before_generation() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        let (manifest, mut modules) = write_fixture(&root);
+        let (manifest, mut modules) = fixture_manifest_and_modules(&root);
         modules[0].manifest.atom_api_level = 2;
 
-        let generation_registry = first_party_generation_registry();
+        let generation_registry = generation_registry(&["fixture"]);
         let error = build_generation_plan(
             &manifest,
             &modules,
