@@ -2,15 +2,14 @@ use std::collections::BTreeMap;
 use std::thread;
 use std::time::Duration;
 
+use atom_backends::{
+    InteractionRequest, InteractionResult, ScreenInfo, ToolRunner, UiBounds, UiNode, UiSnapshot,
+};
+use atom_deploy::{capture_tool, run_tool};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::Utf8Path;
 
-use crate::tools::{ToolRunner, capture_tool, run_tool};
-
-use super::{
-    InteractionRequest, InteractionResult, ScreenInfo, UiBounds, UiNode, UiSnapshot,
-    resolve_interaction_point, timestamp_suffix,
-};
+use crate::deploy::{resolve_interaction_point, timestamp_suffix};
 
 const ACTION_SETTLE_DELAY: Duration = Duration::from_millis(250);
 
@@ -27,7 +26,7 @@ struct AndroidUiElement {
 pub(crate) fn inspect_ui_with_android_uiautomator(
     repo_root: &Utf8Path,
     serial: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
 ) -> AtomResult<AndroidUiSnapshot> {
     let remote_path = format!("/sdcard/atom-ui-{}.xml", timestamp_suffix());
     run_tool(
@@ -58,7 +57,7 @@ pub(crate) fn inspect_ui_with_android_uiautomator(
 pub(crate) fn interact_with_android_uiautomator(
     repo_root: &Utf8Path,
     serial: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     request: InteractionRequest,
 ) -> AtomResult<InteractionResult> {
     match request {

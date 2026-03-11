@@ -24,6 +24,10 @@ architecture boundaries, or updates the plan/spec.
    - Links in docs that point to non-existent files
    - `SPEC.md` sections that contradict current implementation
    - `AGENTS.md` instructions that reference removed or renamed paths
+   - Docs that place concrete iOS/Android behavior back into `atom-backends`, `atom-cng`, or
+     `atom-deploy` instead of backend crates
+   - Docs that collapse serialized destination `platform` into `backend_id` or imply disabled
+     `atom run --platform <platform>` failures may rewrite generated trees
 
 ## Model vs. script split
 

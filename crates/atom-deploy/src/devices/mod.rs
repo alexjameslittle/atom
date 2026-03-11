@@ -1,6 +1,3 @@
-pub mod android;
-pub mod ios;
-
 use std::io::{self, IsTerminal};
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};

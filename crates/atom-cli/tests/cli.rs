@@ -17,13 +17,13 @@ fn run_requires_a_target_flag() {
     let directory = tempdir().expect("tempdir");
     let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
 
-    let error =
-        run_from_args(["atom", "run", "ios"], &root).expect_err("missing target should fail");
+    let error = run_from_args(["atom", "run", "--platform", "ios"], &root)
+        .expect_err("missing target should fail");
     assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
 }
 
 #[test]
-fn run_accepts_a_device_flag_after_platform_subcommand() {
+fn run_accepts_a_device_flag_after_platform_flag() {
     let directory = tempdir().expect("tempdir");
     let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
     fs::write(root.join("MODULE.bazel"), "module(name = \"atom\")\n").expect("workspace");
@@ -32,6 +32,7 @@ fn run_accepts_a_device_flag_after_platform_subcommand() {
         [
             "atom",
             "run",
+            "--platform",
             "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",

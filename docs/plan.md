@@ -251,16 +251,17 @@ The core abstraction should be `platform + destination`:
 
 Planned command surface:
 
-- `atom destinations --json`
-- `atom devices <ios|android> [--json]`
-- `atom evidence logs --destination <id> --output <path>`
-- `atom evidence screenshot --destination <id> --output <path>`
-- `atom evidence video --destination <id> --output <path>`
-- `atom inspect ui --destination <id> [--output <path>]`
-- `atom run <ios|android> --detach`
-- `atom stop <ios|android>`
-- `atom interact --destination <id> ...` for tap, long-press, swipe, drag, and text entry
-- `atom evaluate run --destination <id> --plan <path> --artifacts-dir <path>`
+- `atom destinations --platform <platform> --json`
+- `atom devices --platform <platform> [--json]`
+- `atom evidence logs --platform <platform> --destination <id> --output <path>`
+- `atom evidence screenshot --platform <platform> --destination <id> --output <path>`
+- `atom evidence video --platform <platform> --destination <id> --output <path>`
+- `atom inspect ui --platform <platform> --destination <id> [--output <path>]`
+- `atom run --platform <platform> --detach`
+- `atom stop --platform <platform>`
+- `atom interact --platform <platform> --destination <id> ...` for tap, long-press, swipe, drag, and
+  text entry
+- `atom evaluate run --platform <platform> --destination <id> --plan <path> --artifacts-dir <path>`
 
 Minimum evaluation plan capabilities:
 
@@ -532,20 +533,20 @@ Deliverables:
 
 - iOS `BUILD.bazel` uses `ios_application` from `rules_apple` (replaces `swift_binary`)
 - Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
-- `atom run ios` builds, installs, and launches on iOS simulator via `idb`
-- `atom run android` builds, installs, and launches on Android emulator via `adb`
-- `atom run ios|android --detach` launches, waits for an inspectable app session, and then returns
-  without holding the terminal open for log streaming
-- `atom stop ios|android` stops the selected app without uninstalling it
+- `atom run --platform ios` builds, installs, and launches on iOS simulator via `idb`
+- `atom run --platform android` builds, installs, and launches on Android emulator via `adb`
+- `atom run --platform <platform> --detach` launches, waits for an inspectable app session, and then
+  returns without holding the terminal open for log streaming
+- `atom stop --platform <platform>` stops the selected app without uninstalling it
 - Ad-hoc code signing for simulator builds
 
 Exit criteria:
 
-- `atom run ios` launches the example app on an iOS simulator
-- `atom run android` launches the example app on an Android emulator
-- `atom run ios|android --detach` leaves the example app running for follow-on inspection or
-  evidence capture
-- `atom stop ios|android` cleans up a detached example session
+- `atom run --platform ios` launches the example app on an iOS simulator
+- `atom run --platform android` launches the example app on an Android emulator
+- `atom run --platform <platform> --detach` leaves the example app running for follow-on inspection
+  or evidence capture
+- `atom stop --platform <platform>` cleans up a detached example session
 - No Xcode project or Gradle project is required
 
 ### Phase 4A: Runtime kernel
@@ -636,11 +637,12 @@ pub trait ConfigPlugin: Send + Sync {
     /// Validate plugin config. Called before any contribute methods.
     fn validate(&self) -> AtomResult<()>;
 
-    /// Contribute to the iOS host tree. Return empty contribution if not applicable.
-    fn contribute_ios(&self, ctx: &ConfigPluginContext) -> AtomResult<PlatformContribution>;
-
-    /// Contribute to the Android host tree. Return empty contribution if not applicable.
-    fn contribute_android(&self, ctx: &ConfigPluginContext) -> AtomResult<PlatformContribution>;
+    /// Contribute to a backend-owned host tree. Return empty contribution if not applicable.
+    fn contribute_backend(
+        &self,
+        backend_id: &str,
+        ctx: &ConfigPluginContext,
+    ) -> AtomResult<BackendContribution>;
 }
 
 pub struct ConfigPluginContext<'a> {
@@ -649,10 +651,9 @@ pub struct ConfigPluginContext<'a> {
     pub generated_root: &'a Utf8Path,
 }
 
-pub struct PlatformContribution {
+pub struct BackendContribution {
     pub files: Vec<ContributedFile>,
-    pub plist_entries: JsonMap,
-    pub android_manifest_entries: JsonMap,
+    pub metadata_entries: JsonMap,
     pub bazel_resources: Vec<String>,
 }
 
@@ -719,8 +720,8 @@ Each plugin macro should also declare compatibility metadata alongside the opaqu
 `android_min_sdk` are optional.
 
 The framework reads this array, validates compatibility first, instantiates each plugin by `id`,
-passes the opaque `config` to the plugin for parsing and validation, then calls
-`contribute_ios`/`contribute_android` during plan building.
+passes the opaque `config` to the plugin for parsing and validation, then calls `contribute_backend`
+during plan building.
 
 #### Plan merge integration
 
@@ -732,17 +733,14 @@ for plugin_entry in manifest.config_plugins:
     plugin = instantiate_plugin(plugin_entry.id, plugin_entry.config)
     plugin.validate() or error
 
-    if manifest.ios.enabled:
-        contrib = plugin.contribute_ios(ctx)
-        plan.plist = deep_merge(plan.plist, contrib.plist_entries) or error CNG_CONFLICT
+    for backend_id in plan.backends.keys():
+        contrib = plugin.contribute_backend(backend_id, ctx)
+        plan.backends[backend_id].metadata = deep_merge(
+            plan.backends[backend_id].metadata,
+            contrib.metadata_entries,
+        ) or error CNG_CONFLICT
         plan.files.extend(contrib.files)
-        plan.ios_resources.extend(contrib.bazel_resources)
-
-    if manifest.android.enabled:
-        contrib = plugin.contribute_android(ctx)
-        plan.android_manifest = deep_merge(plan.android_manifest, contrib.android_manifest_entries) or error CNG_CONFLICT
-        plan.files.extend(contrib.files)
-        plan.android_resources.extend(contrib.bazel_resources)
+        plan.backends[backend_id].resources.extend(contrib.bazel_resources)
 ```
 
 #### First plugin: `atom-cng-app-icon`
@@ -771,7 +769,7 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 
 #### Deliverables
 
-- `ConfigPlugin` trait and `PlatformContribution` types in `atom-cng`
+- `ConfigPlugin` trait in `atom-cng` and `BackendContribution` shared contract types
 - `config_plugins` param on `atom_app()` accepting a list of plugin config dicts
 - `config_plugins` field in the app metadata JSON schema
 - Compatibility metadata and validation for modules and config/CNG plugins
@@ -797,23 +795,23 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 
 Deliverables:
 
-- `atom run ios`
-- `atom run android`
-- `atom run ios --detach`
-- `atom run android --detach`
-- `atom stop ios`
-- `atom stop android`
+- `atom run --platform ios`
+- `atom run --platform android`
+- `atom run --platform ios --detach`
+- `atom run --platform android --detach`
+- `atom stop --platform ios`
+- `atom stop --platform android`
 - `atom test`
 - Plugin authoring and consumption docs for first-party and third-party crates
 - Example app proving first-party and third-party-style plugin composition
-- `atom destinations --json`
-- `atom devices ios|android --json`
-- `atom evidence logs`
-- `atom evidence screenshot`
-- `atom evidence video`
-- `atom inspect ui`
-- `atom interact` for tap, long-press, swipe, drag, and text entry
-- `atom evaluate run`
+- `atom destinations --platform <platform> --json`
+- `atom devices --platform <platform> --json`
+- `atom evidence logs --platform <platform>`
+- `atom evidence screenshot --platform <platform>`
+- `atom evidence video --platform <platform>`
+- `atom inspect ui --platform <platform>`
+- `atom interact --platform <platform>` for tap, long-press, swipe, drag, and text entry
+- `atom evaluate run --platform <platform>`
 - hello-world-owned demo surface module plus a plain app variant that proves automation does not
   depend on app-specific hooks
 - Repo-local skills for destination discovery, evidence capture, and UI evaluation

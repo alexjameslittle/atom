@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use atom_backends::ToolRunner;
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -11,33 +12,6 @@ pub struct CommandOutput {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub exit_code: i32,
-}
-
-pub trait ToolRunner {
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails.
-    fn run(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails.
-    fn capture(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<String>;
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails.
-    fn capture_json_file(
-        &mut self,
-        repo_root: &Utf8Path,
-        tool: &str,
-        args: &[String],
-    ) -> AtomResult<String>;
-    /// Run a tool with stdout and stderr inherited from the current process, streaming
-    /// output directly to the terminal. Blocks until the process exits.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tool invocation fails or exits with a non-zero status.
-    fn stream(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
 }
 
 pub struct ProcessRunner;
@@ -185,7 +159,7 @@ impl ToolRunner for ProcessRunner {
 ///
 /// Returns an error if the tool invocation fails.
 pub fn run_tool(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     tool: &str,
     args: &[&str],
@@ -204,7 +178,7 @@ pub fn run_tool(
 ///
 /// Returns an error if the tool invocation fails.
 pub fn stream_tool(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     tool: &str,
     args: &[&str],
@@ -223,7 +197,7 @@ pub fn stream_tool(
 ///
 /// Returns an error if the tool invocation fails.
 pub fn capture_tool(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     tool: &str,
     args: &[&str],
@@ -242,7 +216,7 @@ pub fn capture_tool(
 ///
 /// Returns an error if the tool invocation fails.
 pub fn capture_json_tool(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     tool: &str,
     args: &[&str],
@@ -261,7 +235,7 @@ pub fn capture_json_tool(
 ///
 /// Returns an error if bazelisk fails.
 pub fn run_bazel(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     args: &[&str],
 ) -> AtomResult<()> {
@@ -272,7 +246,7 @@ pub fn run_bazel(
 ///
 /// Returns an error if bazelisk fails.
 pub fn run_bazel_owned(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     args: &[String],
 ) -> AtomResult<()> {
@@ -283,7 +257,7 @@ pub fn run_bazel_owned(
 ///
 /// Returns an error if bazelisk fails.
 pub fn capture_bazel(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     args: &[&str],
 ) -> AtomResult<String> {
@@ -294,7 +268,7 @@ pub fn capture_bazel(
 ///
 /// Returns an error if bazelisk fails.
 pub fn capture_bazel_owned(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     args: &[String],
 ) -> AtomResult<String> {
@@ -305,7 +279,7 @@ pub fn capture_bazel_owned(
 ///
 /// Returns an error if bazelisk cquery fails or no matching artifact is found.
 pub fn find_bazel_output(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     target: &str,
     suffixes: &[&str],
@@ -319,7 +293,7 @@ pub fn find_bazel_output(
 ///
 /// Returns an error if bazelisk cquery fails or no matching artifact is found.
 pub fn find_bazel_output_owned(
-    runner: &mut impl ToolRunner,
+    runner: &mut (impl ToolRunner + ?Sized),
     repo_root: &Utf8Path,
     build_args: &[String],
     target: &str,

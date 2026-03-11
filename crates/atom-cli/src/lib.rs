@@ -2,19 +2,25 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
+use atom_backend_android::{
+    register_deploy_backend as register_android_deploy_backend,
+    register_generation_backend as register_android_generation_backend,
+};
+use atom_backend_ios::{
+    register_deploy_backend as register_ios_deploy_backend,
+    register_generation_backend as register_ios_generation_backend,
+};
+use atom_backends::{DeployBackendRegistry, GenerationBackendRegistry, InteractionRequest};
 use atom_cng::{ConfigPluginRegistry, build_generation_plan, emit_host_tree, render_prebuild_plan};
 pub use atom_deploy::CommandOutput;
-use atom_deploy::destinations::{
-    DestinationPlatform, list_destinations, list_platform_destinations, render_destination_lines,
-};
+use atom_deploy::destinations::{list_backend_destinations, render_destination_lines};
 use atom_deploy::evaluate::{
-    InteractionRequest, capture_logs, capture_screenshot, capture_video, evaluate_run, inspect_ui,
-    interact,
+    capture_logs, capture_screenshot, capture_video, evaluate_run, inspect_ui, interact,
 };
 use atom_deploy::progress::run_step;
 use atom_deploy::{
-    LaunchMode, ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel, stop_android,
-    stop_ios,
+    LaunchMode, ProcessRunner, ToolRunner, deploy_backend, ensure_backend_enabled, run_bazel,
+    stop_backend,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::load_manifest;
@@ -54,8 +60,10 @@ struct PrebuildArgs {
 
 #[derive(Debug, Args)]
 struct RunArgs {
-    #[command(subcommand)]
-    platform: RunPlatform,
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
+    #[command(flatten)]
+    target: TargetArgs,
 }
 
 #[derive(Debug, Args)]
@@ -68,16 +76,12 @@ struct TargetArgs {
     detach: bool,
 }
 
-#[derive(Debug, Subcommand)]
-enum RunPlatform {
-    Ios(TargetArgs),
-    Android(TargetArgs),
-}
-
 #[derive(Debug, Args)]
 struct StopArgs {
-    #[command(subcommand)]
-    platform: StopPlatform,
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
+    #[command(flatten)]
+    target: StopTargetArgs,
 }
 
 #[derive(Debug, Args)]
@@ -88,30 +92,35 @@ struct StopTargetArgs {
     destination: Option<String>,
 }
 
-#[derive(Debug, Subcommand)]
-enum StopPlatform {
-    Ios(StopTargetArgs),
-    Android(StopTargetArgs),
-}
-
 #[derive(Debug, Args)]
 struct ListDestinationsArgs {
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct DevicesArgs {
-    #[arg(value_enum)]
-    platform: DevicePlatform,
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum DevicePlatform {
+enum PlatformArg {
     Ios,
     Android,
+}
+
+impl PlatformArg {
+    fn as_backend_id(self) -> &'static str {
+        match self {
+            Self::Ios => "ios",
+            Self::Android => "android",
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -157,6 +166,8 @@ struct EvidenceVideoArgs {
 
 #[derive(Debug, Args)]
 struct TargetDestinationArgs {
+    #[arg(long, value_enum)]
+    platform: PlatformArg,
     #[arg(long)]
     target: String,
     #[arg(long, alias = "device")]
@@ -307,7 +318,13 @@ fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOu
     let repo_root = resolve_workspace_root(cwd)?;
     let manifest = load_manifest(&repo_root, &args.target)?;
     let modules = resolve_modules(&repo_root, &manifest.modules)?;
-    let plan = build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
+    let generation_registry = first_party_generation_backend_registry()?;
+    let plan = build_generation_plan(
+        &manifest,
+        &modules,
+        &default_config_plugin_registry(),
+        &generation_registry,
+    )?;
 
     if args.dry_run {
         return Ok(CommandOutput {
@@ -317,7 +334,7 @@ fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOu
         });
     }
 
-    let roots = emit_host_tree(&repo_root, &plan)?;
+    let roots = emit_host_tree(&repo_root, &plan, &generation_registry)?;
     let mut summary = String::new();
     for root in roots {
         summary.push_str(root.as_str());
@@ -336,60 +353,54 @@ fn execute_run(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let (platform, target) = match &args.platform {
-        RunPlatform::Ios(target) => ("ios", target),
-        RunPlatform::Android(target) => ("android", target),
-    };
+    let platform = args.platform.as_backend_id();
+    let target = &args.target;
     let manifest = load_manifest(&repo_root, &target.target)?;
     let launch_mode = if target.detach {
         LaunchMode::Detached
     } else {
         LaunchMode::Attached
     };
-    let enabled = match platform {
-        "ios" => manifest.ios.enabled,
-        "android" => manifest.android.enabled,
-        _ => unreachable!("run platform should be validated by clap"),
-    };
-    if !enabled {
-        return Err(AtomError::with_path(
-            AtomErrorCode::ManifestInvalidValue,
-            format!("{platform} platform is not enabled"),
-            platform,
-        ));
-    }
+    let deploy_registry = first_party_deploy_backend_registry()?;
 
+    preflight_run_backend(&manifest, &deploy_registry, platform, || {
+        let modules = resolve_modules(&repo_root, &manifest.modules)?;
+        let generation_registry = first_party_generation_backend_registry()?;
+        let plan = build_generation_plan(
+            &manifest,
+            &modules,
+            &default_config_plugin_registry(),
+            &generation_registry,
+        )?;
+        emit_host_tree(&repo_root, &plan, &generation_registry).map(|_| ())
+    })?;
+
+    deploy_backend(
+        &repo_root,
+        &manifest,
+        &deploy_registry,
+        platform,
+        target.destination.as_deref(),
+        launch_mode,
+        runner,
+    )?;
+
+    Ok(success_output(Vec::new()))
+}
+
+fn preflight_run_backend(
+    manifest: &atom_manifest::NormalizedManifest,
+    deploy_registry: &DeployBackendRegistry,
+    backend_id: &str,
+    generate: impl FnOnce() -> AtomResult<()>,
+) -> AtomResult<()> {
+    ensure_backend_enabled(manifest, deploy_registry, backend_id)?;
     run_step(
         "Generating build files...",
         "Build files generated",
         "Code generation failed",
-        || {
-            let modules = resolve_modules(&repo_root, &manifest.modules)?;
-            let plan =
-                build_generation_plan(&manifest, &modules, &default_config_plugin_registry())?;
-            emit_host_tree(&repo_root, &plan)
-        },
-    )?;
-
-    match platform {
-        "ios" => deploy_ios(
-            &repo_root,
-            &manifest,
-            target.destination.as_deref(),
-            launch_mode,
-            runner,
-        )?,
-        "android" => deploy_android(
-            &repo_root,
-            &manifest,
-            target.destination.as_deref(),
-            launch_mode,
-            runner,
-        )?,
-        _ => unreachable!("run platform should be validated by clap"),
-    }
-
-    Ok(success_output(Vec::new()))
+        generate,
+    )
 }
 
 fn execute_stop(
@@ -398,29 +409,18 @@ fn execute_stop(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let (platform, target) = match &args.platform {
-        StopPlatform::Ios(target) => ("ios", target),
-        StopPlatform::Android(target) => ("android", target),
-    };
+    let platform = args.platform.as_backend_id();
+    let target = &args.target;
     let manifest = load_manifest(&repo_root, &target.target)?;
-    let enabled = match platform {
-        "ios" => manifest.ios.enabled,
-        "android" => manifest.android.enabled,
-        _ => unreachable!("stop platform should be validated by clap"),
-    };
-    if !enabled {
-        return Err(AtomError::with_path(
-            AtomErrorCode::ManifestInvalidValue,
-            format!("{platform} platform is not enabled"),
-            platform,
-        ));
-    }
-
-    match platform {
-        "ios" => stop_ios(&repo_root, &manifest, target.destination.as_deref(), runner)?,
-        "android" => stop_android(&repo_root, &manifest, target.destination.as_deref(), runner)?,
-        _ => unreachable!("stop platform should be validated by clap"),
-    }
+    let deploy_registry = first_party_deploy_backend_registry()?;
+    stop_backend(
+        &repo_root,
+        &manifest,
+        &deploy_registry,
+        platform,
+        target.destination.as_deref(),
+        runner,
+    )?;
 
     Ok(success_output(Vec::new()))
 }
@@ -439,7 +439,13 @@ fn execute_destinations(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let destinations = list_destinations(&repo_root, runner)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
+    let destinations = list_backend_destinations(
+        &repo_root,
+        &deploy_registry,
+        args.platform.as_backend_id(),
+        runner,
+    )?;
     if args.json {
         return json_output(&destinations);
     }
@@ -452,11 +458,13 @@ fn execute_devices(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
-    let platform = match args.platform {
-        DevicePlatform::Ios => DestinationPlatform::Ios,
-        DevicePlatform::Android => DestinationPlatform::Android,
-    };
-    let destinations = list_platform_destinations(&repo_root, platform, runner)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
+    let destinations = list_backend_destinations(
+        &repo_root,
+        &deploy_registry,
+        args.platform.as_backend_id(),
+        runner,
+    )?;
     if args.json {
         return json_output(&destinations);
     }
@@ -469,6 +477,7 @@ fn execute_evidence(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     match &args.command {
         EvidenceCommand::Logs(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
@@ -476,6 +485,8 @@ fn execute_evidence(
             capture_logs(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
                 args.seconds,
@@ -489,6 +500,8 @@ fn execute_evidence(
             capture_screenshot(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
                 runner,
@@ -501,6 +514,8 @@ fn execute_evidence(
             capture_video(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &output,
                 args.seconds,
@@ -517,10 +532,18 @@ fn execute_inspect(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     match &args.command {
         InspectCommand::Ui(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
-            let snapshot = inspect_ui(&repo_root, &manifest, &args.target.destination, runner)?;
+            let snapshot = inspect_ui(
+                &repo_root,
+                &manifest,
+                &deploy_registry,
+                args.target.platform.as_backend_id(),
+                &args.target.destination,
+                runner,
+            )?;
             if let Some(output) = args
                 .output
                 .as_ref()
@@ -564,6 +587,7 @@ fn execute_interact(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     let (target, request) = match &args.command {
         InteractCommand::Tap(args) => (
             &args.target,
@@ -604,7 +628,15 @@ fn execute_interact(
         ),
     };
     let manifest = load_manifest(&repo_root, &target.target)?;
-    let result = interact(&repo_root, &manifest, &target.destination, request, runner)?;
+    let result = interact(
+        &repo_root,
+        &manifest,
+        &deploy_registry,
+        target.platform.as_backend_id(),
+        &target.destination,
+        request,
+        runner,
+    )?;
     json_output(&result)
 }
 
@@ -614,6 +646,7 @@ fn execute_evaluate(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<CommandOutput> {
     let repo_root = resolve_workspace_root(cwd)?;
+    let deploy_registry = first_party_deploy_backend_registry()?;
     match &args.command {
         EvaluateCommand::Run(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
@@ -622,6 +655,8 @@ fn execute_evaluate(
             let result = evaluate_run(
                 &repo_root,
                 &manifest,
+                &deploy_registry,
+                args.target.platform.as_backend_id(),
                 &args.target.destination,
                 &plan,
                 &artifacts_dir,
@@ -658,6 +693,20 @@ fn default_config_plugin_registry() -> ConfigPluginRegistry {
     let mut registry = ConfigPluginRegistry::new();
     atom_cng_app_icon::register(&mut registry);
     registry
+}
+
+fn first_party_deploy_backend_registry() -> AtomResult<DeployBackendRegistry> {
+    let mut registry = DeployBackendRegistry::new();
+    register_ios_deploy_backend(&mut registry)?;
+    register_android_deploy_backend(&mut registry)?;
+    Ok(registry)
+}
+
+fn first_party_generation_backend_registry() -> AtomResult<GenerationBackendRegistry> {
+    let mut registry = GenerationBackendRegistry::new();
+    register_ios_generation_backend(&mut registry)?;
+    register_android_generation_backend(&mut registry)?;
+    Ok(registry)
 }
 
 fn resolve_workspace_root(cwd: &Utf8Path) -> AtomResult<Utf8PathBuf> {
@@ -707,18 +756,89 @@ fn find_workspace_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
+    use atom_backends::{
+        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+        LaunchMode, SessionLaunchBehavior, ToolRunner,
+    };
+    use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
     use clap::Parser;
     use tempfile::tempdir;
 
     use super::{
-        Cli, find_workspace_root, resolve_cli_path, resolve_workspace_root_with_workspace_dir,
-        run_from_args,
+        Cli, find_workspace_root, preflight_run_backend, resolve_cli_path,
+        resolve_workspace_root_with_workspace_dir, run_from_args,
     };
+
+    struct DisabledFixtureBackend;
+
+    impl BackendDefinition for DisabledFixtureBackend {
+        fn id(&self) -> &'static str {
+            "fixture"
+        }
+
+        fn platform(&self) -> &'static str {
+            "fixture-platform"
+        }
+    }
+
+    impl DeployBackend for DisabledFixtureBackend {
+        fn is_enabled(&self, _manifest: &NormalizedManifest) -> bool {
+            false
+        }
+
+        fn list_destinations(
+            &self,
+            _repo_root: &Utf8Path,
+            _runner: &mut dyn ToolRunner,
+        ) -> atom_ffi::AtomResult<Vec<atom_backends::DestinationDescriptor>> {
+            Ok(Vec::new())
+        }
+
+        fn deploy(
+            &self,
+            _repo_root: &Utf8Path,
+            _manifest: &NormalizedManifest,
+            _requested_destination: Option<&str>,
+            _launch_mode: LaunchMode,
+            _runner: &mut dyn ToolRunner,
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn stop(
+            &self,
+            _repo_root: &Utf8Path,
+            _manifest: &NormalizedManifest,
+            _requested_destination: Option<&str>,
+            _runner: &mut dyn ToolRunner,
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn new_automation_session<'a>(
+            &self,
+            _repo_root: &'a Utf8Path,
+            _manifest: &'a NormalizedManifest,
+            _destination_id: &'a str,
+            _runner: &'a mut dyn ToolRunner,
+            _launch_behavior: SessionLaunchBehavior,
+        ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+            unreachable!("CLI tests do not construct automation sessions")
+        }
+    }
 
     fn parse_cli(args: &[&str]) {
         Cli::try_parse_from(args).expect("clap should accept the command");
+    }
+
+    fn runnable_manifest(root: &Utf8Path) -> NormalizedManifest {
+        fixture_manifest(root)
     }
 
     #[test]
@@ -770,6 +890,7 @@ mod tests {
             [
                 "atom",
                 "run",
+                "--platform",
                 "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
@@ -788,6 +909,7 @@ mod tests {
         parse_cli(&[
             "atom",
             "run",
+            "--platform",
             "android",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
@@ -805,6 +927,7 @@ mod tests {
             [
                 "atom",
                 "stop",
+                "--platform",
                 "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
@@ -820,13 +943,34 @@ mod tests {
 
     #[test]
     fn destinations_command_accepts_json_flag() {
-        parse_cli(&["atom", "destinations", "--json"]);
+        parse_cli(&["atom", "destinations", "--platform", "ios", "--json"]);
     }
 
     #[test]
     fn devices_command_accepts_platform_and_json_flag() {
-        parse_cli(&["atom", "devices", "ios", "--json"]);
-        parse_cli(&["atom", "devices", "android", "--json"]);
+        parse_cli(&["atom", "devices", "--platform", "ios", "--json"]);
+        parse_cli(&["atom", "devices", "--platform", "android", "--json"]);
+    }
+
+    #[test]
+    fn disabled_run_backend_fails_before_generation() {
+        let mut registry = DeployBackendRegistry::new();
+        registry
+            .register(Box::new(DisabledFixtureBackend))
+            .expect("fixture backend should register");
+        let root = Utf8PathBuf::from(".");
+        let manifest = runnable_manifest(&root);
+        let generated = Arc::new(AtomicBool::new(false));
+        let generated_flag = Arc::clone(&generated);
+
+        let error = preflight_run_backend(&manifest, &registry, "fixture", move || {
+            generated_flag.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect_err("disabled backend should fail before generation");
+
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::ManifestInvalidValue);
+        assert!(!generated.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -835,6 +979,8 @@ mod tests {
             "atom",
             "evidence",
             "logs",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -848,6 +994,8 @@ mod tests {
             "atom",
             "evidence",
             "screenshot",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -859,6 +1007,8 @@ mod tests {
             "atom",
             "evidence",
             "video",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -881,6 +1031,8 @@ mod tests {
                 "atom",
                 "inspect",
                 "ui",
+                "--platform",
+                "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
                 "--destination",
@@ -901,6 +1053,8 @@ mod tests {
             "atom",
             "interact",
             "tap",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -912,6 +1066,8 @@ mod tests {
             "atom",
             "interact",
             "type-text",
+            "--platform",
+            "ios",
             "--target",
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--destination",
@@ -932,6 +1088,8 @@ mod tests {
                 "atom",
                 "evaluate",
                 "run",
+                "--platform",
+                "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",
                 "--destination",

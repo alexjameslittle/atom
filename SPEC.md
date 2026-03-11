@@ -779,6 +779,18 @@ Rules:
   manifest before host generation begins
 - compatibility failures MUST identify the offending target label and field
 
+### 9.1.3 Backend Registry Boundaries
+
+Rules:
+
+- `atom-backends`, `atom-cng`, and `atom-deploy` MUST remain backend-neutral orchestration layers.
+- Those generic crates MUST dispatch through registered backend contracts and MUST NOT hard-code
+  concrete first-party backend ids or iOS/Android-specific branching.
+- Backend-specific CNG emission, destination parsing, deploy/evaluate behavior, and golden-file
+  assertions MUST live in first-party backend crates.
+- Generic crate tests SHOULD use neutral fixture backend ids. Backend-specific tests SHOULD live in
+  backend crate test targets.
+
 ### 9.2 Merge Rules
 
 | Artifact              | Rule                               | Conflict Behavior                                  |
@@ -803,15 +815,18 @@ MUST fail generation.
 ```text
 function build_generation_plan(manifest, modules, framework):
     plan = new GenerationPlan()
-    plan.app = manifest.app
 
     validate_extension_compatibility(modules, manifest.config_plugins, manifest, framework)
         or error EXTENSION_INCOMPATIBLE
 
     for module in modules in resolved order:
         plan.permissions = union(plan.permissions, module.permissions)
-        plan.plist = deep_merge(plan.plist, module.plist) or error CNG_CONFLICT
-        plan.android_manifest = deep_merge(plan.android_manifest, module.android_manifest) or error CNG_CONFLICT
+        plan.backends["ios"].metadata = deep_merge(plan.backends["ios"].metadata, module.plist)
+            or error CNG_CONFLICT
+        plan.backends["android"].metadata = deep_merge(
+            plan.backends["android"].metadata,
+            module.android_manifest,
+        ) or error CNG_CONFLICT
         plan.entitlements = deep_merge(plan.entitlements, module.entitlements) or error CNG_CONFLICT
         plan.generated_sources.extend(module.generated_sources)
         plan.module_bindings.append(module.id)
@@ -819,21 +834,19 @@ function build_generation_plan(manifest, modules, framework):
     for entry in manifest.config_plugins in declaration order:
         plugin = instantiate_plugin(entry.id, entry.config)
         plugin.validate() or error
-        if manifest.ios.enabled:
-            ios_contrib = plugin.contribute_ios(ctx)
-            plan.plist = deep_merge(plan.plist, ios_contrib.plist_entries) or error CNG_CONFLICT
-            plan.files.extend(ios_contrib.files)
-            plan.ios_resources.extend(ios_contrib.bazel_resources)
-        if manifest.android.enabled:
-            android_contrib = plugin.contribute_android(ctx)
-            plan.android_manifest = deep_merge(plan.android_manifest, android_contrib.android_manifest_entries) or error CNG_CONFLICT
-            plan.files.extend(android_contrib.files)
-            plan.android_resources.extend(android_contrib.bazel_resources)
+        for backend_id in plan.backends.keys():
+            backend_contrib = plugin.contribute_backend(backend_id, ctx)
+            plan.backends[backend_id].metadata = deep_merge(
+                plan.backends[backend_id].metadata,
+                backend_contrib.metadata_entries,
+            ) or error CNG_CONFLICT
+            plan.files.extend(backend_contrib.files)
+            plan.backends[backend_id].resources.extend(backend_contrib.bazel_resources)
 
-    if manifest.ios.enabled:
-        plan.ios = build_ios_plan(manifest, plan)
-    if manifest.android.enabled:
-        plan.android = build_android_plan(manifest, plan)
+    for backend in backend_registry:
+        backend_plan = backend.build_backend_plan(manifest)
+        if backend_plan is not None:
+            plan.backends[backend.id].plan = backend_plan
 
     return plan
 ```
@@ -844,14 +857,9 @@ function build_generation_plan(manifest, modules, framework):
 function emit_host_tree(plan):
     roots = []
 
-    if plan.ios exists:
-        root = generated_root / "ios" / plan.app.slug
-        write_ios_files(root, plan)
-        roots.push(root)
-
-    if plan.android exists:
-        root = generated_root / "android" / plan.app.slug
-        write_android_files(root, plan)
+    for backend in plan.backends:
+        write_backend_files(backend, plan)
+        root = backend.plan.generated_root
         roots.push(root)
 
     return roots
@@ -915,7 +923,8 @@ table PrebuildModule {
   crate: string;
 }
 
-table PrebuildPlatform {
+table PrebuildBackend {
+  id: string;
   generated_root: string;
   target: string;
 }
@@ -930,8 +939,7 @@ table PrebuildPlan {
   status: string;
   app: PrebuildApp;
   modules: [PrebuildModule];
-  ios: PrebuildPlatform;
-  android: PrebuildPlatform;
+  backends: [PrebuildBackend];
   schema: PrebuildSchema;
   generated_files: [string];
   warnings: [string];
@@ -944,10 +952,10 @@ For the canonical `hello-atom` example, the `atom.cli.PrebuildPlan` payload MUST
 - `app.slug = "hello-atom"`
 - `app.entry_crate = "apps/hello_atom"`
 - one module entry with `id = "device_info"` and `crate = "modules/device_info"`
-- `ios.generated_root = "generated/ios/hello-atom"`
-- `ios.target = "//generated/ios/hello-atom:app"`
-- `android.generated_root = "generated/android/hello-atom"`
-- `android.target = "//generated/android/hello-atom:app"`
+- one backend entry with `id = "ios"`, `generated_root = "generated/ios/hello-atom"`, and
+  `target = "//generated/ios/hello-atom:app"`
+- one backend entry with `id = "android"`, `generated_root = "generated/android/hello-atom"`, and
+  `target = "//generated/android/hello-atom:app"`
 - `schema.aggregate = "generated/schema/atom.fbs"`
 - `schema.modules[0] = "generated/schema/modules/device_info/device_info.fbs"`
 - `generated_files` containing, at minimum, `generated/schema/atom.fbs`,
@@ -1058,8 +1066,8 @@ Rules:
 
 #### 9.8.3 Run and Deploy
 
-`atom run ios` and `atom run android` MUST handle the full build-install-launch cycle, not just
-invoke `bazel run`.
+`atom run --platform ios` and `atom run --platform android` MUST handle the full
+build-install-launch cycle, not just invoke `bazel run`.
 
 iOS deployment sequence:
 
@@ -1083,17 +1091,17 @@ Rules:
 - Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`idb`, `adb`)
   are not available.
 - Both commands MUST stream build output to stderr.
-- `atom run ios|android --detach` MUST launch the selected app, wait until the app is
+- `atom run --platform <platform> --detach` MUST launch the selected app, wait until the app is
   automation-ready for follow-on inspection or evidence capture, and then return without waiting on
   long-lived log streaming.
-- `atom run ios|android` without `--detach` MAY stay attached to the launched app and stream app
-  logs until interruption or process exit.
-- `atom stop ios` and `atom stop android` MUST stop the selected app without uninstalling it or
-  shutting down the selected simulator, device, or emulator.
-- `atom run ios --device <udid>` and `atom run android --device <serial>` MUST support targeting a
-  specific simulator, emulator, or connected device.
-- When attached to an interactive TTY and `--device` is omitted, `atom run ios` and
-  `atom run android` SHOULD offer an interactive destination picker.
+- `atom run --platform <platform>` without `--detach` MAY stay attached to the launched app and
+  stream app logs until interruption or process exit.
+- `atom stop --platform ios` and `atom stop --platform android` MUST stop the selected app without
+  uninstalling it or shutting down the selected simulator, device, or emulator.
+- `atom run --platform ios --device <udid>` and `atom run --platform android --device <serial>` MUST
+  support targeting a specific simulator, emulator, or connected device.
+- When attached to an interactive TTY and `--device` is omitted, `atom run --platform ios` and
+  `atom run --platform android` SHOULD offer an interactive destination picker.
 
 #### 9.8.4 Developer Evaluation, Evidence, and Automation
 
@@ -1129,6 +1137,8 @@ Rules:
   and Android contracts.
 - Every destination MUST report a stable identifier, platform, destination kind, display name,
   availability, debug state, and capability set.
+- Machine-readable destination payloads MAY add `backend_id` or other backend-owned metadata, but
+  MUST preserve the top-level `platform` field for compatibility with existing consumers.
 - Evidence and interaction commands MUST work against the same runnable targets accepted by
   `atom run`, surfaced through the destination model.
 - Log capture MUST be able to collect Atom runtime logs plus relevant host-process logs for the
@@ -1167,19 +1177,19 @@ Required commands:
 
 - `atom prebuild`
 - `atom prebuild --dry-run`
-- `atom run ios`
-- `atom run android`
-- `atom stop ios`
-- `atom stop android`
-- `atom destinations`
-- `atom devices ios`
-- `atom devices android`
-- `atom evidence logs`
-- `atom evidence screenshot`
-- `atom evidence video`
-- `atom inspect ui`
-- `atom interact`
-- `atom evaluate run`
+- `atom run --platform ios`
+- `atom run --platform android`
+- `atom stop --platform ios`
+- `atom stop --platform android`
+- `atom destinations --platform <platform>`
+- `atom devices --platform ios`
+- `atom devices --platform android`
+- `atom evidence logs --platform <platform>`
+- `atom evidence screenshot --platform <platform>`
+- `atom evidence video --platform <platform>`
+- `atom inspect ui --platform <platform>`
+- `atom interact --platform <platform>`
+- `atom evaluate run --platform <platform>`
 - `atom test`
 
 ### 10.2 Exit Codes
@@ -1211,46 +1221,55 @@ consumes Atom via `bzlmod`.
 - MUST generate files under `build.generated_root`
 - SHOULD write one summary line per generated platform root
 
-`atom run ios`:
+`atom run --platform ios`:
 
 - MUST follow the iOS deployment sequence defined in Section 9.8.3
 - MUST accept `--detach`
+- MUST reject targets whose iOS backend is disabled in manifest metadata before generating or
+  rewriting host files under `build.generated_root`
 
-`atom run android`:
+`atom run --platform android`:
 
 - MUST follow the Android deployment sequence defined in Section 9.8.3
 - MUST accept `--detach`
+- MUST reject targets whose Android backend is disabled in manifest metadata before generating or
+  rewriting host files under `build.generated_root`
 
-`atom stop ios` and `atom stop android`:
+`atom stop --platform ios` and `atom stop --platform android`:
 
 - MUST resolve the same target manifest and destination identifiers accepted by the corresponding
   `atom run` command
 - MUST stop the selected app process without rebuilding, reinstalling, or uninstalling the app
 - SHOULD be idempotent when the selected app is not currently running
 
-`atom destinations`:
+`atom destinations --platform <platform>`:
 
 - MUST support a machine-readable output mode suitable for agents
 - MUST report stable destination identifiers, platform, destination kind, display name,
   availability, debug state, and capability set
+- MAY include a backend-specific `backend_id`, but MUST preserve the `platform` field in the
+  serialized payload
 
-`atom devices ios` and `atom devices android`:
+`atom devices --platform ios` and `atom devices --platform android`:
 
 - MUST be supported as compatibility commands for mobile-specific destination discovery
 - MUST support a machine-readable output mode suitable for agents
-- MUST report stable destination identifiers, destination kind, display name, and availability
+- MUST report stable destination identifiers, platform, destination kind, display name, and
+  availability
+- MAY include a backend-specific `backend_id`, but MUST preserve the `platform` field in the
+  serialized payload
 - Android emulator destinations MUST use stable `avd:<name>` identifiers rather than ephemeral
   `emulator-5554`-style serials; connected Android devices continue to use their adb serials
 - MUST only return destinations for the requested mobile platform
 
-`atom evidence screenshot`:
+`atom evidence screenshot --platform <platform>`:
 
 - MUST capture one screenshot from the selected destination
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the image to the requested output path
 
-`atom evidence video`:
+`atom evidence video --platform <platform>`:
 
 - MUST record a screen video from the selected destination
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
@@ -1259,7 +1278,7 @@ consumes Atom via `bzlmod`.
 - iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because `idb video` emits
   a QuickTime movie container even when the caller provides an `.mp4` suffix
 
-`atom evidence logs`:
+`atom evidence logs --platform <platform>`:
 
 - MUST collect logs from the selected destination or launched app process
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
@@ -1269,14 +1288,14 @@ consumes Atom via `bzlmod`.
 - SHOULD prefer app-focused log output over full-device syslog noise when the backend can scope or
   post-filter the stream
 
-`atom inspect ui`:
+`atom inspect ui --platform <platform>`:
 
 - MUST emit a machine-readable UI snapshot for the selected destination
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST include a screenshot reference or explicit screenshot output path in the snapshot payload
 
-`atom interact`:
+`atom interact --platform <platform>`:
 
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
@@ -1286,7 +1305,7 @@ consumes Atom via `bzlmod`.
 - MUST fail with `AUTOMATION_UNAVAILABLE` when the selected destination does not support the
   required backend
 
-`atom evaluate run`:
+`atom evaluate run --platform <platform>`:
 
 - MUST execute a machine-readable evaluation plan against one selected destination
 - MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
@@ -1311,7 +1330,7 @@ Evaluation contract rules:
 
 - Destinations are the canonical debug-target abstraction for evaluation.
 - Evidence and interaction commands MUST accept the same destination identifiers reported by
-  `atom destinations` and `atom devices`.
+  `atom destinations --platform <platform>` and `atom devices --platform <platform>`.
 - Agent workflows SHOULD prefer `atom run ... --detach`, `atom stop ...`, or direct evidence /
   interaction commands rather than depending on one long-lived attached `atom run` session.
 - Implementations MAY expose additional subcommands, but they MUST preserve the required commands
@@ -1329,6 +1348,8 @@ Evaluation contract rules:
   coordinate descriptor.
 - Evaluation output MUST include a machine-readable bundle manifest with the selected destination
   id, platform, timestamps, executed steps, per-step status, and artifact paths.
+- Evaluation bundle manifests MAY include backend-specific `backend_id` metadata inside the
+  serialized destination descriptor, but MUST preserve the `platform` field.
 
 ### 10.5 Reference Algorithm: `evaluate run`
 
@@ -1405,7 +1426,8 @@ Required behavior:
 Conformance example:
 
 - Input: canonical `hello-atom` app
-- Expected output: file tree from Section 9.5 plus successful `atom run ios` and `atom run android`
+- Expected output: file tree from Section 9.5 plus successful `atom run --platform ios` and
+  `atom run --platform android`
 
 ### 11.4 Phase 3: Runnable Mobile Hosts
 
@@ -1413,16 +1435,17 @@ Required behavior:
 
 - generated iOS `BUILD.bazel` uses `ios_application` from `rules_apple` per Section 9.8.1
 - generated Android `BUILD.bazel` uses `android_binary` per Section 9.8.2
-- `atom run ios` builds, installs, and launches on an iOS simulator per Section 9.8.3
-- `atom run android` builds, installs, and launches on an Android emulator per Section 9.8.3
+- `atom run --platform ios` builds, installs, and launches on an iOS simulator per Section 9.8.3
+- `atom run --platform android` builds, installs, and launches on an Android emulator per Section
+  9.8.3
 - no Xcode project or Gradle project is required
 
 Conformance example:
 
 - Input: canonical `hello-atom` app
-- Expected output: `atom run ios` launches the app on the booted iOS simulator with Rust lifecycle
-  callbacks executing. `atom run android` launches the app on an Android emulator with Rust
-  lifecycle callbacks executing via JNI.
+- Expected output: `atom run --platform ios` launches the app on the booted iOS simulator with Rust
+  lifecycle callbacks executing. `atom run --platform android` launches the app on an Android
+  emulator with Rust lifecycle callbacks executing via JNI.
 
 ### 11.5 Phase 4A: Runtime Kernel
 
@@ -1490,14 +1513,16 @@ A config plugin crate MUST implement:
 
 - `id() -> &str` returning a unique plugin identifier
 - `validate() -> AtomResult<()>` for plugin-owned config validation
-- `contribute_ios(ctx) -> AtomResult<PlatformContribution>` for iOS host customization
-- `contribute_android(ctx) -> AtomResult<PlatformContribution>` for Android host customization
+- `contribute_backend(backend_id, ctx) -> AtomResult<BackendContribution>` for backend-owned host
+  customization
 
-A `PlatformContribution` MUST contain:
+`atom-cng` MUST call only `contribute_backend(...)` on config plugins. It MUST NOT define or rely on
+hard-coded per-backend hook names such as `contribute_ios(...)` or `contribute_android(...)`.
+
+A `BackendContribution` MUST contain:
 
 - `files`: list of files to copy or generate into the host tree
-- `plist_entries`: plist fragments merged per Section 9.2
-- `android_manifest_entries`: manifest fragments merged per Section 9.2
+- `metadata_entries`: backend-owned metadata fragments merged per Section 9.2
 - `bazel_resources`: additional resources for the platform build rule
 
 CNG MUST merge all config plugin contributions after module metadata and before host tree emission.
@@ -1569,8 +1594,8 @@ Required behavior:
   generated roots
 - destination discovery, log capture, screenshot capture, video capture, UI inspection, and basic UI
   interaction work on runnable iOS and Android destinations
-- `atom evaluate run` can orchestrate launch, waits, inspection, interactions, and artifact capture
-  into one proof bundle
+- `atom evaluate run --platform <platform>` can orchestrate launch, waits, inspection, interactions,
+  and artifact capture into one proof bundle
 - automation backends are framework-owned and semantic-first per Section 9.8.4
 - the canonical example app MAY include an app-owned demo surface through native module sources, but
   framework automation MUST NOT depend on app-specific generated hooks

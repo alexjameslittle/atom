@@ -22,13 +22,19 @@ Use this skill when:
 
 1. Run `scripts/audit.sh`.
 2. For each changed file, identify the nearest existing test target or prove that none exists.
-3. Suggest the smallest test additions that would lock in the new behavior.
-4. Prefer focused unit or integration tests over broad hand-wavy “more coverage” advice.
+3. Prefer backend-specific assertions in backend crate `rust_test` targets instead of parking them
+   in generic crate tests.
+4. Suggest the smallest test additions that would lock in the new behavior.
+5. Prefer focused unit or integration tests over broad hand-wavy “more coverage” advice.
+6. When destination schemas or backend dispatch change, cover serialized compatibility fields,
+   disabled-backend preflight before generated-tree writes, and backend-specific stable destination
+   ids such as Android `avd:<name>`.
 
 ## Output
 
 - Changed files grouped by likely test target.
 - Files with no obvious nearby tests.
+- Backend behavior that should move into a backend crate test target instead of a generic crate.
 - Specific test additions or updates that should accompany the change.
 
 ## Model vs. script split

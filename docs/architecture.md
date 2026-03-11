@@ -13,7 +13,8 @@ Bazel is the only source of truth for build graph shape and app/module configura
 
 Dependency direction should move one way:
 
-`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-cng` -> `atom-deploy` -> `atom-cli`
+`atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-backends` -> `atom-cng` -> `atom-deploy` ->
+`atom-backend-{ios,android}` -> `atom-cli`
 
 `atom-runtime` and runtime plugin libraries remain separate from CLI/CNG graph orchestration.
 
@@ -30,23 +31,42 @@ Dependency direction should move one way:
   - Loads Bazel-generated module metadata
   - Validates module inputs
   - Resolves dependency order and initialization order
+- `atom-backends`
+  - Owns backend contracts, shared destination/evaluation/CNG data types, and generic registries
+  - Defines the compile-time seam for first-party backend composition without dynamic loading
+  - Stays platform-neutral; concrete iOS/Android behavior lives in backend implementation crates
 - `atom-cng`
-  - Validates extension compatibility for modules and config/CNG plugins
+  - Validates framework-wide extension compatibility and delegates backend-specific compatibility
+    checks to registered backends
   - Merges app + module + config-plugin configuration into deterministic generation plans
-  - Writes the host tree for dry-run or materialized output
+  - Dispatches backend planning and emission through registered `GenerationBackend` contracts
+  - Writes generic schema/contributed files plus delegates backend host-tree emission
 - `atom-cng-app-icon`
   - First-party config/CNG plugin crate implementing the public `ConfigPlugin` trait
   - Owns app icon config parsing, validation, file contributions, and platform resource wiring
 - `atom-deploy`
   - Device discovery and destination selection
-  - Build/install/launch orchestration for simulators, emulators, and connected devices
-  - Framework-owned evidence capture, UI inspection, interaction, and proof-bundle orchestration
-  - Resolves destinations and external tool invocations for deployment workflows, including `idb`
-    for iOS and platform tooling for Android
+  - Dispatches run/stop/evaluate flows through registered `DeployBackend` contracts
+  - Owns generic evidence capture, UI evaluation, and proof-bundle orchestration
+  - Preserves compatibility fields such as serialized destination `platform`; backend ids are
+    additive dispatch data, not replacements for stable machine-readable payload fields
   - Keeps platform deployment orchestration out of `atom-cli`
+- `atom-backend-ios`
+  - First-party iOS backend implementation crate
+  - Registers iOS deploy and CNG backends for the canonical CLI binary
+  - Owns iOS destination discovery, deploy/stop/evaluate implementation, and iOS host templates
+  - Owns iOS-specific CNG planning/emission and backend compatibility checks
+- `atom-backend-android`
+  - First-party Android backend implementation crate
+  - Registers Android deploy and CNG backends for the canonical CLI binary
+  - Owns Android destination discovery, deploy/stop/evaluate implementation, and Android host
+    templates
+  - Owns Android-specific CNG planning/emission and backend compatibility checks
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
   - Links the first-party config plugin registry used during `atom prebuild`
+  - Builds the canonical first-party backend registries used for deploy/evaluate/CNG composition
+  - Exposes uniform backend-aware verbs such as `atom run --platform <platform>`
   - Must stay a thin wrapper, not an alternate build system
 - `atom-runtime`
   - Runtime kernel: lifecycle state machine (Created → Initializing → Running →
@@ -79,10 +99,14 @@ Dependency direction should move one way:
 2. `atom-cli` resolves the requested app target.
 3. `atom-manifest` loads app metadata from Bazel outputs.
 4. `atom-modules` loads module metadata from Bazel outputs and orders dependencies.
-5. `atom-cng` validates module + config-plugin compatibility, instantiates registered config
-   plugins, and produces a deterministic generation plan.
-6. `atom-deploy` resolves platform-specific build outputs and deployment commands when needed.
-7. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
+5. `atom-cli` builds the canonical first-party backend registries for CNG and deploy/evaluate.
+6. `atom-cng` validates module + config-plugin compatibility, instantiates registered config
+   plugins, and produces a deterministic generation plan through registered backend planners.
+7. First-party backend crates contribute backend defaults, backend-specific compatibility checks,
+   and host-tree emission through the shared CNG contracts.
+8. `atom-deploy` resolves destinations, proof plans, and backend sessions through registered backend
+   contracts when needed.
+9. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
    kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
    Rust-backed runtime module registrations, enter through that app-owned configuration path.
 
@@ -91,6 +115,12 @@ Dependency direction should move one way:
 - Keep user-facing error mapping in `atom-ffi`.
 - Keep validation close to the loader that owns the data.
 - Keep codegen deterministic. Two identical inputs should produce the same plan and output tree.
+- Keep generic backend layers backend-neutral. `atom-backends`, `atom-cng`, and `atom-deploy` must
+  not encode concrete first-party backend ids, iOS/Android-specific branching, or backend- specific
+  golden tests.
+- Keep disabled-backend failures side-effect free. CLI preflight for
+  `atom run --platform <platform>` must reject disabled backends before CNG writes generated files.
+- Keep backend-specific assertions and fixtures in `atom-backend-*` crates or schema-owning crates.
 - Keep examples representative. The hello-world example should exercise real repo conventions, not a
   toy path that bypasses them.
 - Keep first-party plugins outside `atom-runtime`. The kernel owns lifecycle and registration, while

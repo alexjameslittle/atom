@@ -27,4 +27,7 @@ for forbidden in atom-cli atom-cng atom-deploy; do
 done
 
 echo ""
+sh scripts/check-generic-backend-leaks.sh
+
+echo ""
 echo "Dependency check complete."

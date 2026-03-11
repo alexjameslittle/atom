@@ -29,6 +29,7 @@ check_for_unverified_packages() {
 
 lint() {
   check_for_unverified_packages
+  sh scripts/check-generic-backend-leaks.sh
   # shellcheck disable=SC2086
   bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going $VERIFY_PACKAGES
   bazelisk run //:format.check

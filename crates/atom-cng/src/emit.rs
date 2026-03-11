@@ -1,19 +1,8 @@
 use std::{fs, io};
 
+use atom_backends::{ContributedFile, FileSource, GenerationBackendRegistry, GenerationPlan};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::{Utf8Path, Utf8PathBuf};
-
-use crate::android::{
-    kotlin_package_dir, render_android_build_file, render_android_manifest_xml,
-    render_android_runtime_jni, render_kotlin_application, render_kotlin_bindings,
-    render_kotlin_main_activity,
-};
-use crate::ios::{
-    render_ios_build_file, render_ios_launch_storyboard, render_ios_plist,
-    render_ios_runtime_bridge, render_ios_runtime_header, render_swift_app_delegate,
-    render_swift_bindings, render_swift_main, render_swift_scene_delegate,
-};
-use crate::{ContributedFile, FileSource, GenerationPlan};
 
 /// # Errors
 ///
@@ -21,18 +10,23 @@ use crate::{ContributedFile, FileSource, GenerationPlan};
 ///
 /// # Panics
 ///
-/// Panics if platform configs are missing when the corresponding platform plan
-/// exists, or if schema files lack the expected generated prefix.
-pub fn emit_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<Vec<Utf8PathBuf>> {
+/// Panics if platform configs are missing when the corresponding platform plan exists, or if
+/// schema files lack the expected generated prefix.
+pub fn emit_host_tree(
+    repo_root: &Utf8Path,
+    plan: &GenerationPlan,
+    registry: &GenerationBackendRegistry,
+) -> AtomResult<Vec<Utf8PathBuf>> {
     write_file(
         &repo_root.join(&plan.schema.aggregate),
         &crate::render_aggregate_schema(plan)?,
     )?;
     copy_schema_files(repo_root, plan)?;
     copy_contributed_files(repo_root, &plan.contributed_files)?;
-    emit_ios_host_tree(repo_root, plan)?;
-    emit_android_host_tree(repo_root, plan)?;
-    Ok(generated_roots(plan))
+    for backend in registry.iter() {
+        backend.emit_host_tree(repo_root, plan)?;
+    }
+    Ok(generated_roots(plan, registry))
 }
 
 fn copy_schema_files(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
@@ -50,122 +44,6 @@ fn copy_schema_files(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<
     Ok(())
 }
 
-fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
-    if let Some(ios) = &plan.ios {
-        let ios_config = plan
-            .ios_config
-            .as_ref()
-            .expect("ios config should exist when ios output exists");
-        write_file(
-            &repo_root.join(&ios.generated_root).join("BUILD.bazel"),
-            &render_ios_build_file(
-                &plan.app,
-                &plan.modules,
-                ios_config,
-                &plan.ios_resources,
-                &plan.ios_resource_globs,
-            )?,
-        )?;
-        write_file(
-            &repo_root
-                .join(&ios.generated_root)
-                .join("Info.generated.plist"),
-            &render_ios_plist(&plan.plist)?,
-        )?;
-        write_file(
-            &repo_root
-                .join(&ios.generated_root)
-                .join("LaunchScreen.storyboard"),
-            &render_ios_launch_storyboard(),
-        )?;
-        write_file(
-            &repo_root.join(&ios.generated_root).join("atom_runtime.h"),
-            &render_ios_runtime_header(),
-        )?;
-        write_file(
-            &repo_root
-                .join(&ios.generated_root)
-                .join("atom_runtime_app_bridge.rs"),
-            &render_ios_runtime_bridge(&plan.app)?,
-        )?;
-        write_file(
-            &repo_root
-                .join(&ios.generated_root)
-                .join("AtomAppDelegate.swift"),
-            &render_swift_app_delegate(&plan.app),
-        )?;
-        write_file(
-            &repo_root
-                .join(&ios.generated_root)
-                .join("SceneDelegate.swift"),
-            &render_swift_scene_delegate(&plan.app)?,
-        )?;
-        write_file(
-            &repo_root
-                .join(&ios.generated_root)
-                .join("AtomBindings.swift"),
-            &render_swift_bindings(&plan.modules)?,
-        )?;
-        write_file(
-            &repo_root.join(&ios.generated_root).join("main.swift"),
-            &render_swift_main(),
-        )?;
-    }
-    Ok(())
-}
-
-fn emit_android_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
-    if let Some(android) = &plan.android {
-        let android_config = plan
-            .android_config
-            .as_ref()
-            .expect("android config should exist when android output exists");
-        write_file(
-            &repo_root.join(&android.generated_root).join("BUILD.bazel"),
-            &render_android_build_file(
-                &plan.app,
-                &plan.modules,
-                android_config,
-                &plan.android_resources,
-            )?,
-        )?;
-        write_file(
-            &repo_root
-                .join(&android.generated_root)
-                .join("AndroidManifest.generated.xml"),
-            &render_android_manifest_xml(android_config, &plan.android_manifest)?,
-        )?;
-        write_file(
-            &repo_root
-                .join(&android.generated_root)
-                .join("atom_runtime_jni.rs"),
-            &render_android_runtime_jni(&plan.app, android_config)?,
-        )?;
-        let package_dir = android
-            .generated_root
-            .join("src/main/kotlin")
-            .join(kotlin_package_dir(
-                android_config
-                    .application_id
-                    .as_deref()
-                    .expect("android application id should exist when enabled"),
-            ));
-        write_file(
-            &repo_root.join(&package_dir).join("AtomApplication.kt"),
-            &render_kotlin_application(&plan.app, android_config)?,
-        )?;
-        write_file(
-            &repo_root.join(&package_dir).join("AtomBindings.kt"),
-            &render_kotlin_bindings(&plan.modules, android_config)?,
-        )?;
-        write_file(
-            &repo_root.join(&package_dir).join("MainActivity.kt"),
-            &render_kotlin_main_activity(&plan.app, &android.generated_root, android_config)?,
-        )?;
-    }
-    Ok(())
-}
-
 fn copy_contributed_files(repo_root: &Utf8Path, files: &[ContributedFile]) -> AtomResult<()> {
     for file in files {
         let destination = repo_root.join(&file.output);
@@ -177,18 +55,21 @@ fn copy_contributed_files(repo_root: &Utf8Path, files: &[ContributedFile]) -> At
     Ok(())
 }
 
-fn generated_roots(plan: &GenerationPlan) -> Vec<Utf8PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(ios) = &plan.ios {
-        roots.push(ios.generated_root.clone());
-    }
-    if let Some(android) = &plan.android {
-        roots.push(android.generated_root.clone());
-    }
-    roots
+fn generated_roots(
+    plan: &GenerationPlan,
+    registry: &GenerationBackendRegistry,
+) -> Vec<Utf8PathBuf> {
+    registry
+        .iter()
+        .filter_map(|backend| backend.generated_root(plan))
+        .collect()
 }
 
-fn write_file(path: &Utf8Path, contents: &str) -> AtomResult<()> {
+/// # Errors
+///
+/// Returns an error if the destination parent directory cannot be created or the file cannot be
+/// written.
+pub fn write_file(path: &Utf8Path, contents: &str) -> AtomResult<()> {
     write_parent_dir(path)?;
     fs::write(path, contents).map_err(|error| {
         AtomError::with_path(

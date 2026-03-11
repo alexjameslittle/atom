@@ -1,29 +1,25 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
-    name = "atom-deploy",
+    name = "atom-backends",
     srcs = glob(["src/**/*.rs"]),
-    crate_name = "atom_deploy",
+    crate_name = "atom_backends",
     crate_root = "src/lib.rs",
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
-        "//crates/atom-backends",
         "//crates/atom-ffi",
         "//crates/atom-manifest",
+        "//crates/atom-modules",
         "@crates//:camino",
-        "@crates//:console",
-        "@crates//:dialoguer",
-        "@crates//:indicatif",
         "@crates//:serde",
-        "@crates//:serde_json",
     ],
 )
 
 rust_test(
-    name = "atom-deploy-test",
-    crate = ":atom-deploy",
+    name = "atom-backends-test",
+    crate = ":atom-backends",
     deps = [
-        "@crates//:tempfile",
+        "@crates//:serde_json",
     ],
 )

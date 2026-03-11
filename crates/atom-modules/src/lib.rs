@@ -1,5 +1,7 @@
 mod graph;
 mod loader;
+#[doc(hidden)]
+pub mod testing;
 
 use std::collections::BTreeSet;
 
