@@ -75,19 +75,37 @@ Run it from the repository root:
 ```sh
 mise run ios
 mise run android
+mise run ios -- --detach
+mise run android -- --detach
 mise run ios -- --destination 00008130-001431E90A78001C
 mise run android -- --destination avd:atom_35
+mise run ios -- --detach --destination 00008130-001431E90A78001C
+mise run android -- --detach --destination avd:atom_35
+mise exec -- bazelisk run //:atom -- stop ios --target //examples/hello-world/apps/hello_atom:hello_atom
+mise exec -- bazelisk run //:atom -- stop android --target //examples/hello-world/apps/hello_atom:hello_atom --destination avd:atom_35
 
 bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/tmp/hello-atom.plan
 bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom_plain --dry-run >/tmp/hello-atom-plain.plan
 bazelisk run //:atom -- destinations --json
 bazelisk run //:atom -- run ios --target //examples/hello-world/apps/hello_atom:hello_atom
 bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom
+bazelisk run //:atom -- run ios --target //examples/hello-world/apps/hello_atom:hello_atom --detach
+bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom --detach
 bazelisk run //:atom -- run ios --target //examples/hello-world/apps/hello_atom:hello_atom --destination 00008130-001431E90A78001C
 bazelisk run //:atom -- run android --target //examples/hello-world/apps/hello_atom:hello_atom --destination avd:atom_35
+bazelisk run //:atom -- stop ios --target //examples/hello-world/apps/hello_atom:hello_atom --destination 00008130-001431E90A78001C
+bazelisk run //:atom -- stop android --target //examples/hello-world/apps/hello_atom:hello_atom --destination avd:atom_35
 bazelisk run //:atom -- inspect ui --target //examples/hello-world/apps/hello_atom:hello_atom --destination SIM-123 --output /tmp/hello-atom-ui.json
 bazelisk run //:atom -- evaluate run --target //examples/hello-world/apps/hello_atom:hello_atom --destination SIM-123 --plan examples/hello-world/evaluation/demo_surface_plan.json --artifacts-dir /tmp/hello-atom-eval
 ```
 
 When `--destination` is omitted and the command is running in an interactive terminal, Atom now
 prompts you to choose a simulator, emulator, or connected device.
+
+The standalone `atom inspect ui`, `atom interact`, and `atom evidence ...` commands reuse the
+current foreground app state when the selected target is already running, so ad hoc debugging does
+not force a relaunch before collecting artifacts.
+
+`atom run ios|android` streams logs by default for manual debugging. Use `--detach` when you want
+the app to keep running without a live terminal session, and use `atom stop ios|android` to stop a
+disposable session without uninstalling the app or shutting down the simulator/emulator.

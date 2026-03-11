@@ -46,14 +46,20 @@ final class AtomSceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var runtimeDelegate: AtomAppDelegate? {
         UIApplication.shared.delegate as? AtomAppDelegate
     }
-    
+
     private func resolveRootViewController() -> UIViewController {
-        if let providerType = NSClassFromString("AtomHostRootViewProviderImpl")
-            as? AtomHostRootViewProvider.Type
+        if let providerType = resolvedRootViewProviderType() as? AtomHostRootViewProvider.Type
         {
             return providerType.init().makeRootViewController()
         }
         return UIHostingController(rootView: AtomRootView())
+    }
+
+    private func resolvedRootViewProviderType() -> AnyClass? {
+        if let providerType = NSClassFromString("AtomHostRootViewProviderImpl") {
+            return providerType
+        }
+        return NSClassFromString("{{ support_module }}.AtomHostRootViewProviderImpl")
     }
 }
 

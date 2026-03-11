@@ -1161,6 +1161,9 @@ mod tests {
         assert!(swift_main.contains("NSStringFromClass(AtomAppDelegate.self)"));
         assert!(swift_scene_delegate.contains("resolveRootViewController()"));
         assert!(swift_scene_delegate.contains("AtomHostRootViewProvider"));
+        assert!(swift_scene_delegate.contains(
+            "NSClassFromString(\"atom_hello_atom_support.AtomHostRootViewProviderImpl\")"
+        ));
         assert!(swift_scene_delegate.contains("Text(\"Hello Atom\")"));
         assert!(android_build.contains("rust_shared_library("));
         assert!(
@@ -1185,7 +1188,13 @@ mod tests {
         assert!(android_app.contains("object AtomRuntimeBridge"));
         assert!(android_main.contains("class MainActivity : Activity()"));
         assert!(android_main.contains("interface AtomHostViewFactory"));
-        assert!(android_main.contains("atomApp?.sendLifecycle("));
+        assert!(android_main.contains("override fun onStart()"));
+        assert!(android_main.contains("override fun onStop()"));
+        assert!(!android_main.contains("override fun onDestroy()"));
+        assert!(!android_main.contains("override fun onPause()"));
+        assert!(!android_main.contains("override fun onResume()"));
+        assert!(android_main.contains("atomApp?.sendLifecycle(1, \"foreground\")"));
+        assert!(android_main.contains("atomApp?.sendLifecycle(2, \"background\")"));
         assert!(android_build.contains("kt_jvm_library("));
         assert!(android_build.contains("@androidsdk//:platforms/android-"));
         assert!(!android_build.contains("cc_import("));

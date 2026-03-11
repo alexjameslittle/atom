@@ -257,6 +257,8 @@ Planned command surface:
 - `atom evidence screenshot --destination <id> --output <path>`
 - `atom evidence video --destination <id> --output <path>`
 - `atom inspect ui --destination <id> [--output <path>]`
+- `atom run <ios|android> --detach`
+- `atom stop <ios|android>`
 - `atom interact --destination <id> ...` for tap, long-press, swipe, drag, and text entry
 - `atom evaluate run --destination <id> --plan <path> --artifacts-dir <path>`
 
@@ -287,6 +289,12 @@ Output expectations:
 
 - Every evidence command writes caller-selected artifacts that can be attached to reviews or agent
   transcripts.
+- Standalone evidence, inspection, and one-step interaction commands should attach to the currently
+  running foreground app when possible so ad hoc debugging does not lose the state a human or agent
+  has already reached.
+- Launch and cleanup should be explicit for agent workflows: `atom run ... --detach` starts a
+  reusable app session without tying it to a live PTY, while `atom stop ...` ends that app session
+  without uninstalling the app or shutting down the simulator/emulator.
 - Every evaluation run produces a proof bundle with logs, screenshots, video, UI snapshots, and a
   step-by-step manifest of what the agent attempted.
 - UI inspection should emit machine-readable data with bounds, labels or text, and stable target
@@ -520,12 +528,17 @@ Deliverables:
 - Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
 - `atom run ios` builds, installs, and launches on iOS simulator via `idb`
 - `atom run android` builds, installs, and launches on Android emulator via `adb`
+- `atom run ios|android --detach` launches without holding the terminal open for log streaming
+- `atom stop ios|android` stops the selected app without uninstalling it
 - Ad-hoc code signing for simulator builds
 
 Exit criteria:
 
 - `atom run ios` launches the example app on an iOS simulator
 - `atom run android` launches the example app on an Android emulator
+- `atom run ios|android --detach` leaves the example app running for follow-on inspection or
+  evidence capture
+- `atom stop ios|android` cleans up a detached example session
 - No Xcode project or Gradle project is required
 
 ### Phase 4A: Runtime kernel
@@ -779,6 +792,10 @@ Deliverables:
 
 - `atom run ios`
 - `atom run android`
+- `atom run ios --detach`
+- `atom run android --detach`
+- `atom stop ios`
+- `atom stop android`
 - `atom test`
 - Plugin authoring and consumption docs for first-party and third-party crates
 - Example app proving first-party and third-party-style plugin composition

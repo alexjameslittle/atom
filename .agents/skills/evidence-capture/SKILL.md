@@ -22,8 +22,14 @@ Use this skill when:
 
 1. Resolve a destination id first with
    `[$destination-discovery](../destination-discovery/SKILL.md)`.
-2. Run `scripts/run.sh screenshot`, `logs`, `video`, or `inspect-ui` with the chosen destination.
-3. Keep the output paths stable so the evidence can be referenced in follow-on analysis.
+2. If the app is not already running and you want to preserve state across multiple captures, prefer
+   `atom run ios|android --detach` instead of keeping a log-streaming session open.
+3. Run `scripts/run.sh screenshot`, `logs`, `video`, or `inspect-ui` with the chosen destination.
+   These commands should reuse the current foreground app state when the selected target is already
+   running.
+4. Use `atom stop ios|android` for cleanup only when the workflow explicitly launched a disposable
+   detached session.
+5. Keep the output paths stable so the evidence can be referenced in follow-on analysis.
 
 ## Output
 

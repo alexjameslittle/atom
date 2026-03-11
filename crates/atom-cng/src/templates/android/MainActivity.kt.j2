@@ -18,19 +18,14 @@ class MainActivity : Activity() {
         setContentView(resolveRootView())
     }
 
-    override fun onDestroy() {
-        atomApp?.sendLifecycle(5, "terminate")
-        super.onDestroy()
-    }
-
-    override fun onResume() {
-        super.onResume()
+    override fun onStart() {
+        super.onStart()
         atomApp?.sendLifecycle(1, "foreground")
     }
 
-    override fun onPause() {
+    override fun onStop() {
         atomApp?.sendLifecycle(2, "background")
-        super.onPause()
+        super.onStop()
     }
 
     private val atomApp: AtomApplication?

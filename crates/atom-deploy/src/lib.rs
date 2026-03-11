@@ -5,7 +5,9 @@ pub mod evaluate;
 pub mod progress;
 mod tools;
 
-pub use crate::deploy::{deploy_android, deploy_ios, generated_target};
+pub use crate::deploy::{
+    LaunchMode, deploy_android, deploy_ios, generated_target, stop_android, stop_ios,
+};
 pub use crate::tools::{
     CommandOutput, ProcessRunner, ToolRunner, capture_bazel, capture_bazel_owned,
     capture_json_tool, capture_tool, find_bazel_output, find_bazel_output_owned, run_bazel,
@@ -21,7 +23,7 @@ mod tests {
     use camino::{Utf8Path, Utf8PathBuf};
     use tempfile::tempdir;
 
-    use crate::deploy::{deploy_android, deploy_ios};
+    use crate::deploy::{LaunchMode, deploy_android, deploy_ios, stop_android, stop_ios};
     use crate::destinations::{
         DestinationCapability, DestinationKind, DestinationPlatform, list_destinations,
     };
@@ -134,7 +136,14 @@ mod tests {
             ]),
         };
 
-        deploy_ios(&root, &manifest, Some("SIM-123"), &mut runner).expect("ios deploy");
+        deploy_ios(
+            &root,
+            &manifest,
+            Some("SIM-123"),
+            LaunchMode::Attached,
+            &mut runner,
+        )
+        .expect("ios deploy");
 
         assert_eq!(
             runner.calls,
@@ -189,6 +198,7 @@ mod tests {
                     vec![
                         "launch".to_owned(),
                         "-f".to_owned(),
+                        "-w".to_owned(),
                         "--udid".to_owned(),
                         "SIM-123".to_owned(),
                         "build.atom.hello".to_owned(),
@@ -215,6 +225,7 @@ mod tests {
             &root,
             &manifest,
             Some("00008130-001431E90A78001C"),
+            LaunchMode::Attached,
             &mut runner,
         )
         .expect("ios device deploy");
@@ -268,6 +279,7 @@ mod tests {
                     vec![
                         "launch".to_owned(),
                         "-f".to_owned(),
+                        "-w".to_owned(),
                         "--udid".to_owned(),
                         "00008130-001431E90A78001C".to_owned(),
                         "build.atom.hello".to_owned(),
@@ -293,7 +305,14 @@ mod tests {
             ]),
         };
 
-        deploy_ios(&root, &manifest, Some("SIM-123"), &mut runner).expect("ios deploy");
+        deploy_ios(
+            &root,
+            &manifest,
+            Some("SIM-123"),
+            LaunchMode::Attached,
+            &mut runner,
+        )
+        .expect("ios deploy");
 
         assert_eq!(
             runner.calls[4],
@@ -323,8 +342,14 @@ mod tests {
             ]),
         };
 
-        deploy_android(&root, &manifest, Some("emulator-5554"), &mut runner)
-            .expect("android deploy");
+        deploy_android(
+            &root,
+            &manifest,
+            Some("emulator-5554"),
+            LaunchMode::Attached,
+            &mut runner,
+        )
+        .expect("android deploy");
 
         assert_eq!(
             runner.calls,
@@ -521,5 +546,192 @@ mod tests {
         let json = serde_json::to_string(&destinations).expect("destinations json");
         assert!(json.contains("\"platform\":\"ios\""));
         assert!(json.contains("\"capabilities\":[\"launch\""));
+    }
+
+    #[test]
+    fn ios_detached_deploy_launches_without_wait_flag() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                idb_targets_json("Shutdown"),
+                "bazel-bin/generated/ios/hello-atom/app.app\n".to_owned(),
+            ]),
+        };
+
+        deploy_ios(
+            &root,
+            &manifest,
+            Some("SIM-123"),
+            LaunchMode::Detached,
+            &mut runner,
+        )
+        .expect("ios deploy");
+
+        assert_eq!(
+            runner.calls.last(),
+            Some(&(
+                "idb".to_owned(),
+                vec![
+                    "launch".to_owned(),
+                    "-f".to_owned(),
+                    "--udid".to_owned(),
+                    "SIM-123".to_owned(),
+                    "build.atom.hello".to_owned(),
+                ],
+            ))
+        );
+    }
+
+    #[test]
+    fn android_detached_deploy_skips_log_streaming() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                "bazel-bin/generated/android/hello-atom/app_unsigned.apk\nbazel-bin/generated/android/hello-atom/app.apk\n".to_owned(),
+                "1\n".to_owned(),
+            ]),
+        };
+
+        deploy_android(
+            &root,
+            &manifest,
+            Some("emulator-5554"),
+            LaunchMode::Detached,
+            &mut runner,
+        )
+        .expect("android deploy");
+
+        assert_eq!(
+            runner.calls,
+            vec![
+                (
+                    "bazelisk".to_owned(),
+                    vec![
+                        "build".to_owned(),
+                        "//generated/android/hello-atom:app".to_owned(),
+                        "--android_platforms=//platforms:arm64-v8a".to_owned(),
+                    ],
+                ),
+                (
+                    "bazelisk".to_owned(),
+                    vec![
+                        "cquery".to_owned(),
+                        "//generated/android/hello-atom:app".to_owned(),
+                        "--android_platforms=//platforms:arm64-v8a".to_owned(),
+                        "--output=files".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "getprop".to_owned(),
+                        "sys.boot_completed".to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "install".to_owned(),
+                        "-r".to_owned(),
+                        root.join("bazel-bin/generated/android/hello-atom/app.apk")
+                            .as_str()
+                            .to_owned(),
+                    ],
+                ),
+                (
+                    "adb".to_owned(),
+                    vec![
+                        "-s".to_owned(),
+                        "emulator-5554".to_owned(),
+                        "shell".to_owned(),
+                        "am".to_owned(),
+                        "start".to_owned(),
+                        "-W".to_owned(),
+                        "-n".to_owned(),
+                        "build.atom.hello/.MainActivity".to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn ios_stop_only_terminates_when_app_is_running() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([
+                idb_targets_json("Booted"),
+                "build.atom.hello | hello-atom | user | arm64 | Running | Not Debuggable | pid=42\n"
+                    .to_owned(),
+            ]),
+        };
+
+        stop_ios(&root, &manifest, Some("SIM-123"), &mut runner).expect("ios stop");
+
+        assert_eq!(
+            runner.calls,
+            vec![
+                (
+                    "idb".to_owned(),
+                    vec!["list-targets".to_owned(), "--json".to_owned(),],
+                ),
+                (
+                    "idb".to_owned(),
+                    vec![
+                        "list-apps".to_owned(),
+                        "--udid".to_owned(),
+                        "SIM-123".to_owned(),
+                    ],
+                ),
+                (
+                    "idb".to_owned(),
+                    vec![
+                        "terminate".to_owned(),
+                        "--udid".to_owned(),
+                        "SIM-123".to_owned(),
+                        "build.atom.hello".to_owned(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn android_stop_force_stops_running_destination() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner::default();
+
+        stop_android(&root, &manifest, Some("emulator-5554"), &mut runner).expect("android stop");
+
+        assert_eq!(
+            runner.calls,
+            vec![(
+                "adb".to_owned(),
+                vec![
+                    "-s".to_owned(),
+                    "emulator-5554".to_owned(),
+                    "shell".to_owned(),
+                    "am".to_owned(),
+                    "force-stop".to_owned(),
+                    "build.atom.hello".to_owned(),
+                ],
+            )]
+        );
     }
 }

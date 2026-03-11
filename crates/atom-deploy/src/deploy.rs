@@ -19,6 +19,12 @@ use crate::tools::{
 const ANDROID_APP_PID_WAIT_ATTEMPTS: usize = 30;
 const ANDROID_APP_PID_WAIT_INTERVAL: Duration = Duration::from_millis(500);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchMode {
+    Attached,
+    Detached,
+}
+
 /// # Errors
 ///
 /// Returns an error if device resolution, building, or installation fails.
@@ -26,6 +32,7 @@ pub fn deploy_ios(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
+    launch_mode: LaunchMode,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
     let destination = resolve_ios_destination(repo_root, runner, requested_device)?;
@@ -62,6 +69,7 @@ pub fn deploy_ios(
             &destination,
             &installable_app,
             bundle_id,
+            launch_mode,
         ),
         IosDestinationKind::Device => install_and_launch_device(
             repo_root,
@@ -69,6 +77,7 @@ pub fn deploy_ios(
             &destination.id,
             &installable_app,
             bundle_id,
+            launch_mode,
         ),
     }
 }
@@ -79,6 +88,7 @@ fn install_and_launch_simulator(
     destination: &crate::devices::ios::IosDestination,
     installable_app: &Utf8Path,
     bundle_id: &str,
+    launch_mode: LaunchMode,
 ) -> AtomResult<()> {
     let target_id = run_step(
         "Preparing simulator...",
@@ -86,7 +96,14 @@ fn install_and_launch_simulator(
         "Simulator preparation failed",
         || prepare_ios_simulator(repo_root, runner, destination),
     )?;
-    install_and_launch_with_idb(repo_root, runner, &target_id, installable_app, bundle_id)
+    install_and_launch_with_idb(
+        repo_root,
+        runner,
+        &target_id,
+        installable_app,
+        bundle_id,
+        launch_mode,
+    )
 }
 
 fn install_and_launch_with_idb(
@@ -95,6 +112,7 @@ fn install_and_launch_with_idb(
     destination_id: &str,
     installable_app: &Utf8Path,
     bundle_id: &str,
+    launch_mode: LaunchMode,
 ) -> AtomResult<()> {
     run_step(
         "Installing app...",
@@ -120,13 +138,27 @@ fn install_and_launch_with_idb(
         "idb",
         &["terminate", "--udid", destination_id, bundle_id],
     );
-    eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
-    stream_tool(
-        runner,
-        repo_root,
-        "idb",
-        &["launch", "-f", "--udid", destination_id, bundle_id],
-    )
+    match launch_mode {
+        LaunchMode::Attached => {
+            eprintln!("→ Launching app and streaming logs... (Ctrl+C to stop)");
+            stream_tool(
+                runner,
+                repo_root,
+                "idb",
+                &["launch", "-f", "-w", "--udid", destination_id, bundle_id],
+            )
+        }
+        LaunchMode::Detached => {
+            run_step("Launching app...", "App launched", "Launch failed", || {
+                run_tool(
+                    runner,
+                    repo_root,
+                    "idb",
+                    &["launch", "-f", "--udid", destination_id, bundle_id],
+                )
+            })
+        }
+    }
 }
 
 fn install_and_launch_device(
@@ -135,8 +167,51 @@ fn install_and_launch_device(
     device_id: &str,
     installable_app: &Utf8Path,
     bundle_id: &str,
+    launch_mode: LaunchMode,
 ) -> AtomResult<()> {
-    install_and_launch_with_idb(repo_root, runner, device_id, installable_app, bundle_id)
+    install_and_launch_with_idb(
+        repo_root,
+        runner,
+        device_id,
+        installable_app,
+        bundle_id,
+        launch_mode,
+    )
+}
+
+/// # Errors
+///
+/// Returns an error if destination resolution or stop coordination fails.
+pub fn stop_ios(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    requested_device: Option<&str>,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    let destination = resolve_ios_destination(repo_root, runner, requested_device)?;
+    let bundle_id = manifest.ios.bundle_id.as_deref().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "validated iOS manifest is missing bundle_id",
+        )
+    })?;
+
+    if destination.kind == IosDestinationKind::Simulator && !destination.is_booted_simulator() {
+        return Ok(());
+    }
+
+    if !ios_app_is_running(repo_root, runner, &destination.id, bundle_id)? {
+        return Ok(());
+    }
+
+    run_step("Stopping app...", "App stopped", "Stop failed", || {
+        run_tool(
+            runner,
+            repo_root,
+            "idb",
+            &["terminate", "--udid", &destination.id, bundle_id],
+        )
+    })
 }
 
 /// # Errors
@@ -146,6 +221,7 @@ pub fn deploy_android(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     requested_device: Option<&str>,
+    launch_mode: LaunchMode,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
     let destination = resolve_android_device(repo_root, runner, requested_device)?;
@@ -199,38 +275,115 @@ pub fn deploy_android(
             )
         },
     )?;
-    // Clear logcat before launch so we capture all logs from app start.
-    run_tool(runner, repo_root, "adb", &["-s", &serial, "logcat", "-c"])?;
-    run_step("Launching app...", "App launched", "Launch failed", || {
+    match launch_mode {
+        LaunchMode::Attached => {
+            // Clear logcat before launch so we capture all logs from app start.
+            run_tool(runner, repo_root, "adb", &["-s", &serial, "logcat", "-c"])?;
+
+            run_step("Launching app...", "App launched", "Launch failed", || {
+                run_tool(
+                    runner,
+                    repo_root,
+                    "adb",
+                    &[
+                        "-s", &serial, "shell", "am", "start", "-W", "-n", &component,
+                    ],
+                )
+            })?;
+
+            // Wait for the app process to appear, then stream only its logs.
+            let pid = wait_for_app_pid(runner, repo_root, &serial, application_id)?;
+
+            eprintln!("→ Streaming logs for {application_id} (pid {pid})... (Ctrl+C to stop)");
+            stream_tool(
+                runner,
+                repo_root,
+                "adb",
+                &[
+                    "-s",
+                    &serial,
+                    "logcat",
+                    "--pid",
+                    &pid,
+                    "-s",
+                    "AtomRuntime:*",
+                ],
+            )
+        }
+        LaunchMode::Detached => {
+            run_step("Launching app...", "App launched", "Launch failed", || {
+                run_tool(
+                    runner,
+                    repo_root,
+                    "adb",
+                    &[
+                        "-s", &serial, "shell", "am", "start", "-W", "-n", &component,
+                    ],
+                )
+            })
+        }
+    }
+}
+
+/// # Errors
+///
+/// Returns an error if destination resolution or stop coordination fails.
+pub fn stop_android(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    requested_device: Option<&str>,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<()> {
+    let destination = resolve_android_device(repo_root, runner, requested_device)?;
+    let application_id = manifest.android.application_id.as_deref().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "validated Android manifest is missing application_id",
+        )
+    })?;
+
+    if destination.state == "avd" {
+        return Ok(());
+    }
+
+    run_step("Stopping app...", "App stopped", "Stop failed", || {
         run_tool(
             runner,
             repo_root,
             "adb",
             &[
-                "-s", &serial, "shell", "am", "start", "-W", "-n", &component,
+                "-s",
+                &destination.serial,
+                "shell",
+                "am",
+                "force-stop",
+                application_id,
             ],
         )
-    })?;
+    })
+}
 
-    // Wait for the app process to appear, then stream only its logs (matching
-    // iOS --console behaviour which only shows the app's stdout/stderr).
-    let pid = wait_for_app_pid(runner, repo_root, &serial, application_id)?;
-
-    eprintln!("→ Streaming logs for {application_id} (pid {pid})... (Ctrl+C to stop)");
-    stream_tool(
+fn ios_app_is_running(
+    repo_root: &Utf8Path,
+    runner: &mut impl ToolRunner,
+    destination_id: &str,
+    bundle_id: &str,
+) -> AtomResult<bool> {
+    let output = capture_tool(
         runner,
         repo_root,
-        "adb",
-        &[
-            "-s",
-            &serial,
-            "logcat",
-            "--pid",
-            &pid,
-            "-s",
-            "AtomRuntime:*",
-        ],
-    )
+        "idb",
+        &["list-apps", "--udid", destination_id],
+    )?;
+    Ok(output.lines().any(|line| {
+        let mut fields = line.split('|').map(str::trim);
+        let identifier = fields.next();
+        let _name = fields.next();
+        let _install_type = fields.next();
+        let _architectures = fields.next();
+        let debug_state = fields.next();
+        identifier == Some(bundle_id) && debug_state == Some("Running")
+    }))
 }
 
 pub(crate) fn wait_for_app_pid(

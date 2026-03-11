@@ -1068,6 +1068,8 @@ iOS deployment sequence:
    reuse the connected device target when targeting hardware.
 3. `idb install --udid <destination> <path-to-.app>` to install.
 4. `idb launch -f --udid <destination> <bundle_id>` to launch.
+5. When `--detach` is not set, `idb launch -f -w --udid <destination> <bundle_id>` MAY be used to
+   keep the CLI attached and stream the app process output until interruption or exit.
 
 Android deployment sequence:
 
@@ -1081,6 +1083,12 @@ Rules:
 - Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`idb`, `adb`)
   are not available.
 - Both commands MUST stream build output to stderr.
+- `atom run ios|android --detach` MUST launch the selected app and return without waiting on
+  long-lived log streaming.
+- `atom run ios|android` without `--detach` MAY stay attached to the launched app and stream app
+  logs until interruption or process exit.
+- `atom stop ios` and `atom stop android` MUST stop the selected app without uninstalling it or
+  shutting down the selected simulator, device, or emulator.
 - `atom run ios --device <udid>` and `atom run android --device <serial>` MUST support targeting a
   specific simulator, emulator, or connected device.
 - When attached to an interactive TTY and `--device` is omitted, `atom run ios` and
@@ -1157,6 +1165,8 @@ Required commands:
 - `atom prebuild --dry-run`
 - `atom run ios`
 - `atom run android`
+- `atom stop ios`
+- `atom stop android`
 - `atom destinations`
 - `atom devices ios`
 - `atom devices android`
@@ -1200,10 +1210,19 @@ consumes Atom via `bzlmod`.
 `atom run ios`:
 
 - MUST follow the iOS deployment sequence defined in Section 9.8.3
+- MUST accept `--detach`
 
 `atom run android`:
 
 - MUST follow the Android deployment sequence defined in Section 9.8.3
+- MUST accept `--detach`
+
+`atom stop ios` and `atom stop android`:
+
+- MUST resolve the same target manifest and destination identifiers accepted by the corresponding
+  `atom run` command
+- MUST stop the selected app process without rebuilding, reinstalling, or uninstalling the app
+- SHOULD be idempotent when the selected app is not currently running
 
 `atom destinations`:
 
@@ -1223,26 +1242,36 @@ consumes Atom via `bzlmod`.
 `atom evidence screenshot`:
 
 - MUST capture one screenshot from the selected destination
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the image to the requested output path
 
 `atom evidence video`:
 
 - MUST record a screen video from the selected destination
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the video to the requested output path
 
 `atom evidence logs`:
 
 - MUST collect logs from the selected destination or launched app process
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the logs to the requested output path
 - SHOULD preserve timestamps and stream ordering when the backend can provide them
 
 `atom inspect ui`:
 
 - MUST emit a machine-readable UI snapshot for the selected destination
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST include a screenshot reference or explicit screenshot output path in the snapshot payload
 
 `atom interact`:
 
+- SHOULD attach to an already-running foreground app for the selected target when the backend can
+  identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST support at least tap, long-press, swipe/drag, and text entry
 - SHOULD support semantic element targeting in addition to coordinate targeting
 - MUST fail with `AUTOMATION_TARGET_NOT_FOUND` when the requested semantic target cannot be resolved
@@ -1256,6 +1285,8 @@ consumes Atom via `bzlmod`.
   interactions
 - A `launch` step MUST not report success until the selected app process is running and the
   evaluation backend can obtain an initial UI snapshot from that launched app
+- On iOS, launch readiness MUST verify the focused foreground app identity before a UI snapshot is
+  accepted as evidence that the selected app is ready
 - MUST write a machine-readable artifact manifest plus referenced artifacts under the requested
   output directory
 - MUST stop on the first failed required step and surface the underlying automation or tool failure
@@ -1273,6 +1304,8 @@ Evaluation contract rules:
 - Destinations are the canonical debug-target abstraction for evaluation.
 - Evidence and interaction commands MUST accept the same destination identifiers reported by
   `atom destinations` and `atom devices`.
+- Agent workflows SHOULD prefer `atom run ... --detach`, `atom stop ...`, or direct evidence /
+  interaction commands rather than depending on one long-lived attached `atom run` session.
 - Implementations MAY expose additional subcommands, but they MUST preserve the required commands
   from Section 10.1.
 - Commands intended for agent use SHOULD offer stable machine-readable output without requiring ANSI

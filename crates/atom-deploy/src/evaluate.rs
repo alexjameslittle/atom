@@ -229,8 +229,14 @@ pub fn inspect_ui(
 ) -> AtomResult<UiSnapshot> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::InspectUi)?;
-    let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    let mut session = AutomationSession::new(
+        repo_root,
+        manifest,
+        destination_id,
+        runner,
+        descriptor,
+        SessionLaunchBehavior::AttachOrLaunch,
+    )?;
     session.ensure_launched()?;
     let mut snapshot = session.interact(InteractionRequest::InspectUi)?;
     session.shutdown_video()?;
@@ -253,8 +259,14 @@ pub fn interact(
 ) -> AtomResult<InteractionResult> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Interact)?;
-    let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    let mut session = AutomationSession::new(
+        repo_root,
+        manifest,
+        destination_id,
+        runner,
+        descriptor,
+        SessionLaunchBehavior::AttachOrLaunch,
+    )?;
     session.ensure_launched()?;
     let result = session.interact(request)?;
     session.shutdown_video()?;
@@ -273,8 +285,14 @@ pub fn capture_screenshot(
 ) -> AtomResult<()> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Screenshot)?;
-    let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    let mut session = AutomationSession::new(
+        repo_root,
+        manifest,
+        destination_id,
+        runner,
+        descriptor,
+        SessionLaunchBehavior::AttachOrLaunch,
+    )?;
     session.ensure_launched()?;
     let launch = session.active_launch()?;
     capture_screenshot_for_launch(repo_root, &launch, output_path, session.runner)
@@ -293,8 +311,14 @@ pub fn capture_logs(
 ) -> AtomResult<()> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Logs)?;
-    let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    let mut session = AutomationSession::new(
+        repo_root,
+        manifest,
+        destination_id,
+        runner,
+        descriptor,
+        SessionLaunchBehavior::AttachOrLaunch,
+    )?;
     session.ensure_launched()?;
     let launch = session.active_launch()?;
     capture_logs_for_launch(repo_root, &launch, output_path, seconds, session.runner)
@@ -313,8 +337,14 @@ pub fn capture_video(
 ) -> AtomResult<()> {
     let descriptor = resolve_destination_descriptor(repo_root, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Video)?;
-    let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    let mut session = AutomationSession::new(
+        repo_root,
+        manifest,
+        destination_id,
+        runner,
+        descriptor,
+        SessionLaunchBehavior::AttachOrLaunch,
+    )?;
     session.ensure_launched()?;
     let launch = session.active_launch()?;
     capture_video_for_launch(repo_root, &launch, output_path, seconds, session.runner)
@@ -339,8 +369,14 @@ pub fn evaluate_run(
     require_plan_capabilities(&descriptor, &plan)?;
 
     let started_at_ms = timestamp_millis();
-    let mut session =
-        AutomationSession::new(repo_root, manifest, destination_id, runner, descriptor)?;
+    let mut session = AutomationSession::new(
+        repo_root,
+        manifest,
+        destination_id,
+        runner,
+        descriptor,
+        SessionLaunchBehavior::LaunchOnly,
+    )?;
     let mut steps = Vec::new();
     let mut artifacts = Vec::new();
 
@@ -685,14 +721,31 @@ fn snapshot_is_launch_ready(snapshot: &UiSnapshot) -> bool {
     })
 }
 
+fn snapshot_matches_ios_app(snapshot: &UiSnapshot, app_name: &str, app_slug: &str) -> bool {
+    snapshot.nodes.iter().any(|node| {
+        node.role.eq_ignore_ascii_case("application")
+            && [node.label.as_str(), node.text.as_str()]
+                .into_iter()
+                .any(|value| {
+                    let value = value.trim();
+                    !value.is_empty()
+                        && (value.eq_ignore_ascii_case(app_name)
+                            || value.eq_ignore_ascii_case(app_slug))
+                })
+    })
+}
+
 fn wait_for_idb_launch_ready(
     repo_root: &Utf8Path,
     destination_id: &str,
+    app_name: &str,
+    app_slug: &str,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
     let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
     while Instant::now() < deadline {
         if let Ok(snapshot) = inspect_ui_with_idb(repo_root, destination_id, runner)
+            && snapshot_matches_ios_app(&snapshot, app_name, app_slug)
             && snapshot_is_launch_ready(&snapshot)
         {
             return Ok(());
@@ -767,15 +820,39 @@ impl AutomationDriver {
         }
     }
 
+    fn attach(
+        &self,
+        repo_root: &Utf8Path,
+        manifest: &NormalizedManifest,
+        runner: &mut impl ToolRunner,
+    ) -> AtomResult<Option<AppLaunch>> {
+        match self {
+            Self::IosIdb { destination_id } => {
+                attach_ios_app(repo_root, manifest, destination_id, runner)
+            }
+            Self::AndroidUiAutomator { destination_id } => {
+                attach_android_app(repo_root, manifest, destination_id, runner)
+            }
+        }
+    }
+
     fn wait_until_ready(
         &self,
         repo_root: &Utf8Path,
+        manifest: &NormalizedManifest,
         launch: &AppLaunch,
         runner: &mut impl ToolRunner,
     ) -> AtomResult<()> {
         match (self, launch) {
-            (Self::IosIdb { destination_id }, _) => {
-                wait_for_idb_launch_ready(repo_root, destination_id, runner)
+            (Self::IosIdb { .. }, AppLaunch::IosSimulator { destination_id, .. })
+            | (Self::IosIdb { .. }, AppLaunch::IosDevice { destination_id, .. }) => {
+                wait_for_idb_launch_ready(
+                    repo_root,
+                    destination_id,
+                    &manifest.app.name,
+                    &manifest.app.slug,
+                    runner,
+                )
             }
             (
                 Self::AndroidUiAutomator { .. },
@@ -951,8 +1028,15 @@ struct AutomationSession<'a, R: ToolRunner> {
     runner: &'a mut R,
     descriptor: DestinationDescriptor,
     driver: AutomationDriver,
+    launch_behavior: SessionLaunchBehavior,
     launch: Option<AppLaunch>,
     video_capture: Option<VideoCapture>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionLaunchBehavior {
+    LaunchOnly,
+    AttachOrLaunch,
 }
 
 impl<'a, R: ToolRunner> AutomationSession<'a, R> {
@@ -962,6 +1046,7 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
         destination_id: &'a str,
         runner: &'a mut R,
         descriptor: DestinationDescriptor,
+        launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Self> {
         let driver = AutomationDriver::for_descriptor(&descriptor)?;
         debug_assert_eq!(descriptor.id, destination_id);
@@ -971,6 +1056,7 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
             runner,
             descriptor,
             driver,
+            launch_behavior,
             launch: None,
             video_capture: None,
         })
@@ -980,11 +1066,19 @@ impl<'a, R: ToolRunner> AutomationSession<'a, R> {
         if self.launch.is_some() {
             return Ok(());
         }
+        if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
+            && let Some(launch) = self
+                .driver
+                .attach(self.repo_root, self.manifest, self.runner)?
+        {
+            self.launch = Some(launch);
+            return Ok(());
+        }
         let launch = self
             .driver
             .launch(self.repo_root, self.manifest, self.runner)?;
         self.driver
-            .wait_until_ready(self.repo_root, &launch, self.runner)?;
+            .wait_until_ready(self.repo_root, self.manifest, &launch, self.runner)?;
         self.launch = Some(launch);
         Ok(())
     }
@@ -1450,6 +1544,26 @@ fn launch_ios_app(
     }
 }
 
+fn attach_ios_app(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination_id: &str,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Option<AppLaunch>> {
+    if !manifest.ios.enabled {
+        return Ok(None);
+    }
+    let snapshot = inspect_ui_with_idb(repo_root, destination_id, runner)?;
+    if !snapshot_matches_ios_app(&snapshot, &manifest.app.name, &manifest.app.slug)
+        || !snapshot_is_launch_ready(&snapshot)
+    {
+        return Ok(None);
+    }
+    Ok(Some(AppLaunch::IosSimulator {
+        destination_id: destination_id.to_owned(),
+    }))
+}
+
 fn launch_android_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
@@ -1508,6 +1622,39 @@ fn launch_android_app(
     })
 }
 
+fn attach_android_app(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination_id: &str,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<Option<AppLaunch>> {
+    if !manifest.android.enabled {
+        return Ok(None);
+    }
+    let Some(application_id) = manifest.android.application_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(destination) = find_android_destination(repo_root, runner, destination_id)? else {
+        return Ok(None);
+    };
+    if destination.state != "device" {
+        return Ok(None);
+    }
+    let snapshot = inspect_ui_with_android_uiautomator(repo_root, &destination.serial, runner)?;
+    if !snapshot_is_launch_ready(&snapshot.snapshot)
+        || !snapshot
+            .packages
+            .iter()
+            .any(|package| package == application_id)
+    {
+        return Ok(None);
+    }
+    Ok(Some(AppLaunch::Android {
+        serial: destination.serial,
+        application_id: application_id.to_owned(),
+    }))
+}
+
 fn capture_screenshot_for_launch(
     repo_root: &Utf8Path,
     launch: &AppLaunch,
@@ -1516,14 +1663,13 @@ fn capture_screenshot_for_launch(
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     match launch {
-        AppLaunch::IosSimulator { destination_id } | AppLaunch::IosDevice { destination_id } => {
-            run_idb(
-                runner,
-                repo_root,
-                destination_id,
-                &["screenshot".to_owned(), output_path.as_str().to_owned()],
-            )
-        }
+        AppLaunch::IosSimulator { destination_id, .. }
+        | AppLaunch::IosDevice { destination_id, .. } => run_idb(
+            runner,
+            repo_root,
+            destination_id,
+            &["screenshot".to_owned(), output_path.as_str().to_owned()],
+        ),
         AppLaunch::Android { serial, .. } => {
             let remote = format!("/sdcard/atom-screenshot-{}.png", timestamp_suffix());
             run_tool(
@@ -1558,21 +1704,20 @@ fn capture_logs_for_launch(
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     let contents = match launch {
-        AppLaunch::IosSimulator { destination_id } | AppLaunch::IosDevice { destination_id } => {
-            capture_idb(
-                runner,
-                repo_root,
-                destination_id,
-                &[
-                    "log".to_owned(),
-                    "--".to_owned(),
-                    "--style".to_owned(),
-                    "syslog".to_owned(),
-                    "--timeout".to_owned(),
-                    format!("{seconds}s"),
-                ],
-            )
-        }
+        AppLaunch::IosSimulator { destination_id, .. }
+        | AppLaunch::IosDevice { destination_id, .. } => capture_idb(
+            runner,
+            repo_root,
+            destination_id,
+            &[
+                "log".to_owned(),
+                "--".to_owned(),
+                "--style".to_owned(),
+                "syslog".to_owned(),
+                "--timeout".to_owned(),
+                format!("{seconds}s"),
+            ],
+        ),
         AppLaunch::Android {
             serial,
             application_id,
@@ -1611,7 +1756,8 @@ fn capture_video_for_launch(
 ) -> AtomResult<()> {
     write_parent_dir(output_path)?;
     match launch {
-        AppLaunch::IosSimulator { destination_id } | AppLaunch::IosDevice { destination_id } => {
+        AppLaunch::IosSimulator { destination_id, .. }
+        | AppLaunch::IosDevice { destination_id, .. } => {
             let mut child = spawn_idb_video(repo_root, destination_id, output_path)?;
             thread::sleep(Duration::from_secs(seconds));
             stop_recording_process(repo_root, &mut child, DestinationPlatform::Ios)?;
@@ -1666,7 +1812,8 @@ fn start_video_capture(
 ) -> AtomResult<VideoCapture> {
     write_parent_dir(output_path)?;
     match launch {
-        AppLaunch::IosSimulator { destination_id } | AppLaunch::IosDevice { destination_id } => {
+        AppLaunch::IosSimulator { destination_id, .. }
+        | AppLaunch::IosDevice { destination_id, .. } => {
             let child = spawn_idb_video(repo_root, destination_id, output_path)?;
             Ok(VideoCapture {
                 output_path: output_path.to_owned(),
@@ -1939,14 +2086,16 @@ mod tests {
     use crate::destinations::DestinationKind;
     use crate::tools::ToolRunner;
     use atom_ffi::{AtomError, AtomErrorCode};
+    use atom_manifest::{AndroidConfig, AppConfig, BuildConfig, IosConfig, NormalizedManifest};
     use camino::Utf8PathBuf;
     use tempfile::tempdir;
 
     use super::{
         AppLaunch, DestinationCapability, DestinationDescriptor, DestinationPlatform,
         EvaluationPlan, EvaluationStep, InteractionRequest, ScreenInfo, UiBounds, UiNode,
-        UiSnapshot, capture_logs_for_launch, interact_with_idb, load_evaluation_plan,
-        require_plan_capabilities, snapshot_is_launch_ready,
+        UiSnapshot, attach_ios_app, capture_logs_for_launch, interact_with_idb,
+        load_evaluation_plan, require_plan_capabilities, snapshot_is_launch_ready,
+        snapshot_matches_ios_app,
     };
 
     #[derive(Default)]
@@ -2004,6 +2153,37 @@ mod tests {
         ) -> atom_ffi::AtomResult<()> {
             self.calls.push((tool.to_owned(), args.to_vec()));
             Ok(())
+        }
+    }
+
+    fn runnable_manifest(root: &Utf8PathBuf) -> NormalizedManifest {
+        NormalizedManifest {
+            repo_root: root.clone(),
+            target_label: "//examples/hello-world/apps/hello_atom:hello_atom".to_owned(),
+            metadata_path: root.join("bazel-out/hello_atom.atom.app.json"),
+            app: AppConfig {
+                name: "Hello Atom".to_owned(),
+                slug: "hello-atom".to_owned(),
+                entry_crate_label: "//examples/hello-world/apps/hello_atom:hello_atom".to_owned(),
+                entry_crate_name: "hello_atom".to_owned(),
+            },
+            ios: IosConfig {
+                enabled: true,
+                bundle_id: Some("build.atom.hello".to_owned()),
+                deployment_target: Some("17.0".to_owned()),
+            },
+            android: AndroidConfig {
+                enabled: true,
+                application_id: Some("build.atom.hello".to_owned()),
+                min_sdk: Some(28),
+                target_sdk: Some(35),
+            },
+            build: BuildConfig {
+                generated_root: Utf8PathBuf::from("generated"),
+                watch: false,
+            },
+            modules: Vec::new(),
+            config_plugins: Vec::new(),
         }
     }
 
@@ -2103,6 +2283,51 @@ mod tests {
     }
 
     #[test]
+    fn launch_readiness_checks_the_foreground_ios_application_node() {
+        let app_snapshot = UiSnapshot {
+            screen: ScreenInfo {
+                width: 402.0,
+                height: 874.0,
+            },
+            nodes: vec![UiNode {
+                id: "idb-node-0".to_owned(),
+                role: "Application".to_owned(),
+                label: "Hello Atom".to_owned(),
+                text: "Hello Atom".to_owned(),
+                visible: true,
+                enabled: true,
+                bounds: UiBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 402.0,
+                    height: 874.0,
+                },
+            }],
+            screenshot_path: None,
+        };
+        let springboard_snapshot = UiSnapshot {
+            screen: app_snapshot.screen.clone(),
+            nodes: vec![UiNode {
+                label: "Home Screen".to_owned(),
+                text: "Home Screen".to_owned(),
+                ..app_snapshot.nodes[0].clone()
+            }],
+            screenshot_path: None,
+        };
+
+        assert!(snapshot_matches_ios_app(
+            &app_snapshot,
+            "Hello Atom",
+            "hello-atom"
+        ));
+        assert!(!snapshot_matches_ios_app(
+            &springboard_snapshot,
+            "Hello Atom",
+            "hello-atom"
+        ));
+    }
+
+    #[test]
     fn log_capture_maps_backend_failures_to_automation_log_capture_failed() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
@@ -2129,6 +2354,30 @@ mod tests {
 
         assert_eq!(error.code, AtomErrorCode::AutomationLogCaptureFailed);
         assert!(error.message.contains("failed to collect logs"));
+    }
+
+    #[test]
+    fn attach_ios_app_reuses_the_foreground_snapshot() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let manifest = runnable_manifest(&root);
+        let mut runner = FakeToolRunner {
+            calls: Vec::new(),
+            captures: VecDeque::from([r#"{"elements":[{"AXUniqueId":"idb-node-0","type":"Application","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":0,"y":0,"width":402,"height":874}},{"AXUniqueId":"atom.demo.title","type":"StaticText","AXLabel":"Hello Atom","AXValue":"Hello Atom","visible":true,"enabled":true,"frame":{"x":24,"y":96,"width":140,"height":28}}]}"#.to_owned()]),
+            capture_error: None,
+        };
+
+        let launch =
+            attach_ios_app(&root, &manifest, "SIM-123", &mut runner).expect("attach should work");
+
+        assert!(matches!(
+            launch,
+            Some(AppLaunch::IosSimulator { destination_id }) if destination_id == "SIM-123"
+        ));
+        assert!(
+            runner.calls.iter().all(|(tool, _args)| tool != "bazelisk"),
+            "attach should not rebuild when the app is already running"
+        );
     }
 
     #[test]

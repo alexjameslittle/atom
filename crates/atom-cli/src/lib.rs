@@ -12,7 +12,10 @@ use atom_deploy::evaluate::{
     interact,
 };
 use atom_deploy::progress::run_step;
-use atom_deploy::{ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel};
+use atom_deploy::{
+    LaunchMode, ProcessRunner, ToolRunner, deploy_android, deploy_ios, run_bazel, stop_android,
+    stop_ios,
+};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::load_manifest;
 use atom_modules::resolve_modules;
@@ -31,6 +34,7 @@ struct Cli {
 enum Commands {
     Prebuild(PrebuildArgs),
     Run(RunArgs),
+    Stop(StopArgs),
     Test,
     Destinations(ListDestinationsArgs),
     Devices(DevicesArgs),
@@ -60,12 +64,34 @@ struct TargetArgs {
     target: String,
     #[arg(long, alias = "device")]
     destination: Option<String>,
+    #[arg(long, default_value_t = false)]
+    detach: bool,
 }
 
 #[derive(Debug, Subcommand)]
 enum RunPlatform {
     Ios(TargetArgs),
     Android(TargetArgs),
+}
+
+#[derive(Debug, Args)]
+struct StopArgs {
+    #[command(subcommand)]
+    platform: StopPlatform,
+}
+
+#[derive(Debug, Args)]
+struct StopTargetArgs {
+    #[arg(long)]
+    target: String,
+    #[arg(long, alias = "device")]
+    destination: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum StopPlatform {
+    Ios(StopTargetArgs),
+    Android(StopTargetArgs),
 }
 
 #[derive(Debug, Args)]
@@ -266,6 +292,7 @@ fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResul
     match &cli.command {
         Commands::Prebuild(args) => execute_prebuild(cwd, args),
         Commands::Run(args) => execute_run(cwd, args, runner),
+        Commands::Stop(args) => execute_stop(cwd, args, runner),
         Commands::Test => execute_test(cwd, runner),
         Commands::Destinations(args) => execute_destinations(cwd, args, runner),
         Commands::Devices(args) => execute_devices(cwd, args, runner),
@@ -314,6 +341,11 @@ fn execute_run(
         RunPlatform::Android(target) => ("android", target),
     };
     let manifest = load_manifest(&repo_root, &target.target)?;
+    let launch_mode = if target.detach {
+        LaunchMode::Detached
+    } else {
+        LaunchMode::Attached
+    };
     let enabled = match platform {
         "ios" => manifest.ios.enabled,
         "android" => manifest.android.enabled,
@@ -340,9 +372,54 @@ fn execute_run(
     )?;
 
     match platform {
-        "ios" => deploy_ios(&repo_root, &manifest, target.destination.as_deref(), runner)?,
-        "android" => deploy_android(&repo_root, &manifest, target.destination.as_deref(), runner)?,
+        "ios" => deploy_ios(
+            &repo_root,
+            &manifest,
+            target.destination.as_deref(),
+            launch_mode,
+            runner,
+        )?,
+        "android" => deploy_android(
+            &repo_root,
+            &manifest,
+            target.destination.as_deref(),
+            launch_mode,
+            runner,
+        )?,
         _ => unreachable!("run platform should be validated by clap"),
+    }
+
+    Ok(success_output(Vec::new()))
+}
+
+fn execute_stop(
+    cwd: &Utf8Path,
+    args: &StopArgs,
+    runner: &mut impl ToolRunner,
+) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    let (platform, target) = match &args.platform {
+        StopPlatform::Ios(target) => ("ios", target),
+        StopPlatform::Android(target) => ("android", target),
+    };
+    let manifest = load_manifest(&repo_root, &target.target)?;
+    let enabled = match platform {
+        "ios" => manifest.ios.enabled,
+        "android" => manifest.android.enabled,
+        _ => unreachable!("stop platform should be validated by clap"),
+    };
+    if !enabled {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ManifestInvalidValue,
+            format!("{platform} platform is not enabled"),
+            platform,
+        ));
+    }
+
+    match platform {
+        "ios" => stop_ios(&repo_root, &manifest, target.destination.as_deref(), runner)?,
+        "android" => stop_android(&repo_root, &manifest, target.destination.as_deref(), runner)?,
+        _ => unreachable!("stop platform should be validated by clap"),
     }
 
     Ok(success_output(Vec::new()))
@@ -693,6 +770,41 @@ mod tests {
             [
                 "atom",
                 "run",
+                "ios",
+                "--target",
+                "//examples/hello-world/apps/hello_atom:hello_atom",
+                "--destination",
+                "SIM-123",
+            ],
+            &root,
+        )
+        .expect_err("missing manifest should fail after clap accepts the command");
+
+        assert_ne!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn run_command_accepts_detach_flag() {
+        parse_cli(&[
+            "atom",
+            "run",
+            "android",
+            "--target",
+            "//examples/hello-world/apps/hello_atom:hello_atom",
+            "--detach",
+        ]);
+    }
+
+    #[test]
+    fn stop_command_accepts_destination_alias() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        fs::write(root.join("MODULE.bazel"), "module(name = \"atom\")\n").expect("workspace");
+
+        let error = run_from_args(
+            [
+                "atom",
+                "stop",
                 "ios",
                 "--target",
                 "//examples/hello-world/apps/hello_atom:hello_atom",

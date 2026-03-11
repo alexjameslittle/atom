@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 
-@objc(AtomHostRootViewProviderImpl)
 final class AtomHostRootViewProviderImpl: AtomHostRootViewProvider {
     override func makeRootViewController() -> UIViewController {
         UIHostingController(rootView: HelloWorldDemoRootView())
