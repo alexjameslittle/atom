@@ -71,14 +71,14 @@ for path in $changed_files; do
     examples/*)
       echo "  $path"
       printf '%s\n' \
-        "    example validation: .agents/skills/examples-auto-run/scripts/run.sh smoke" \
-        "    example validation: .agents/skills/examples-auto-run/scripts/run.sh generated-tree"
+        "    example validation: mise exec -- ./.agents/skills/examples-auto-run/scripts/run.sh smoke" \
+        "    example validation: mise exec -- ./.agents/skills/examples-auto-run/scripts/run.sh generated-tree"
       ;;
     bzl/*|scripts/*|.agents/skills/*)
       echo "  $path"
       printf '%s\n' \
-        "    verification target: ./scripts/verify.sh lint" \
-        "    smoke target: bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run"
+        "    verification target: mise exec -- ./scripts/verify.sh lint" \
+        "    smoke target: mise exec -- bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run"
       ;;
   esac
 done

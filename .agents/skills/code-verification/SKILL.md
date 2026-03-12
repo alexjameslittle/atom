@@ -23,7 +23,7 @@ This skill is **mandatory** when a change touches any of:
 
 ## Steps
 
-1. Run `scripts/run.sh`.
+1. Run `mise exec -- scripts/run.sh`.
 2. If any step fails, report the failing step and its output.
 3. If the change touches destination discovery, evidence capture, interaction, evaluation, or the
    hello-world demo surface or plain-app proof path, follow this skill with

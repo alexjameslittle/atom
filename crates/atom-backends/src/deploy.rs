@@ -1,3 +1,5 @@
+use std::cell::{RefCell, RefMut};
+
 use atom_ffi::AtomResult;
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -27,6 +29,14 @@ pub enum DestinationCapability {
     InspectUi,
     Interact,
     Evaluate,
+    Debug,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebuggerKind {
+    Native,
+    Jvm,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +49,15 @@ pub struct DestinationDescriptor {
     pub available: bool,
     pub debug_state: String,
     pub capabilities: Vec<DestinationCapability>,
+    #[serde(default)]
+    pub debuggers: Vec<DebuggerKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCommandOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_code: i32,
 }
 
 pub trait ToolRunner {
@@ -46,6 +65,16 @@ pub trait ToolRunner {
     ///
     /// Returns an error if the tool invocation fails.
     fn run(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
+
+    /// # Errors
+    ///
+    /// Returns an error if the tool process could not be invoked.
+    fn capture_output(
+        &mut self,
+        repo_root: &Utf8Path,
+        tool: &str,
+        args: &[String],
+    ) -> AtomResult<ToolCommandOutput>;
 
     /// # Errors
     ///
@@ -66,6 +95,23 @@ pub trait ToolRunner {
     ///
     /// Returns an error if the tool invocation fails or exits with a non-zero status.
     fn stream(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()>;
+}
+
+pub struct SharedToolRunner<'a> {
+    inner: RefCell<&'a mut dyn ToolRunner>,
+}
+
+impl<'a> SharedToolRunner<'a> {
+    #[must_use]
+    pub fn new(runner: &'a mut dyn ToolRunner) -> Self {
+        Self {
+            inner: RefCell::new(runner),
+        }
+    }
+
+    pub fn borrow_mut(&self) -> RefMut<'_, &'a mut dyn ToolRunner> {
+        self.inner.borrow_mut()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,6 +194,76 @@ pub struct InteractionResult {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugSourceLocation {
+    pub file: String,
+    pub line: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugBreakpoint {
+    pub debugger: DebuggerKind,
+    pub file: String,
+    pub line: u32,
+    pub id: String,
+    #[serde(default)]
+    pub resolved_file: Option<String>,
+    #[serde(default)]
+    pub resolved_line: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugStop {
+    pub debugger: DebuggerKind,
+    pub reason: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub thread_name: Option<String>,
+    #[serde(default)]
+    pub breakpoint_id: Option<String>,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub line: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugThread {
+    pub debugger: DebuggerKind,
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugFrame {
+    pub index: usize,
+    pub function: String,
+    #[serde(default)]
+    pub module: Option<String>,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub line: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugBacktrace {
+    pub debugger: DebuggerKind,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub thread_name: Option<String>,
+    pub frames: Vec<DebugFrame>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EvaluationStep {
@@ -193,6 +309,14 @@ pub enum EvaluationStep {
         target_id: Option<String>,
         text: String,
     },
+    DebugTap {
+        #[serde(default)]
+        target_id: Option<String>,
+        #[serde(default)]
+        x: Option<f64>,
+        #[serde(default)]
+        y: Option<f64>,
+    },
     Screenshot {
         #[serde(default)]
         name: Option<String>,
@@ -211,6 +335,51 @@ pub enum EvaluationStep {
         name: Option<String>,
         #[serde(default)]
         seconds: Option<u64>,
+    },
+    DebugLaunch {
+        debugger: DebuggerKind,
+    },
+    DebugAttach {
+        debugger: DebuggerKind,
+    },
+    DebugSetBreakpoint {
+        debugger: DebuggerKind,
+        file: String,
+        line: u32,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugClearBreakpoint {
+        debugger: DebuggerKind,
+        file: String,
+        line: u32,
+    },
+    DebugWaitForStop {
+        debugger: DebuggerKind,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugThreads {
+        debugger: DebuggerKind,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugBacktrace {
+        debugger: DebuggerKind,
+        #[serde(default)]
+        thread_id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugPause {
+        debugger: DebuggerKind,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugResume {
+        debugger: DebuggerKind,
     },
 }
 
@@ -257,9 +426,13 @@ pub struct EvaluationBundleManifest {
 pub trait BackendAutomationSession {
     fn video_extension(&self) -> &'static str;
 
+    fn attach_existing(&mut self) -> AtomResult<bool>;
+
     fn ensure_launched(&mut self) -> AtomResult<()>;
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult>;
+
+    fn interact_without_snapshot(&mut self, request: InteractionRequest) -> AtomResult<()>;
 
     fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf>;
 
@@ -274,6 +447,34 @@ pub trait BackendAutomationSession {
     fn stop_video(&mut self) -> AtomResult<Utf8PathBuf>;
 
     fn shutdown_video(&mut self) -> AtomResult<()>;
+}
+
+#[expect(
+    clippy::missing_errors_doc,
+    reason = "Trait methods document the shared debugger session contract once at the trait boundary."
+)]
+pub trait BackendDebugSession {
+    fn kind(&self) -> DebuggerKind;
+
+    fn launch(&mut self) -> AtomResult<()>;
+
+    fn attach(&mut self) -> AtomResult<()>;
+
+    fn set_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<DebugBreakpoint>;
+
+    fn clear_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<()>;
+
+    fn wait_for_stop(&mut self, timeout_ms: Option<u64>) -> AtomResult<DebugStop>;
+
+    fn threads(&mut self) -> AtomResult<Vec<DebugThread>>;
+
+    fn backtrace(&mut self, thread_id: Option<&str>) -> AtomResult<DebugBacktrace>;
+
+    fn pause(&mut self) -> AtomResult<DebugStop>;
+
+    fn resume(&mut self) -> AtomResult<()>;
+
+    fn shutdown(&mut self) -> AtomResult<()>;
 }
 
 #[expect(
@@ -311,9 +512,19 @@ pub trait DeployBackend: BackendDefinition {
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
-        runner: &'a mut dyn ToolRunner,
+        runner: &'a SharedToolRunner<'a>,
         launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Box<dyn BackendAutomationSession + 'a>>;
+
+    fn new_debug_session<'a>(
+        &self,
+        repo_root: &'a Utf8Path,
+        manifest: &'a NormalizedManifest,
+        destination_id: &'a str,
+        runner: &'a SharedToolRunner<'a>,
+        launch_behavior: SessionLaunchBehavior,
+        debugger: DebuggerKind,
+    ) -> AtomResult<Box<dyn BackendDebugSession + 'a>>;
 }
 
 pub type DeployBackendRegistry = BackendRegistry<Box<dyn DeployBackend>>;

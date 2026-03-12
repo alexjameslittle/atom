@@ -1,30 +1,25 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
-    name = "atom-backend-ios",
+    name = "atom-backend-android-native-debug",
     srcs = glob(["src/**/*.rs"]),
-    compile_data = glob(["src/templates/**"]),
-    crate_name = "atom_backend_ios",
+    compile_data = ["src/native_lldb_helper.py"],
+    crate_name = "atom_backend_android_native_debug",
     crate_root = "src/lib.rs",
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
-        "//crates/atom-backend-ios-debug",
         "//crates/atom-backends",
-        "//crates/atom-cng",
-        "//crates/atom-deploy",
         "//crates/atom-ffi",
-        "//crates/atom-manifest",
-        "//crates/atom-modules",
         "@crates//:camino",
-        "@crates//:minijinja",
+        "@crates//:serde",
         "@crates//:serde_json",
     ],
 )
 
 rust_test(
-    name = "atom-backend-ios-test",
-    crate = ":atom-backend-ios",
+    name = "atom-backend-android-native-debug-test",
+    crate = ":atom-backend-android-native-debug",
     deps = [
         "@crates//:tempfile",
     ],

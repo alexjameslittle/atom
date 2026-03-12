@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use atom_backends::ToolRunner;
+use atom_backends::{ToolCommandOutput, ToolRunner};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -50,7 +50,12 @@ impl ToolRunner for ProcessRunner {
         }
     }
 
-    fn capture(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<String> {
+    fn capture_output(
+        &mut self,
+        repo_root: &Utf8Path,
+        tool: &str,
+        args: &[String],
+    ) -> AtomResult<ToolCommandOutput> {
         let output = Command::new(tool)
             .args(args)
             .current_dir(repo_root)
@@ -62,13 +67,23 @@ impl ToolRunner for ProcessRunner {
                 )
             })?;
 
-        if !output.status.success() {
+        Ok(ToolCommandOutput {
+            stdout: output.stdout,
+            stderr: output.stderr,
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+
+    fn capture(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<String> {
+        let output = self.capture_output(repo_root, tool, args)?;
+
+        if output.exit_code != 0 {
             return Err(AtomError::new(
                 AtomErrorCode::ExternalToolFailed,
                 format!(
                     "{tool} {} exited with status {}",
                     args.join(" "),
-                    output.status
+                    output.exit_code
                 ),
             ));
         }
@@ -300,11 +315,38 @@ pub fn find_bazel_output_owned(
     suffixes: &[&str],
     artifact_name: &str,
 ) -> AtomResult<Utf8PathBuf> {
+    let output = capture_bazel_outputs_owned(runner, repo_root, build_args, target)?;
+    select_bazel_output_path(repo_root, &output, suffixes, artifact_name, target)
+}
+
+/// # Errors
+///
+/// Returns an error if bazelisk cquery fails or any returned path is not valid UTF-8.
+pub fn list_bazel_outputs_owned(
+    runner: &mut (impl ToolRunner + ?Sized),
+    repo_root: &Utf8Path,
+    build_args: &[String],
+    target: &str,
+) -> AtomResult<Vec<Utf8PathBuf>> {
+    let output = capture_bazel_outputs_owned(runner, repo_root, build_args, target)?;
+    bazel_output_paths(repo_root, &output)
+}
+
+fn capture_bazel_outputs_owned(
+    runner: &mut (impl ToolRunner + ?Sized),
+    repo_root: &Utf8Path,
+    build_args: &[String],
+    target: &str,
+) -> AtomResult<String> {
     let mut args = build_args.to_vec();
     "cquery".clone_into(&mut args[0]);
+    if args.len() > 1 {
+        args[1] = target.to_owned();
+    } else {
+        args.push(target.to_owned());
+    }
     args.push("--output=files".to_owned());
-    let output = capture_bazel_owned(runner, repo_root, &args)?;
-    select_bazel_output_path(repo_root, &output, suffixes, artifact_name, target)
+    capture_bazel_owned(runner, repo_root, &args)
 }
 
 fn select_bazel_output_path(
@@ -331,6 +373,70 @@ fn select_bazel_output_path(
     } else {
         Ok(repo_root.join(selected))
     }
+}
+
+fn bazel_output_paths(repo_root: &Utf8Path, output: &str) -> AtomResult<Vec<Utf8PathBuf>> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            if line.starts_with('/') {
+                Utf8PathBuf::from_path_buf(line.into()).map_err(|_| {
+                    AtomError::new(
+                        AtomErrorCode::ExternalToolFailed,
+                        "bazelisk returned a non-UTF-8 output path",
+                    )
+                })
+            } else {
+                Ok(repo_root.join(line))
+            }
+        })
+        .collect()
+}
+
+/// # Errors
+///
+/// Returns an error if the artifact path cannot be canonicalized as valid UTF-8.
+pub fn bazel_source_map_prefix(path: &Utf8Path) -> AtomResult<Option<String>> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        AtomError::with_path(
+            AtomErrorCode::ExternalToolFailed,
+            format!("failed to canonicalize debug artifact path: {error}"),
+            path.as_str(),
+        )
+    })?;
+    let canonical = Utf8PathBuf::from_path_buf(canonical).map_err(|_| {
+        AtomError::with_path(
+            AtomErrorCode::ExternalToolFailed,
+            "debug artifact path contained non-UTF-8 bytes",
+            path.as_str(),
+        )
+    })?;
+
+    let mut saw_bazel_out = false;
+    let mut config = None::<String>;
+    let mut saw_bin = false;
+    for component in canonical.components() {
+        let component = component.as_str();
+        if !saw_bazel_out {
+            saw_bazel_out = component == "bazel-out";
+            continue;
+        }
+        if config.is_none() {
+            config = Some(component.to_owned());
+            continue;
+        }
+        if component == "bin" {
+            saw_bin = true;
+            break;
+        }
+    }
+
+    Ok(match (saw_bazel_out, config, saw_bin) {
+        (true, Some(config), true) => Some(format!("bazel-out/{config}/bin")),
+        _ => None,
+    })
 }
 
 fn select_bazel_output<'a>(output: &'a str, suffixes: &[&str]) -> Option<&'a str> {

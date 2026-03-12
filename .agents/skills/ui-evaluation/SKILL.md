@@ -26,11 +26,11 @@ Use this skill when:
    instead of holding a live log-streaming session open. Detached launch returns only after the app
    is inspectable. Use `atom stop ios|android` for cleanup only when the workflow intentionally
    launched a disposable session.
-3. Run `scripts/run.sh tap`, `long-press`, `swipe`, `drag`, or `type-text` for one-step actions.
-   These ad hoc commands should reuse the current foreground app state when the selected target is
-   already running.
-4. Run `scripts/run.sh evaluate` for a full proof bundle. The default plan is
-   `../../../examples/hello-world/evaluation/demo_surface_plan.json`.
+3. Run `mise exec -- scripts/run.sh tap <platform>`, `long-press <platform>`, `swipe <platform>`,
+   `drag <platform>`, or `type-text <platform>` for one-step actions. These ad hoc commands should
+   reuse the current foreground app state when the selected target is already running.
+4. Run `mise exec -- scripts/run.sh evaluate <platform>` for a full proof bundle. The default plan
+   is `../../../examples/hello-world/evaluation/demo_surface_plan.json`.
 
 ## Output
 

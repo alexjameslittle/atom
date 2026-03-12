@@ -8,10 +8,12 @@ pub use crate::cng::{
     GenerationBackendRegistry, GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
 };
 pub use crate::deploy::{
-    ArtifactRecord, BackendAutomationSession, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, EvaluationBundleManifest, EvaluationPlan,
-    EvaluationStep, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
-    SessionLaunchBehavior, StepRecord, ToolRunner, UiBounds, UiNode, UiSnapshot,
+    ArtifactRecord, BackendAutomationSession, BackendDebugSession, DebugBacktrace, DebugBreakpoint,
+    DebugFrame, DebugSourceLocation, DebugStop, DebugThread, DebuggerKind, DeployBackend,
+    DeployBackendRegistry, DestinationCapability, DestinationDescriptor, EvaluationBundleManifest,
+    EvaluationPlan, EvaluationStep, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
+    SessionLaunchBehavior, SharedToolRunner, StepRecord, ToolCommandOutput, ToolRunner, UiBounds,
+    UiNode, UiSnapshot,
 };
 
 pub trait BackendDefinition {
@@ -83,7 +85,10 @@ mod tests {
     use atom_ffi::AtomErrorCode;
     use serde_json::json;
 
-    use super::{BackendDefinition, BackendRegistry, DestinationCapability, DestinationDescriptor};
+    use super::{
+        BackendDefinition, BackendRegistry, DebuggerKind, DestinationCapability,
+        DestinationDescriptor,
+    };
 
     struct FixtureBackend {
         id: &'static str,
@@ -136,6 +141,7 @@ mod tests {
             available: true,
             debug_state: "ready".to_owned(),
             capabilities: vec![DestinationCapability::Launch],
+            debuggers: vec![DebuggerKind::Native],
         };
 
         let value =
@@ -152,6 +158,7 @@ mod tests {
                 "available": true,
                 "debug_state": "ready",
                 "capabilities": ["launch"],
+                "debuggers": ["native"],
             })
         );
     }

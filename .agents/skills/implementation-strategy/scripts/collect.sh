@@ -48,4 +48,4 @@ printf '%s\n' \
   "  ./scripts/bootstrap.sh" \
   "  mise run fmt" \
   "  mise run verify" \
-  "  bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run"
+  "  mise exec -- bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run"

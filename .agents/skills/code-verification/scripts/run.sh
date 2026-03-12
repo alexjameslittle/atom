@@ -18,9 +18,9 @@ step() {
   fi
 }
 
-step "lint" ./scripts/verify.sh lint
-step "test" ./scripts/verify.sh test
-step "smoke-prebuild" bazelisk run //:atom -- prebuild \
+step "lint" mise exec -- ./scripts/verify.sh lint
+step "test" mise exec -- ./scripts/verify.sh test
+step "smoke-prebuild" mise exec -- bazelisk run //:atom -- prebuild \
   --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run
 
 if [ -n "$failed" ]; then

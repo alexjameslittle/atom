@@ -6,6 +6,10 @@ cd "$repo_root"
 
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
 
+run_atom() {
+  mise exec -- bazelisk run //:atom -- "$@"
+}
+
 detect_generated_root() {
   for candidate in "$repo_root/cng-output" "$repo_root/generated"; do
     if [ -d "$candidate/ios" ] || [ -d "$candidate/android" ] || [ -d "$candidate/schema" ]; then
@@ -18,11 +22,11 @@ detect_generated_root() {
 }
 
 echo "==> Running dry-run prebuild"
-bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET" --dry-run
+run_atom prebuild --target "$EXAMPLE_TARGET" --dry-run
 
 echo ""
 echo "==> Running real prebuild"
-bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+run_atom prebuild --target "$EXAMPLE_TARGET"
 
 GENERATED_ROOT=$(detect_generated_root)
 
@@ -49,7 +53,7 @@ fi
 echo ""
 echo "==> Checking determinism (second run)"
 hash_before=$(find "$GENERATED_ROOT" -type f -exec shasum {} \; 2>/dev/null | sort | shasum)
-bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+run_atom prebuild --target "$EXAMPLE_TARGET"
 hash_after=$(find "$GENERATED_ROOT" -type f -exec shasum {} \; 2>/dev/null | sort | shasum)
 
 if [ "$hash_before" = "$hash_after" ]; then

@@ -41,11 +41,13 @@ case "$mode" in
     fi
     ;;
   evaluate)
-    destination=${2:?destination id required}
-    artifacts_dir=${3:?artifacts dir required}
-    plan=${4:-$DEFAULT_PLAN}
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    artifacts_dir=${4:?artifacts dir required}
+    plan=${5:-$DEFAULT_PLAN}
     run_atom prebuild --target "$EXAMPLE_TARGET"
     run_atom evaluate run \
+      --platform "$platform" \
       --target "$EXAMPLE_TARGET" \
       --destination "$destination" \
       --plan "$plan" \

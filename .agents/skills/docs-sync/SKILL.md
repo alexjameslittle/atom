@@ -16,7 +16,7 @@ architecture boundaries, or updates the plan/spec.
 
 ## Steps
 
-1. Run `scripts/audit.sh`.
+1. Run `mise exec -- scripts/audit.sh`.
 2. Review the output against the current docs index at `docs/README.md`.
 3. Flag any of the following:
    - Crate modules not mentioned in `docs/architecture.md`

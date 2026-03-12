@@ -14,30 +14,34 @@ mode=${1:-}
 
 case "$mode" in
   screenshot)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom evidence screenshot --target "$target" --destination "$destination" --output "$output"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    output=${4:?output path required}
+    target=${5:-$EXAMPLE_TARGET}
+    run_atom evidence screenshot --platform "$platform" --target "$target" --destination "$destination" --output "$output"
     ;;
   logs)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    seconds=${4:-60}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom evidence logs --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    output=${4:?output path required}
+    seconds=${5:-60}
+    target=${6:-$EXAMPLE_TARGET}
+    run_atom evidence logs --platform "$platform" --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
     ;;
   video)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    seconds=${4:-5}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom evidence video --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    output=${4:?output path required}
+    seconds=${5:-5}
+    target=${6:-$EXAMPLE_TARGET}
+    run_atom evidence video --platform "$platform" --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
     ;;
   inspect-ui)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom inspect ui --target "$target" --destination "$destination" --output "$output"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    output=${4:?output path required}
+    target=${5:-$EXAMPLE_TARGET}
+    run_atom inspect ui --platform "$platform" --target "$target" --destination "$destination" --output "$output"
     ;;
   *)
     echo "unknown mode: $mode" >&2

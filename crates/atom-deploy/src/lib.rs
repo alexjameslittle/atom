@@ -1,3 +1,4 @@
+mod debugger;
 mod deploy;
 pub mod destinations;
 pub mod devices;
@@ -7,18 +8,18 @@ mod tools;
 
 pub use crate::deploy::{deploy_backend, ensure_backend_enabled, generated_target, stop_backend};
 pub use crate::tools::{
-    CommandOutput, ProcessRunner, capture_bazel, capture_bazel_owned, capture_json_tool,
-    capture_tool, find_bazel_output, find_bazel_output_owned, run_bazel, run_bazel_owned, run_tool,
-    stream_tool,
+    CommandOutput, ProcessRunner, bazel_source_map_prefix, capture_bazel, capture_bazel_owned,
+    capture_json_tool, capture_tool, find_bazel_output, find_bazel_output_owned,
+    list_bazel_outputs_owned, run_bazel, run_bazel_owned, run_tool, stream_tool,
 };
-pub use atom_backends::{LaunchMode, ToolRunner};
+pub use atom_backends::{LaunchMode, SharedToolRunner, ToolRunner};
 
 #[cfg(test)]
 mod tests {
     use atom_backends::{
-        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-        DestinationCapability, DestinationDescriptor, LaunchMode, SessionLaunchBehavior,
-        ToolRunner,
+        BackendAutomationSession, BackendDebugSession, BackendDefinition, DebuggerKind,
+        DeployBackend, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
+        LaunchMode, SessionLaunchBehavior, SharedToolRunner, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -37,6 +38,19 @@ mod tests {
             _args: &[String],
         ) -> atom_ffi::AtomResult<()> {
             Ok(())
+        }
+
+        fn capture_output(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<atom_backends::ToolCommandOutput> {
+            Ok(atom_backends::ToolCommandOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
         }
 
         fn capture(
@@ -98,6 +112,7 @@ mod tests {
                 available: true,
                 debug_state: "ready".to_owned(),
                 capabilities: vec![DestinationCapability::Launch],
+                debuggers: vec![DebuggerKind::Native],
             }])
         }
 
@@ -127,10 +142,22 @@ mod tests {
             _repo_root: &'a Utf8Path,
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
-            _runner: &'a mut dyn ToolRunner,
+            _runner: &'a SharedToolRunner<'a>,
             _launch_behavior: SessionLaunchBehavior,
         ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
             unreachable!("deploy core tests do not construct automation sessions")
+        }
+
+        fn new_debug_session<'a>(
+            &self,
+            _repo_root: &'a Utf8Path,
+            _manifest: &'a NormalizedManifest,
+            _destination_id: &'a str,
+            _runner: &'a SharedToolRunner<'a>,
+            _launch_behavior: SessionLaunchBehavior,
+            _debugger: DebuggerKind,
+        ) -> atom_ffi::AtomResult<Box<dyn BackendDebugSession + 'a>> {
+            unreachable!("deploy core tests do not construct debug sessions")
         }
     }
 
@@ -249,10 +276,22 @@ mod tests {
                 _repo_root: &'a Utf8Path,
                 _manifest: &'a NormalizedManifest,
                 _destination_id: &'a str,
-                _runner: &'a mut dyn ToolRunner,
+                _runner: &'a SharedToolRunner<'a>,
                 _launch_behavior: SessionLaunchBehavior,
             ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
                 unreachable!("deploy core tests do not construct automation sessions")
+            }
+
+            fn new_debug_session<'a>(
+                &self,
+                _repo_root: &'a Utf8Path,
+                _manifest: &'a NormalizedManifest,
+                _destination_id: &'a str,
+                _runner: &'a SharedToolRunner<'a>,
+                _launch_behavior: SessionLaunchBehavior,
+                _debugger: DebuggerKind,
+            ) -> atom_ffi::AtomResult<Box<dyn BackendDebugSession + 'a>> {
+                unreachable!("deploy core tests do not construct debug sessions")
             }
         }
 

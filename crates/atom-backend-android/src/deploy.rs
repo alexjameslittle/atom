@@ -1,17 +1,21 @@
+use atom_backend_android_jvm_debug::{AndroidJvmAttachOptions, AndroidJvmClient};
+use atom_backend_android_native_debug::{AndroidNativeAttachOptions, AndroidNativeClient};
 use std::fs;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, SessionLaunchBehavior, ToolRunner, UiSnapshot,
+    BackendAutomationSession, BackendDebugSession, BackendDefinition, DebugBacktrace,
+    DebugBreakpoint, DebugSourceLocation, DebugStop, DebugThread, DebuggerKind, DeployBackend,
+    DeployBackendRegistry, DestinationCapability, DestinationDescriptor, InteractionRequest,
+    InteractionResult, LaunchMode, SessionLaunchBehavior, SharedToolRunner, ToolRunner, UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
 use atom_deploy::{
-    capture_tool, find_bazel_output_owned, generated_target, run_bazel_owned, run_tool, stream_tool,
+    bazel_source_map_prefix, capture_tool, find_bazel_output_owned, generated_target,
+    list_bazel_outputs_owned, run_bazel_owned, run_tool, stream_tool,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -19,6 +23,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::android_uiautomator::{
     inspect_ui_with_android_uiautomator, interact_with_android_uiautomator,
+    interact_with_android_uiautomator_without_snapshot,
 };
 
 const BACKEND_ID: &str = "android";
@@ -58,11 +63,35 @@ struct VideoCapture {
 struct AndroidAutomationSession<'a> {
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
-    runner: &'a mut dyn ToolRunner,
+    runner: &'a SharedToolRunner<'a>,
     destination_id: String,
     launch_behavior: SessionLaunchBehavior,
     launch: Option<AndroidAppLaunch>,
     video_capture: Option<VideoCapture>,
+}
+
+struct AndroidDebugArtifacts {
+    apk: Utf8PathBuf,
+    application_id: String,
+    generated_kotlin_jar: Utf8PathBuf,
+    native_library_path: Utf8PathBuf,
+    native_source_map_prefix: Option<String>,
+}
+
+struct AndroidJvmDebugSession<'a> {
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    runner: &'a SharedToolRunner<'a>,
+    destination_id: String,
+    client: Option<AndroidJvmClient>,
+}
+
+struct AndroidNativeDebugSession<'a> {
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    runner: &'a SharedToolRunner<'a>,
+    destination_id: String,
+    client: Option<AndroidNativeClient>,
 }
 
 impl AndroidDestination {
@@ -160,7 +189,7 @@ impl DeployBackend for AndroidDeployBackend {
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
-        runner: &'a mut dyn ToolRunner,
+        runner: &'a SharedToolRunner<'a>,
         launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Box<dyn BackendAutomationSession + 'a>> {
         Ok(Box::new(AndroidAutomationSession {
@@ -172,6 +201,33 @@ impl DeployBackend for AndroidDeployBackend {
             launch: None,
             video_capture: None,
         }))
+    }
+
+    fn new_debug_session<'a>(
+        &self,
+        repo_root: &'a Utf8Path,
+        manifest: &'a NormalizedManifest,
+        destination_id: &'a str,
+        runner: &'a SharedToolRunner<'a>,
+        _launch_behavior: SessionLaunchBehavior,
+        debugger: DebuggerKind,
+    ) -> AtomResult<Box<dyn BackendDebugSession + 'a>> {
+        match debugger {
+            DebuggerKind::Jvm => Ok(Box::new(AndroidJvmDebugSession {
+                repo_root,
+                manifest,
+                runner,
+                destination_id: destination_id.to_owned(),
+                client: None,
+            })),
+            DebuggerKind::Native => Ok(Box::new(AndroidNativeDebugSession {
+                repo_root,
+                manifest,
+                runner,
+                destination_id: destination_id.to_owned(),
+                client: None,
+            })),
+        }
     }
 }
 
@@ -186,9 +242,58 @@ impl AndroidAutomationSession<'_> {
     }
 }
 
+impl AndroidJvmDebugSession<'_> {
+    fn resolve_destination(&self) -> AtomResult<AndroidDestination> {
+        let mut runner = self.runner.borrow_mut();
+        resolve_android_device(self.repo_root, &mut **runner, Some(&self.destination_id))
+    }
+
+    fn ensure_client(&mut self) -> AtomResult<&mut AndroidJvmClient> {
+        self.client.as_mut().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "Android JVM debugger session has not been attached or launched",
+            )
+        })
+    }
+}
+
+impl AndroidNativeDebugSession<'_> {
+    fn resolve_destination(&self) -> AtomResult<AndroidDestination> {
+        let mut runner = self.runner.borrow_mut();
+        resolve_android_device(self.repo_root, &mut **runner, Some(&self.destination_id))
+    }
+
+    fn ensure_client(&mut self) -> AtomResult<&mut AndroidNativeClient> {
+        self.client.as_mut().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "Android native debugger session has not been attached or launched",
+            )
+        })
+    }
+}
+
 impl BackendAutomationSession for AndroidAutomationSession<'_> {
     fn video_extension(&self) -> &'static str {
         "mp4"
+    }
+
+    fn attach_existing(&mut self) -> AtomResult<bool> {
+        if self.launch.is_some() {
+            return Ok(true);
+        }
+        let mut runner = self.runner.borrow_mut();
+        if let Some(launch) = attach_running_android_app(
+            self.repo_root,
+            self.manifest,
+            &self.destination_id,
+            &mut **runner,
+        )? {
+            self.launch = Some(launch);
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn ensure_launched(&mut self) -> AtomResult<()> {
@@ -196,32 +301,43 @@ impl BackendAutomationSession for AndroidAutomationSession<'_> {
             return Ok(());
         }
         if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
-            && let Some(launch) = attach_android_app(
-                self.repo_root,
-                self.manifest,
-                &self.destination_id,
-                self.runner,
-            )?
+            && let Some(launch) = {
+                let mut runner = self.runner.borrow_mut();
+                attach_android_app(
+                    self.repo_root,
+                    self.manifest,
+                    &self.destination_id,
+                    &mut **runner,
+                )?
+            }
         {
             self.launch = Some(launch);
             return Ok(());
         }
-        let Some(destination) =
-            find_android_destination(self.repo_root, self.runner, &self.destination_id)?
-        else {
+        let destination = {
+            let mut runner = self.runner.borrow_mut();
+            find_android_destination(self.repo_root, &mut **runner, &self.destination_id)?
+        };
+        let Some(destination) = destination else {
             return Err(AtomError::with_path(
                 AtomErrorCode::AutomationUnavailable,
                 format!("unknown destination id: {}", self.destination_id),
                 &self.destination_id,
             ));
         };
-        let launch = launch_android_app(self.repo_root, self.manifest, &destination, self.runner)?;
-        wait_for_android_launch_ready(
-            self.repo_root,
-            &launch.serial,
-            &launch.application_id,
-            self.runner,
-        )?;
+        let launch = {
+            let mut runner = self.runner.borrow_mut();
+            launch_android_app(self.repo_root, self.manifest, &destination, &mut **runner)?
+        };
+        {
+            let mut runner = self.runner.borrow_mut();
+            wait_for_android_launch_ready(
+                self.repo_root,
+                &launch.serial,
+                &launch.application_id,
+                &mut **runner,
+            )?;
+        }
         self.launch = Some(launch);
         Ok(())
     }
@@ -229,7 +345,20 @@ impl BackendAutomationSession for AndroidAutomationSession<'_> {
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
-        interact_with_android_uiautomator(self.repo_root, &launch.serial, self.runner, request)
+        let mut runner = self.runner.borrow_mut();
+        interact_with_android_uiautomator(self.repo_root, &launch.serial, &mut **runner, request)
+    }
+
+    fn interact_without_snapshot(&mut self, request: InteractionRequest) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        let mut runner = self.runner.borrow_mut();
+        interact_with_android_uiautomator_without_snapshot(
+            self.repo_root,
+            &launch.serial,
+            &mut **runner,
+            request,
+        )
     }
 
     fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
@@ -243,19 +372,22 @@ impl BackendAutomationSession for AndroidAutomationSession<'_> {
     fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
-        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
+        let mut runner = self.runner.borrow_mut();
+        capture_screenshot_for_launch(self.repo_root, &launch, output_path, &mut **runner)
     }
 
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
-        capture_logs_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
+        let mut runner = self.runner.borrow_mut();
+        capture_logs_for_launch(self.repo_root, &launch, output_path, seconds, &mut **runner)
     }
 
     fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
-        capture_video_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
+        let mut runner = self.runner.borrow_mut();
+        capture_video_for_launch(self.repo_root, &launch, output_path, seconds, &mut **runner)
     }
 
     fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
@@ -272,12 +404,253 @@ impl BackendAutomationSession for AndroidAutomationSession<'_> {
                 "video recording has not been started",
             )
         })?;
-        stop_video_capture(self.repo_root, video, self.runner)
+        let mut runner = self.runner.borrow_mut();
+        stop_video_capture(self.repo_root, video, &mut **runner)
     }
 
     fn shutdown_video(&mut self) -> AtomResult<()> {
         if self.video_capture.is_some() {
             let _ = self.stop_video()?;
+        }
+        Ok(())
+    }
+}
+
+impl BackendDebugSession for AndroidJvmDebugSession<'_> {
+    fn kind(&self) -> DebuggerKind {
+        DebuggerKind::Jvm
+    }
+
+    fn launch(&mut self) -> AtomResult<()> {
+        if self.client.is_some() {
+            return Ok(());
+        }
+        let destination = self.resolve_destination()?;
+        let build = {
+            let mut runner = self.runner.borrow_mut();
+            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
+        };
+        let launch = {
+            let mut runner = self.runner.borrow_mut();
+            launch_android_debug_app(self.repo_root, &destination, &build, &mut **runner)?
+        };
+        let pid = {
+            let mut runner = self.runner.borrow_mut();
+            read_android_debug_pid(
+                self.repo_root,
+                &launch.serial,
+                &launch.application_id,
+                &mut **runner,
+            )?
+        };
+        let client = AndroidJvmClient::attach(
+            self.repo_root,
+            &AndroidJvmAttachOptions {
+                serial: launch.serial,
+                pid,
+                source_root: self.repo_root.to_owned(),
+                generated_kotlin_jar: build.generated_kotlin_jar,
+            },
+        )?;
+        self.client = Some(client);
+        Ok(())
+    }
+
+    fn attach(&mut self) -> AtomResult<()> {
+        if self.client.is_some() {
+            return Ok(());
+        }
+        let destination = self.resolve_destination()?;
+        let build = {
+            let mut runner = self.runner.borrow_mut();
+            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
+        };
+        let launch = {
+            let mut runner = self.runner.borrow_mut();
+            attach_or_launch_android_debug_app(
+                self.repo_root,
+                self.manifest,
+                &destination,
+                &build,
+                &mut **runner,
+            )?
+        };
+        let pid = {
+            let mut runner = self.runner.borrow_mut();
+            read_android_debug_pid(
+                self.repo_root,
+                &launch.serial,
+                &launch.application_id,
+                &mut **runner,
+            )?
+        };
+        let client = AndroidJvmClient::attach(
+            self.repo_root,
+            &AndroidJvmAttachOptions {
+                serial: launch.serial,
+                pid,
+                source_root: self.repo_root.to_owned(),
+                generated_kotlin_jar: build.generated_kotlin_jar,
+            },
+        )?;
+        self.client = Some(client);
+        Ok(())
+    }
+
+    fn set_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<DebugBreakpoint> {
+        self.ensure_client()?.set_breakpoint(&location)
+    }
+
+    fn clear_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<()> {
+        self.ensure_client()?.clear_breakpoint(&location)
+    }
+
+    fn wait_for_stop(&mut self, timeout_ms: Option<u64>) -> AtomResult<DebugStop> {
+        self.ensure_client()?.wait_for_stop(timeout_ms)
+    }
+
+    fn threads(&mut self) -> AtomResult<Vec<DebugThread>> {
+        self.ensure_client()?.threads()
+    }
+
+    fn backtrace(&mut self, thread_id: Option<&str>) -> AtomResult<DebugBacktrace> {
+        self.ensure_client()?.backtrace(thread_id)
+    }
+
+    fn pause(&mut self) -> AtomResult<DebugStop> {
+        self.ensure_client()?.pause()
+    }
+
+    fn resume(&mut self) -> AtomResult<()> {
+        self.ensure_client()?.resume()
+    }
+
+    fn shutdown(&mut self) -> AtomResult<()> {
+        if let Some(client) = self.client.as_mut() {
+            client.shutdown()?;
+        }
+        Ok(())
+    }
+}
+
+impl BackendDebugSession for AndroidNativeDebugSession<'_> {
+    fn kind(&self) -> DebuggerKind {
+        DebuggerKind::Native
+    }
+
+    fn launch(&mut self) -> AtomResult<()> {
+        if self.client.is_some() {
+            return Ok(());
+        }
+        let destination = self.resolve_destination()?;
+        let build = {
+            let mut runner = self.runner.borrow_mut();
+            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
+        };
+        let launch = {
+            let mut runner = self.runner.borrow_mut();
+            launch_android_debug_app(self.repo_root, &destination, &build, &mut **runner)?
+        };
+        let pid = {
+            let mut runner = self.runner.borrow_mut();
+            read_android_debug_pid(
+                self.repo_root,
+                &launch.serial,
+                &launch.application_id,
+                &mut **runner,
+            )?
+        };
+        let mut client = AndroidNativeClient::attach(
+            self.repo_root,
+            &AndroidNativeAttachOptions {
+                serial: launch.serial,
+                application_id: launch.application_id,
+                pid,
+                native_library_path: build.native_library_path,
+                source_map_prefix: build.native_source_map_prefix,
+            },
+        )?;
+        let _ = client.pause()?;
+        self.client = Some(client);
+        Ok(())
+    }
+
+    fn attach(&mut self) -> AtomResult<()> {
+        if self.client.is_some() {
+            return Ok(());
+        }
+        let destination = self.resolve_destination()?;
+        let build = {
+            let mut runner = self.runner.borrow_mut();
+            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
+        };
+        let launch = {
+            let mut runner = self.runner.borrow_mut();
+            attach_or_launch_android_debug_app(
+                self.repo_root,
+                self.manifest,
+                &destination,
+                &build,
+                &mut **runner,
+            )?
+        };
+        let pid = {
+            let mut runner = self.runner.borrow_mut();
+            read_android_debug_pid(
+                self.repo_root,
+                &launch.serial,
+                &launch.application_id,
+                &mut **runner,
+            )?
+        };
+        let mut client = AndroidNativeClient::attach(
+            self.repo_root,
+            &AndroidNativeAttachOptions {
+                serial: launch.serial,
+                application_id: launch.application_id,
+                pid,
+                native_library_path: build.native_library_path,
+                source_map_prefix: build.native_source_map_prefix,
+            },
+        )?;
+        let _ = client.pause()?;
+        self.client = Some(client);
+        Ok(())
+    }
+
+    fn set_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<DebugBreakpoint> {
+        self.ensure_client()?
+            .set_breakpoint(&location.file, location.line)
+    }
+
+    fn clear_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<()> {
+        self.ensure_client()?
+            .clear_breakpoint(&location.file, location.line)
+    }
+
+    fn wait_for_stop(&mut self, timeout_ms: Option<u64>) -> AtomResult<DebugStop> {
+        self.ensure_client()?.wait_for_stop(timeout_ms)
+    }
+
+    fn threads(&mut self) -> AtomResult<Vec<DebugThread>> {
+        self.ensure_client()?.threads()
+    }
+
+    fn backtrace(&mut self, thread_id: Option<&str>) -> AtomResult<DebugBacktrace> {
+        self.ensure_client()?.backtrace(thread_id)
+    }
+
+    fn pause(&mut self) -> AtomResult<DebugStop> {
+        self.ensure_client()?.pause()
+    }
+
+    fn resume(&mut self) -> AtomResult<()> {
+        self.ensure_client()?.resume()
+    }
+
+    fn shutdown(&mut self) -> AtomResult<()> {
+        if let Some(client) = self.client.as_mut() {
+            client.shutdown()?;
         }
         Ok(())
     }
@@ -301,6 +674,7 @@ fn destination_descriptor_from_android(destination: AndroidDestination) -> Desti
         DestinationCapability::InspectUi,
         DestinationCapability::Interact,
         DestinationCapability::Evaluate,
+        DestinationCapability::Debug,
     ];
 
     DestinationDescriptor {
@@ -312,6 +686,7 @@ fn destination_descriptor_from_android(destination: AndroidDestination) -> Desti
         available: destination.state == "device" || destination.state == "avd",
         debug_state: destination.state,
         capabilities,
+        debuggers: vec![DebuggerKind::Native, DebuggerKind::Jvm],
     }
 }
 
@@ -324,11 +699,7 @@ fn deploy_android(
 ) -> AtomResult<()> {
     let destination = resolve_android_device(repo_root, runner, requested_destination)?;
     let target = generated_target(manifest, BACKEND_ID);
-    let build_args = vec![
-        "build".to_owned(),
-        target.clone(),
-        "--android_platforms=//platforms:arm64-v8a".to_owned(),
-    ];
+    let build_args = android_bazel_args(&target, false);
 
     run_step(
         "Building Android app...",
@@ -699,7 +1070,7 @@ fn prepare_android_emulator(
     }
 
     Command::new("emulator")
-        .args(["-avd", avd, "-no-snapshot-load"])
+        .args(["-avd", avd])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -800,6 +1171,273 @@ fn wait_for_app_pid(
     ))
 }
 
+fn read_android_app_pid(
+    runner: &mut dyn ToolRunner,
+    repo_root: &Utf8Path,
+    serial: &str,
+    application_id: &str,
+) -> AtomResult<Option<u32>> {
+    let output = runner.capture_output(
+        repo_root,
+        "adb",
+        &[
+            "-s".to_owned(),
+            serial.to_owned(),
+            "shell".to_owned(),
+            "pidof".to_owned(),
+            application_id.to_owned(),
+        ],
+    )?;
+    if output.exit_code == 1 {
+        return Ok(None);
+    }
+    if output.exit_code != 0 {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = if stderr.trim().is_empty() {
+            format!(
+                "adb -s {serial} shell pidof {application_id} exited with status {}",
+                output.exit_code
+            )
+        } else {
+            format!(
+                "adb -s {serial} shell pidof {application_id} exited with status {}:\n{}",
+                output.exit_code,
+                stderr.trim()
+            )
+        };
+        return Err(AtomError::new(AtomErrorCode::ExternalToolFailed, detail));
+    }
+    let output = String::from_utf8(output.stdout).map_err(|_| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("adb pidof returned non-UTF-8 output for {application_id}"),
+        )
+    })?;
+    let Some(pid) = output.split_whitespace().next() else {
+        return Ok(None);
+    };
+    let pid = pid.parse::<u32>().map_err(|error| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("adb pidof returned an invalid PID for {application_id}: {error}"),
+        )
+    })?;
+    Ok(Some(pid))
+}
+
+fn read_android_debug_pid(
+    repo_root: &Utf8Path,
+    serial: &str,
+    application_id: &str,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<u32> {
+    for _ in 0..APP_PID_WAIT_ATTEMPTS {
+        if let Some(pid) = read_android_app_pid(runner, repo_root, serial, application_id)? {
+            return Ok(pid);
+        }
+        thread::sleep(APP_PID_WAIT_INTERVAL);
+    }
+    Err(AtomError::new(
+        AtomErrorCode::ExternalToolFailed,
+        format!("could not resolve a debugger PID for {application_id}"),
+    ))
+}
+
+fn android_bazel_args(target: &str, debug_build: bool) -> Vec<String> {
+    android_bazel_args_for_targets(&[target.to_owned()], debug_build)
+}
+
+fn android_bazel_args_for_targets(targets: &[String], debug_build: bool) -> Vec<String> {
+    let mut args = vec!["build".to_owned()];
+    args.extend(targets.iter().cloned());
+    args.push("--android_platforms=//platforms:arm64-v8a".to_owned());
+    if debug_build {
+        args.push("--compilation_mode=dbg".to_owned());
+    }
+    args
+}
+
+fn build_android_debug_artifacts(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<AndroidDebugArtifacts> {
+    let target = generated_target(manifest, BACKEND_ID);
+    let generated_kotlin_target = generated_sibling_target(&target, "generated_kotlin")?;
+    let native_target = generated_sibling_target(&target, "atom_runtime_jni")?;
+    let build_args = android_bazel_args_for_targets(
+        &[
+            target.clone(),
+            generated_kotlin_target.clone(),
+            native_target.clone(),
+        ],
+        true,
+    );
+    run_bazel_owned(runner, repo_root, &build_args)?;
+    let query_args = android_bazel_args(&target, true);
+    let apk = find_bazel_output_owned(
+        runner,
+        repo_root,
+        &query_args,
+        &target,
+        &["app.apk", ".apk"],
+        "APK",
+    )?;
+    let application_id = manifest.android.application_id.clone().ok_or_else(|| {
+        AtomError::new(AtomErrorCode::InternalBug, "missing Android application id")
+    })?;
+
+    let generated_kotlin_jar = select_debug_artifact(
+        list_bazel_outputs_owned(runner, repo_root, &query_args, &generated_kotlin_target)?,
+        &generated_kotlin_target,
+        "generated Kotlin jar",
+        |path| {
+            path.extension() == Some("jar")
+                && path
+                    .file_name()
+                    .is_some_and(|file_name| file_name.contains("generated_kotlin"))
+        },
+    )?;
+
+    let native_library_path = select_debug_artifact(
+        list_bazel_outputs_owned(runner, repo_root, &query_args, &native_target)?,
+        &native_target,
+        "Android native library",
+        |path| {
+            path.extension() == Some("so")
+                && path
+                    .file_name()
+                    .is_some_and(|file_name| file_name.contains("atom_runtime_jni"))
+        },
+    )?;
+
+    Ok(AndroidDebugArtifacts {
+        apk,
+        application_id,
+        generated_kotlin_jar,
+        native_source_map_prefix: bazel_source_map_prefix(&native_library_path)?,
+        native_library_path,
+    })
+}
+
+fn generated_sibling_target(target: &str, sibling: &str) -> AtomResult<String> {
+    let (package, _name) = target.rsplit_once(':').ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            format!("generated target {target} was not a Bazel label"),
+        )
+    })?;
+    Ok(format!("{package}:{sibling}"))
+}
+
+fn select_debug_artifact(
+    outputs: Vec<Utf8PathBuf>,
+    target: &str,
+    artifact_name: &str,
+    predicate: impl Fn(&Utf8Path) -> bool,
+) -> AtomResult<Utf8PathBuf> {
+    let mut matches = outputs
+        .into_iter()
+        .filter(|path| predicate(path))
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.dedup();
+    if matches.is_empty() {
+        return Err(AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("bazelisk cquery did not return a {artifact_name} for {target}"),
+        ));
+    }
+    if matches.len() == 1 {
+        return Ok(matches.remove(0));
+    }
+
+    let mut existing = matches
+        .iter()
+        .filter(|path| path.exists())
+        .cloned()
+        .collect::<Vec<_>>();
+    if existing.len() == 1 {
+        return Ok(existing.remove(0));
+    }
+    if let Some(preferred) = existing
+        .iter()
+        .find(|path| path.as_str().contains("arm64-v8a") || path.as_str().contains("/android/"))
+    {
+        return Ok(preferred.clone());
+    }
+
+    let candidates = matches
+        .iter()
+        .map(|path| path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AtomError::new(
+        AtomErrorCode::ExternalToolFailed,
+        format!(
+            "bazelisk cquery returned multiple {artifact_name} candidates for {target}: {candidates}"
+        ),
+    ))
+}
+
+fn launch_android_debug_app(
+    repo_root: &Utf8Path,
+    destination: &AndroidDestination,
+    build: &AndroidDebugArtifacts,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<AndroidAppLaunch> {
+    let serial = prepare_android_emulator(repo_root, runner, destination)?;
+    run_tool(
+        runner,
+        repo_root,
+        "adb",
+        &["-s", &serial, "install", "-r", build.apk.as_str()],
+    )?;
+    let _ = run_tool(
+        runner,
+        repo_root,
+        "adb",
+        &[
+            "-s",
+            &serial,
+            "shell",
+            "am",
+            "force-stop",
+            &build.application_id,
+        ],
+    );
+    let component = format!("{}/.MainActivity", build.application_id);
+    run_tool(
+        runner,
+        repo_root,
+        "adb",
+        &[
+            "-s", &serial, "shell", "am", "start", "-W", "-n", &component,
+        ],
+    )?;
+    Ok(AndroidAppLaunch {
+        serial,
+        application_id: build.application_id.clone(),
+    })
+}
+
+fn attach_or_launch_android_debug_app(
+    repo_root: &Utf8Path,
+    _manifest: &NormalizedManifest,
+    destination: &AndroidDestination,
+    build: &AndroidDebugArtifacts,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<AndroidAppLaunch> {
+    let serial = prepare_android_emulator(repo_root, runner, destination)?;
+    if read_android_app_pid(runner, repo_root, &serial, &build.application_id)?.is_some() {
+        return Ok(AndroidAppLaunch {
+            serial,
+            application_id: build.application_id.clone(),
+        });
+    }
+    launch_android_debug_app(repo_root, destination, build, runner)
+}
+
 fn launch_android_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
@@ -808,11 +1446,7 @@ fn launch_android_app(
 ) -> AtomResult<AndroidAppLaunch> {
     let serial = prepare_android_emulator(repo_root, runner, destination)?;
     let target = generated_target(manifest, BACKEND_ID);
-    let build_args = vec![
-        "build".to_owned(),
-        target.clone(),
-        "--android_platforms=//platforms:arm64-v8a".to_owned(),
-    ];
+    let build_args = android_bazel_args(&target, false);
     run_bazel_owned(runner, repo_root, &build_args)?;
     let apk = find_bazel_output_owned(
         runner,
@@ -869,6 +1503,30 @@ fn attach_android_app(
             .iter()
             .any(|package| package == application_id)
     {
+        return Ok(None);
+    }
+    Ok(Some(AndroidAppLaunch {
+        serial: destination.serial,
+        application_id: application_id.to_owned(),
+    }))
+}
+
+fn attach_running_android_app(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination_id: &str,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<Option<AndroidAppLaunch>> {
+    let Some(application_id) = manifest.android.application_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(destination) = find_android_destination(repo_root, runner, destination_id)? else {
+        return Ok(None);
+    };
+    if destination.state != "device" {
+        return Ok(None);
+    }
+    if read_android_app_pid(runner, repo_root, &destination.serial, application_id)?.is_none() {
         return Ok(None);
     }
     Ok(Some(AndroidAppLaunch {
@@ -1198,7 +1856,7 @@ mod tests {
     use super::{
         AndroidDestination, BACKEND_ID, destination_descriptor_from_android,
         find_android_destination, list_android_destinations, list_android_devices,
-        parse_adb_devices,
+        parse_adb_devices, select_debug_artifact,
     };
 
     #[derive(Default)]
@@ -1229,6 +1887,19 @@ mod tests {
             _args: &[String],
         ) -> atom_ffi::AtomResult<()> {
             Ok(())
+        }
+
+        fn capture_output(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<atom_backends::ToolCommandOutput> {
+            Ok(atom_backends::ToolCommandOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
         }
 
         fn capture(
@@ -1391,6 +2062,27 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
         assert_eq!(destinations[0].destination_id(), "avd:FixtureApi35");
         assert_eq!(destinations[0].state, "device");
         assert!(runner.captures.is_empty());
+    }
+
+    #[test]
+    fn duplicate_debug_artifact_paths_do_not_fail_selection() {
+        let selected = select_debug_artifact(
+            vec![
+                Utf8PathBuf::from("bazel-out/darwin_arm64-dbg/bin/cng-output/android/hello-atom/generated_kotlin.jar"),
+                Utf8PathBuf::from("bazel-out/darwin_arm64-dbg/bin/cng-output/android/hello-atom/generated_kotlin.jar"),
+            ],
+            "//cng-output/android/hello-atom:generated_kotlin",
+            "generated Kotlin jar",
+            |path| path.extension() == Some("jar"),
+        )
+        .expect("duplicate paths should still resolve cleanly");
+
+        assert_eq!(
+            selected,
+            Utf8PathBuf::from(
+                "bazel-out/darwin_arm64-dbg/bin/cng-output/android/hello-atom/generated_kotlin.jar"
+            )
+        );
     }
 
     #[test]

@@ -9,6 +9,8 @@ rust_library(
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
+        "//crates/atom-backend-android-jvm-debug",
+        "//crates/atom-backend-android-native-debug",
         "//crates/atom-backends",
         "//crates/atom-cng",
         "//crates/atom-deploy",

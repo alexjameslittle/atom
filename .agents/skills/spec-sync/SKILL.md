@@ -20,7 +20,7 @@ Use this skill when:
 
 ## Steps
 
-1. Run `scripts/extract.sh`.
+1. Run `mise exec -- scripts/extract.sh`.
 2. Compare extracted data against SPEC.md sections.
 3. Report contradictions (spec says X, code does Y) and gaps (code does Z, spec is silent).
 

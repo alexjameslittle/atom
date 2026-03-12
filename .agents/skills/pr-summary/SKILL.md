@@ -19,7 +19,7 @@ Use this skill when:
 
 ## Steps
 
-1. Run `scripts/draft.sh`.
+1. Run `mise exec -- scripts/draft.sh`.
 2. Review `.github/PULL_REQUEST_TEMPLATE.md` and fill it with the real branch changes.
 3. Keep the final summary outcome-focused: what changed, verification run, and any residual risk.
 4. If verification is incomplete, say so explicitly instead of implying the branch is ready.
