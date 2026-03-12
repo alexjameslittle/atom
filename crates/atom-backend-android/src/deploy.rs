@@ -1,21 +1,17 @@
-use atom_backend_android_jvm_debug::{AndroidJvmAttachOptions, AndroidJvmClient};
-use atom_backend_android_native_debug::{AndroidNativeAttachOptions, AndroidNativeClient};
 use std::fs;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDebugSession, BackendDefinition, DebugBacktrace,
-    DebugBreakpoint, DebugSourceLocation, DebugStop, DebugThread, DebuggerKind, DeployBackend,
+    BackendAutomationSession, BackendDebugSession, BackendDefinition, DebuggerKind, DeployBackend,
     DeployBackendRegistry, DestinationCapability, DestinationDescriptor, InteractionRequest,
     InteractionResult, LaunchMode, SessionLaunchBehavior, SharedToolRunner, ToolRunner, UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
 use atom_deploy::{
-    bazel_source_map_prefix, capture_tool, find_bazel_output_owned, generated_target,
-    list_bazel_outputs_owned, run_bazel_owned, run_tool, stream_tool,
+    capture_tool, find_bazel_output_owned, generated_target, run_bazel_owned, run_tool, stream_tool,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -68,30 +64,6 @@ struct AndroidAutomationSession<'a> {
     launch_behavior: SessionLaunchBehavior,
     launch: Option<AndroidAppLaunch>,
     video_capture: Option<VideoCapture>,
-}
-
-struct AndroidDebugArtifacts {
-    apk: Utf8PathBuf,
-    application_id: String,
-    generated_kotlin_jar: Utf8PathBuf,
-    native_library_path: Utf8PathBuf,
-    native_source_map_prefix: Option<String>,
-}
-
-struct AndroidJvmDebugSession<'a> {
-    repo_root: &'a Utf8Path,
-    manifest: &'a NormalizedManifest,
-    runner: &'a SharedToolRunner<'a>,
-    destination_id: String,
-    client: Option<AndroidJvmClient>,
-}
-
-struct AndroidNativeDebugSession<'a> {
-    repo_root: &'a Utf8Path,
-    manifest: &'a NormalizedManifest,
-    runner: &'a SharedToolRunner<'a>,
-    destination_id: String,
-    client: Option<AndroidNativeClient>,
 }
 
 impl AndroidDestination {
@@ -205,29 +177,14 @@ impl DeployBackend for AndroidDeployBackend {
 
     fn new_debug_session<'a>(
         &self,
-        repo_root: &'a Utf8Path,
-        manifest: &'a NormalizedManifest,
-        destination_id: &'a str,
-        runner: &'a SharedToolRunner<'a>,
+        _repo_root: &'a Utf8Path,
+        _manifest: &'a NormalizedManifest,
+        _destination_id: &'a str,
+        _runner: &'a SharedToolRunner<'a>,
         _launch_behavior: SessionLaunchBehavior,
         debugger: DebuggerKind,
     ) -> AtomResult<Box<dyn BackendDebugSession + 'a>> {
-        match debugger {
-            DebuggerKind::Jvm => Ok(Box::new(AndroidJvmDebugSession {
-                repo_root,
-                manifest,
-                runner,
-                destination_id: destination_id.to_owned(),
-                client: None,
-            })),
-            DebuggerKind::Native => Ok(Box::new(AndroidNativeDebugSession {
-                repo_root,
-                manifest,
-                runner,
-                destination_id: destination_id.to_owned(),
-                client: None,
-            })),
-        }
+        Err(unsupported_android_debugger(debugger))
     }
 }
 
@@ -237,38 +194,6 @@ impl AndroidAutomationSession<'_> {
             AtomError::new(
                 AtomErrorCode::InternalBug,
                 "automation session expected a launch after ensure_launched",
-            )
-        })
-    }
-}
-
-impl AndroidJvmDebugSession<'_> {
-    fn resolve_destination(&self) -> AtomResult<AndroidDestination> {
-        let mut runner = self.runner.borrow_mut();
-        resolve_android_device(self.repo_root, &mut **runner, Some(&self.destination_id))
-    }
-
-    fn ensure_client(&mut self) -> AtomResult<&mut AndroidJvmClient> {
-        self.client.as_mut().ok_or_else(|| {
-            AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                "Android JVM debugger session has not been attached or launched",
-            )
-        })
-    }
-}
-
-impl AndroidNativeDebugSession<'_> {
-    fn resolve_destination(&self) -> AtomResult<AndroidDestination> {
-        let mut runner = self.runner.borrow_mut();
-        resolve_android_device(self.repo_root, &mut **runner, Some(&self.destination_id))
-    }
-
-    fn ensure_client(&mut self) -> AtomResult<&mut AndroidNativeClient> {
-        self.client.as_mut().ok_or_else(|| {
-            AtomError::new(
-                AtomErrorCode::AutomationUnavailable,
-                "Android native debugger session has not been attached or launched",
             )
         })
     }
@@ -416,246 +341,6 @@ impl BackendAutomationSession for AndroidAutomationSession<'_> {
     }
 }
 
-impl BackendDebugSession for AndroidJvmDebugSession<'_> {
-    fn kind(&self) -> DebuggerKind {
-        DebuggerKind::Jvm
-    }
-
-    fn launch(&mut self) -> AtomResult<()> {
-        if self.client.is_some() {
-            return Ok(());
-        }
-        let destination = self.resolve_destination()?;
-        let build = {
-            let mut runner = self.runner.borrow_mut();
-            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
-        };
-        let launch = {
-            let mut runner = self.runner.borrow_mut();
-            launch_android_debug_app(self.repo_root, &destination, &build, &mut **runner)?
-        };
-        let pid = {
-            let mut runner = self.runner.borrow_mut();
-            read_android_debug_pid(
-                self.repo_root,
-                &launch.serial,
-                &launch.application_id,
-                &mut **runner,
-            )?
-        };
-        let client = AndroidJvmClient::attach(
-            self.repo_root,
-            &AndroidJvmAttachOptions {
-                serial: launch.serial,
-                pid,
-                source_root: self.repo_root.to_owned(),
-                generated_kotlin_jar: build.generated_kotlin_jar,
-            },
-        )?;
-        self.client = Some(client);
-        Ok(())
-    }
-
-    fn attach(&mut self) -> AtomResult<()> {
-        if self.client.is_some() {
-            return Ok(());
-        }
-        let destination = self.resolve_destination()?;
-        let build = {
-            let mut runner = self.runner.borrow_mut();
-            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
-        };
-        let launch = {
-            let mut runner = self.runner.borrow_mut();
-            attach_or_launch_android_debug_app(
-                self.repo_root,
-                self.manifest,
-                &destination,
-                &build,
-                &mut **runner,
-            )?
-        };
-        let pid = {
-            let mut runner = self.runner.borrow_mut();
-            read_android_debug_pid(
-                self.repo_root,
-                &launch.serial,
-                &launch.application_id,
-                &mut **runner,
-            )?
-        };
-        let client = AndroidJvmClient::attach(
-            self.repo_root,
-            &AndroidJvmAttachOptions {
-                serial: launch.serial,
-                pid,
-                source_root: self.repo_root.to_owned(),
-                generated_kotlin_jar: build.generated_kotlin_jar,
-            },
-        )?;
-        self.client = Some(client);
-        Ok(())
-    }
-
-    fn set_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<DebugBreakpoint> {
-        self.ensure_client()?.set_breakpoint(&location)
-    }
-
-    fn clear_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<()> {
-        self.ensure_client()?.clear_breakpoint(&location)
-    }
-
-    fn wait_for_stop(&mut self, timeout_ms: Option<u64>) -> AtomResult<DebugStop> {
-        self.ensure_client()?.wait_for_stop(timeout_ms)
-    }
-
-    fn threads(&mut self) -> AtomResult<Vec<DebugThread>> {
-        self.ensure_client()?.threads()
-    }
-
-    fn backtrace(&mut self, thread_id: Option<&str>) -> AtomResult<DebugBacktrace> {
-        self.ensure_client()?.backtrace(thread_id)
-    }
-
-    fn pause(&mut self) -> AtomResult<DebugStop> {
-        self.ensure_client()?.pause()
-    }
-
-    fn resume(&mut self) -> AtomResult<()> {
-        self.ensure_client()?.resume()
-    }
-
-    fn shutdown(&mut self) -> AtomResult<()> {
-        if let Some(client) = self.client.as_mut() {
-            client.shutdown()?;
-        }
-        Ok(())
-    }
-}
-
-impl BackendDebugSession for AndroidNativeDebugSession<'_> {
-    fn kind(&self) -> DebuggerKind {
-        DebuggerKind::Native
-    }
-
-    fn launch(&mut self) -> AtomResult<()> {
-        if self.client.is_some() {
-            return Ok(());
-        }
-        let destination = self.resolve_destination()?;
-        let build = {
-            let mut runner = self.runner.borrow_mut();
-            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
-        };
-        let launch = {
-            let mut runner = self.runner.borrow_mut();
-            launch_android_debug_app(self.repo_root, &destination, &build, &mut **runner)?
-        };
-        let pid = {
-            let mut runner = self.runner.borrow_mut();
-            read_android_debug_pid(
-                self.repo_root,
-                &launch.serial,
-                &launch.application_id,
-                &mut **runner,
-            )?
-        };
-        let mut client = AndroidNativeClient::attach(
-            self.repo_root,
-            &AndroidNativeAttachOptions {
-                serial: launch.serial,
-                application_id: launch.application_id,
-                pid,
-                native_library_path: build.native_library_path,
-                source_map_prefix: build.native_source_map_prefix,
-            },
-        )?;
-        let _ = client.pause()?;
-        self.client = Some(client);
-        Ok(())
-    }
-
-    fn attach(&mut self) -> AtomResult<()> {
-        if self.client.is_some() {
-            return Ok(());
-        }
-        let destination = self.resolve_destination()?;
-        let build = {
-            let mut runner = self.runner.borrow_mut();
-            build_android_debug_artifacts(self.repo_root, self.manifest, &mut **runner)?
-        };
-        let launch = {
-            let mut runner = self.runner.borrow_mut();
-            attach_or_launch_android_debug_app(
-                self.repo_root,
-                self.manifest,
-                &destination,
-                &build,
-                &mut **runner,
-            )?
-        };
-        let pid = {
-            let mut runner = self.runner.borrow_mut();
-            read_android_debug_pid(
-                self.repo_root,
-                &launch.serial,
-                &launch.application_id,
-                &mut **runner,
-            )?
-        };
-        let mut client = AndroidNativeClient::attach(
-            self.repo_root,
-            &AndroidNativeAttachOptions {
-                serial: launch.serial,
-                application_id: launch.application_id,
-                pid,
-                native_library_path: build.native_library_path,
-                source_map_prefix: build.native_source_map_prefix,
-            },
-        )?;
-        let _ = client.pause()?;
-        self.client = Some(client);
-        Ok(())
-    }
-
-    fn set_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<DebugBreakpoint> {
-        self.ensure_client()?
-            .set_breakpoint(&location.file, location.line)
-    }
-
-    fn clear_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<()> {
-        self.ensure_client()?
-            .clear_breakpoint(&location.file, location.line)
-    }
-
-    fn wait_for_stop(&mut self, timeout_ms: Option<u64>) -> AtomResult<DebugStop> {
-        self.ensure_client()?.wait_for_stop(timeout_ms)
-    }
-
-    fn threads(&mut self) -> AtomResult<Vec<DebugThread>> {
-        self.ensure_client()?.threads()
-    }
-
-    fn backtrace(&mut self, thread_id: Option<&str>) -> AtomResult<DebugBacktrace> {
-        self.ensure_client()?.backtrace(thread_id)
-    }
-
-    fn pause(&mut self) -> AtomResult<DebugStop> {
-        self.ensure_client()?.pause()
-    }
-
-    fn resume(&mut self) -> AtomResult<()> {
-        self.ensure_client()?.resume()
-    }
-
-    fn shutdown(&mut self) -> AtomResult<()> {
-        if let Some(client) = self.client.as_mut() {
-            client.shutdown()?;
-        }
-        Ok(())
-    }
-}
-
 fn destination_descriptor_from_android(destination: AndroidDestination) -> DestinationDescriptor {
     let display_name = destination.display_label();
     let id = destination.destination_id();
@@ -674,7 +359,6 @@ fn destination_descriptor_from_android(destination: AndroidDestination) -> Desti
         DestinationCapability::InspectUi,
         DestinationCapability::Interact,
         DestinationCapability::Evaluate,
-        DestinationCapability::Debug,
     ];
 
     DestinationDescriptor {
@@ -686,8 +370,19 @@ fn destination_descriptor_from_android(destination: AndroidDestination) -> Desti
         available: destination.state == "device" || destination.state == "avd",
         debug_state: destination.state,
         capabilities,
-        debuggers: vec![DebuggerKind::Native, DebuggerKind::Jvm],
+        debuggers: Vec::new(),
     }
+}
+
+fn unsupported_android_debugger(debugger: DebuggerKind) -> AtomError {
+    let debugger = match debugger {
+        DebuggerKind::Jvm => "JVM",
+        DebuggerKind::Native => "native",
+    };
+    AtomError::new(
+        AtomErrorCode::AutomationUnavailable,
+        format!("Android {debugger} debugging is not supported; only iOS debugging is available"),
+    )
 }
 
 fn deploy_android(
@@ -1225,24 +920,6 @@ fn read_android_app_pid(
     Ok(Some(pid))
 }
 
-fn read_android_debug_pid(
-    repo_root: &Utf8Path,
-    serial: &str,
-    application_id: &str,
-    runner: &mut dyn ToolRunner,
-) -> AtomResult<u32> {
-    for _ in 0..APP_PID_WAIT_ATTEMPTS {
-        if let Some(pid) = read_android_app_pid(runner, repo_root, serial, application_id)? {
-            return Ok(pid);
-        }
-        thread::sleep(APP_PID_WAIT_INTERVAL);
-    }
-    Err(AtomError::new(
-        AtomErrorCode::ExternalToolFailed,
-        format!("could not resolve a debugger PID for {application_id}"),
-    ))
-}
-
 fn android_bazel_args(target: &str, debug_build: bool) -> Vec<String> {
     android_bazel_args_for_targets(&[target.to_owned()], debug_build)
 }
@@ -1255,187 +932,6 @@ fn android_bazel_args_for_targets(targets: &[String], debug_build: bool) -> Vec<
         args.push("--compilation_mode=dbg".to_owned());
     }
     args
-}
-
-fn build_android_debug_artifacts(
-    repo_root: &Utf8Path,
-    manifest: &NormalizedManifest,
-    runner: &mut dyn ToolRunner,
-) -> AtomResult<AndroidDebugArtifacts> {
-    let target = generated_target(manifest, BACKEND_ID);
-    let generated_kotlin_target = generated_sibling_target(&target, "generated_kotlin")?;
-    let native_target = generated_sibling_target(&target, "atom_runtime_jni")?;
-    let build_args = android_bazel_args_for_targets(
-        &[
-            target.clone(),
-            generated_kotlin_target.clone(),
-            native_target.clone(),
-        ],
-        true,
-    );
-    run_bazel_owned(runner, repo_root, &build_args)?;
-    let query_args = android_bazel_args(&target, true);
-    let apk = find_bazel_output_owned(
-        runner,
-        repo_root,
-        &query_args,
-        &target,
-        &["app.apk", ".apk"],
-        "APK",
-    )?;
-    let application_id = manifest.android.application_id.clone().ok_or_else(|| {
-        AtomError::new(AtomErrorCode::InternalBug, "missing Android application id")
-    })?;
-
-    let generated_kotlin_jar = select_debug_artifact(
-        list_bazel_outputs_owned(runner, repo_root, &query_args, &generated_kotlin_target)?,
-        &generated_kotlin_target,
-        "generated Kotlin jar",
-        |path| {
-            path.extension() == Some("jar")
-                && path
-                    .file_name()
-                    .is_some_and(|file_name| file_name.contains("generated_kotlin"))
-        },
-    )?;
-
-    let native_library_path = select_debug_artifact(
-        list_bazel_outputs_owned(runner, repo_root, &query_args, &native_target)?,
-        &native_target,
-        "Android native library",
-        |path| {
-            path.extension() == Some("so")
-                && path
-                    .file_name()
-                    .is_some_and(|file_name| file_name.contains("atom_runtime_jni"))
-        },
-    )?;
-
-    Ok(AndroidDebugArtifacts {
-        apk,
-        application_id,
-        generated_kotlin_jar,
-        native_source_map_prefix: bazel_source_map_prefix(&native_library_path)?,
-        native_library_path,
-    })
-}
-
-fn generated_sibling_target(target: &str, sibling: &str) -> AtomResult<String> {
-    let (package, _name) = target.rsplit_once(':').ok_or_else(|| {
-        AtomError::new(
-            AtomErrorCode::InternalBug,
-            format!("generated target {target} was not a Bazel label"),
-        )
-    })?;
-    Ok(format!("{package}:{sibling}"))
-}
-
-fn select_debug_artifact(
-    outputs: Vec<Utf8PathBuf>,
-    target: &str,
-    artifact_name: &str,
-    predicate: impl Fn(&Utf8Path) -> bool,
-) -> AtomResult<Utf8PathBuf> {
-    let mut matches = outputs
-        .into_iter()
-        .filter(|path| predicate(path))
-        .collect::<Vec<_>>();
-    matches.sort();
-    matches.dedup();
-    if matches.is_empty() {
-        return Err(AtomError::new(
-            AtomErrorCode::ExternalToolFailed,
-            format!("bazelisk cquery did not return a {artifact_name} for {target}"),
-        ));
-    }
-    if matches.len() == 1 {
-        return Ok(matches.remove(0));
-    }
-
-    let mut existing = matches
-        .iter()
-        .filter(|path| path.exists())
-        .cloned()
-        .collect::<Vec<_>>();
-    if existing.len() == 1 {
-        return Ok(existing.remove(0));
-    }
-    if let Some(preferred) = existing
-        .iter()
-        .find(|path| path.as_str().contains("arm64-v8a") || path.as_str().contains("/android/"))
-    {
-        return Ok(preferred.clone());
-    }
-
-    let candidates = matches
-        .iter()
-        .map(|path| path.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(AtomError::new(
-        AtomErrorCode::ExternalToolFailed,
-        format!(
-            "bazelisk cquery returned multiple {artifact_name} candidates for {target}: {candidates}"
-        ),
-    ))
-}
-
-fn launch_android_debug_app(
-    repo_root: &Utf8Path,
-    destination: &AndroidDestination,
-    build: &AndroidDebugArtifacts,
-    runner: &mut dyn ToolRunner,
-) -> AtomResult<AndroidAppLaunch> {
-    let serial = prepare_android_emulator(repo_root, runner, destination)?;
-    run_tool(
-        runner,
-        repo_root,
-        "adb",
-        &["-s", &serial, "install", "-r", build.apk.as_str()],
-    )?;
-    let _ = run_tool(
-        runner,
-        repo_root,
-        "adb",
-        &[
-            "-s",
-            &serial,
-            "shell",
-            "am",
-            "force-stop",
-            &build.application_id,
-        ],
-    );
-    let component = format!("{}/.MainActivity", build.application_id);
-    run_tool(
-        runner,
-        repo_root,
-        "adb",
-        &[
-            "-s", &serial, "shell", "am", "start", "-W", "-n", &component,
-        ],
-    )?;
-    Ok(AndroidAppLaunch {
-        serial,
-        application_id: build.application_id.clone(),
-    })
-}
-
-fn attach_or_launch_android_debug_app(
-    repo_root: &Utf8Path,
-    _manifest: &NormalizedManifest,
-    destination: &AndroidDestination,
-    build: &AndroidDebugArtifacts,
-    runner: &mut dyn ToolRunner,
-) -> AtomResult<AndroidAppLaunch> {
-    let serial = prepare_android_emulator(repo_root, runner, destination)?;
-    if read_android_app_pid(runner, repo_root, &serial, &build.application_id)?.is_some() {
-        return Ok(AndroidAppLaunch {
-            serial,
-            application_id: build.application_id.clone(),
-        });
-    }
-    launch_android_debug_app(repo_root, destination, build, runner)
 }
 
 fn launch_android_app(
@@ -1849,14 +1345,15 @@ pub(crate) fn timestamp_suffix() -> String {
 mod tests {
     use std::collections::VecDeque;
 
-    use atom_backends::DestinationCapability;
+    use atom_backends::{DebuggerKind, DeployBackend, DestinationCapability, SharedToolRunner};
     use atom_ffi::{AtomError, AtomErrorCode};
+    use atom_manifest::testing::fixture_manifest;
     use camino::{Utf8Path, Utf8PathBuf};
 
     use super::{
-        AndroidDestination, BACKEND_ID, destination_descriptor_from_android,
+        AndroidDeployBackend, AndroidDestination, BACKEND_ID, destination_descriptor_from_android,
         find_android_destination, list_android_destinations, list_android_devices,
-        parse_adb_devices, select_debug_artifact,
+        parse_adb_devices,
     };
 
     #[derive(Default)]
@@ -1982,6 +1479,12 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
                 .capabilities
                 .contains(&DestinationCapability::Evaluate)
         );
+        assert!(
+            !descriptor
+                .capabilities
+                .contains(&DestinationCapability::Debug)
+        );
+        assert!(descriptor.debuggers.is_empty());
     }
 
     #[test]
@@ -1998,6 +1501,33 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
         assert_eq!(descriptor.kind, "avd");
         assert_eq!(descriptor.id, "avd:FixtureApi35");
         assert!(descriptor.available);
+    }
+
+    #[test]
+    fn android_debug_sessions_fail_fast_as_unsupported() {
+        let root = Utf8PathBuf::from(".");
+        let manifest = fixture_manifest(&root);
+        let backend = AndroidDeployBackend;
+        let mut runner = FakeToolRunner::default();
+        let shared_runner = SharedToolRunner::new(&mut runner);
+
+        let error = match backend.new_debug_session(
+            &root,
+            &manifest,
+            "avd:FixtureApi35",
+            &shared_runner,
+            atom_backends::SessionLaunchBehavior::AttachOrLaunch,
+            DebuggerKind::Native,
+        ) {
+            Ok(_) => panic!("android debug session creation should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, AtomErrorCode::AutomationUnavailable);
+        assert_eq!(
+            error.message,
+            "Android native debugging is not supported; only iOS debugging is available"
+        );
     }
 
     #[test]
@@ -2062,27 +1592,6 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
         assert_eq!(destinations[0].destination_id(), "avd:FixtureApi35");
         assert_eq!(destinations[0].state, "device");
         assert!(runner.captures.is_empty());
-    }
-
-    #[test]
-    fn duplicate_debug_artifact_paths_do_not_fail_selection() {
-        let selected = select_debug_artifact(
-            vec![
-                Utf8PathBuf::from("bazel-out/darwin_arm64-dbg/bin/cng-output/android/hello-atom/generated_kotlin.jar"),
-                Utf8PathBuf::from("bazel-out/darwin_arm64-dbg/bin/cng-output/android/hello-atom/generated_kotlin.jar"),
-            ],
-            "//cng-output/android/hello-atom:generated_kotlin",
-            "generated Kotlin jar",
-            |path| path.extension() == Some("jar"),
-        )
-        .expect("duplicate paths should still resolve cleanly");
-
-        assert_eq!(
-            selected,
-            Utf8PathBuf::from(
-                "bazel-out/darwin_arm64-dbg/bin/cng-output/android/hello-atom/generated_kotlin.jar"
-            )
-        );
     }
 
     #[test]
