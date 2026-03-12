@@ -78,6 +78,9 @@ bloating agent context.
 - Verify: `mise run verify`
 - Smoke prebuild:
   `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
+- Agents MUST NOT bypass required verification or git hooks with `--no-verify`, disabled hook env
+  vars, or similar shortcuts. If verification or pre-push checks fail, stop, surface the failure,
+  and ask the user how to proceed instead of skipping the checks.
 
 Local and CI verification must stay aligned. If you add a new required check, add it to
 [`scripts/verify.sh`](scripts/verify.sh).
@@ -153,3 +156,5 @@ Do not add reverse dependencies across these layers without documenting the chan
 - Hand-editing generated output trees as a customization mechanism.
 - Introducing hidden setup steps that are not captured by bootstrap or docs.
 - Skipping mandatory skills when their trigger conditions are met.
+- Bypassing verification or push hooks with `--no-verify`, disabled hook env vars, or equivalent
+  workarounds.
