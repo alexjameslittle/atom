@@ -307,6 +307,10 @@ pub fn evaluate_run(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Step dispatch enumerates every public evaluation step in one place for the evaluator."
+)]
 fn execute_step(
     index: usize,
     step: EvaluationStep,
@@ -465,7 +469,7 @@ fn execute_step(
             session,
             artifacts,
             debugger,
-            thread_id,
+            thread_id.as_deref(),
             name,
         ),
         EvaluationStep::DebugPause { debugger, name } => execute_debug_pause_step(
@@ -771,6 +775,10 @@ fn execute_debug_threads_step(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug backtrace steps need explicit artifact, session, debugger, and thread selection inputs."
+)]
 fn execute_debug_backtrace_step(
     index: usize,
     started_at_ms: u128,
@@ -778,10 +786,10 @@ fn execute_debug_backtrace_step(
     session: &mut EvaluationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     debugger: DebuggerKind,
-    thread_id: Option<String>,
+    thread_id: Option<&str>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
-    let backtrace = session.debug_backtrace(debugger, thread_id.as_deref())?;
+    let backtrace = session.debug_backtrace(debugger, thread_id)?;
     write_debug_json_artifact(
         index,
         "debug_backtrace",
@@ -827,6 +835,10 @@ fn execute_debug_resume_step(
     Ok(simple_step(index, "debug_resume", started_at_ms))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug stop artifacts need explicit step metadata plus stop payload details."
+)]
 fn write_debug_stop_artifact(
     index: usize,
     kind: &str,
@@ -850,6 +862,10 @@ fn write_debug_stop_artifact(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug JSON artifacts need explicit step metadata, output naming, and payload inputs."
+)]
 fn write_debug_json_artifact<T: Serialize>(
     index: usize,
     kind: &str,

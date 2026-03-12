@@ -341,7 +341,7 @@ fn capture_bazel_outputs_owned(
     let mut args = build_args.to_vec();
     "cquery".clone_into(&mut args[0]);
     if args.len() > 1 {
-        args[1] = target.to_owned();
+        target.clone_into(&mut args[1]);
     } else {
         args.push(target.to_owned());
     }

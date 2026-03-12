@@ -6,6 +6,10 @@ use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::Utf8Path;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug session creation needs the resolved backend, destination, shared runner, and debugger kind."
+)]
 pub(crate) fn debug_session_with_registry<'a>(
     registry: &DeployBackendRegistry,
     repo_root: &'a Utf8Path,

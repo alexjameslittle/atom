@@ -142,9 +142,7 @@ impl IosLldbClient {
     /// Returns an error if the process does not stop before the timeout expires.
     pub fn wait_for_stop(&mut self, timeout_ms: Option<u64>) -> AtomResult<DebugStop> {
         if self.running {
-            let timeout = timeout_ms
-                .map(Duration::from_millis)
-                .unwrap_or(DEFAULT_WAIT_TIMEOUT);
+            let timeout = timeout_ms.map_or(DEFAULT_WAIT_TIMEOUT, Duration::from_millis);
             let deadline = Instant::now() + timeout;
             loop {
                 if Instant::now() >= deadline {
@@ -214,13 +212,13 @@ impl IosLldbClient {
             self.running = false;
             let mut stop = parse_stop(&output);
             if stop.reason == "unknown" {
-                stop.reason = "paused".to_owned();
+                "paused".clone_into(&mut stop.reason);
             }
             return Ok(stop);
         }
         let mut stop = self.process_status()?;
         if stop.reason == "unknown" {
-            stop.reason = "paused".to_owned();
+            "paused".clone_into(&mut stop.reason);
         }
         Ok(stop)
     }
@@ -394,11 +392,8 @@ impl IosLldbClient {
 
     fn drain_pending_output(&mut self, idle_timeout: Duration) -> String {
         let mut buffer = Vec::new();
-        loop {
-            match self.output_rx.recv_timeout(idle_timeout) {
-                Ok(byte) => buffer.push(byte),
-                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
-            }
+        while let Ok(byte) = self.output_rx.recv_timeout(idle_timeout) {
+            buffer.push(byte);
         }
         String::from_utf8_lossy(&buffer).into_owned()
     }
@@ -480,17 +475,17 @@ fn parse_stop(output: &str) -> DebugStop {
         if let Some(thread_id) = parse_lldb_thread_id(trimmed) {
             stop.thread_id = Some(thread_id);
         }
-        if let Some(reason) = trimmed.split("stop reason = ").nth(1) {
-            if let Some(reason) = reason.split(',').next() {
-                let reason = reason.trim();
-                if let Some(id) = reason.strip_prefix("breakpoint ").map(str::trim) {
-                    stop.reason = "breakpoint".to_owned();
-                    stop.breakpoint_id = Some(id.to_owned());
-                } else if reason.eq_ignore_ascii_case("signal SIGSTOP") {
-                    stop.reason = "paused".to_owned();
-                } else {
-                    stop.reason = reason.to_ascii_lowercase().replace(' ', "_");
-                }
+        if let Some(reason) = trimmed.split("stop reason = ").nth(1)
+            && let Some(reason) = reason.split(',').next()
+        {
+            let reason = reason.trim();
+            if let Some(id) = reason.strip_prefix("breakpoint ").map(str::trim) {
+                "breakpoint".clone_into(&mut stop.reason);
+                stop.breakpoint_id = Some(id.to_owned());
+            } else if reason.eq_ignore_ascii_case("signal SIGSTOP") {
+                "paused".clone_into(&mut stop.reason);
+            } else {
+                stop.reason = reason.to_ascii_lowercase().replace(' ', "_");
             }
         }
         if let Some((file, line)) = trimmed
@@ -654,7 +649,7 @@ fn parse_lldb_thread_id(line: &str) -> Option<String> {
     let fragment = line.split("thread #").nth(1)?;
     let digits = fragment
         .chars()
-        .take_while(|character| character.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect::<String>();
     (!digits.is_empty()).then_some(digits)
 }
