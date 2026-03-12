@@ -20,7 +20,7 @@ Use this skill when:
 
 ## Steps
 
-1. Run `scripts/check.sh`.
+1. Run `mise exec -- scripts/check.sh`.
 2. Run `code-verification`, `docs-sync`, `spec-sync`, and `examples-auto-run` if their triggers are
    active for the branch.
 3. Confirm the release blockers list is empty before calling the branch ready.

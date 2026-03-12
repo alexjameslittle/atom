@@ -179,6 +179,114 @@ pub(crate) fn interact_with_android_uiautomator(
     }
 }
 
+pub(crate) fn interact_with_android_uiautomator_without_snapshot(
+    repo_root: &Utf8Path,
+    serial: &str,
+    runner: &mut (impl ToolRunner + ?Sized),
+    request: InteractionRequest,
+) -> AtomResult<()> {
+    match request {
+        InteractionRequest::InspectUi => {
+            let _ = inspect_ui_with_android_uiautomator(repo_root, serial, runner)?;
+            Ok(())
+        }
+        InteractionRequest::Tap { target_id, x, y } => {
+            let snapshot = inspect_ui_with_android_uiautomator(repo_root, serial, runner)?.snapshot;
+            let (tap_x, tap_y) = resolve_interaction_point(&snapshot, target_id.as_deref(), x, y)?;
+            run_tool(
+                runner,
+                repo_root,
+                "adb",
+                &[
+                    "-s",
+                    serial,
+                    "shell",
+                    "input",
+                    "tap",
+                    &format_coordinate(tap_x),
+                    &format_coordinate(tap_y),
+                ],
+            )?;
+            thread::sleep(ACTION_SETTLE_DELAY);
+            Ok(())
+        }
+        InteractionRequest::LongPress { target_id, x, y } => {
+            let snapshot = inspect_ui_with_android_uiautomator(repo_root, serial, runner)?.snapshot;
+            let (tap_x, tap_y) = resolve_interaction_point(&snapshot, target_id.as_deref(), x, y)?;
+            let tap_x = format_coordinate(tap_x);
+            let tap_y = format_coordinate(tap_y);
+            run_tool(
+                runner,
+                repo_root,
+                "adb",
+                &[
+                    "-s", serial, "shell", "input", "swipe", &tap_x, &tap_y, &tap_x, &tap_y, "800",
+                ],
+            )?;
+            thread::sleep(ACTION_SETTLE_DELAY);
+            Ok(())
+        }
+        InteractionRequest::TypeText { target_id, text } => {
+            if let Some(target_id) = target_id.as_deref() {
+                let snapshot =
+                    inspect_ui_with_android_uiautomator(repo_root, serial, runner)?.snapshot;
+                let (tap_x, tap_y) =
+                    resolve_interaction_point(&snapshot, Some(target_id), None, None)?;
+                run_tool(
+                    runner,
+                    repo_root,
+                    "adb",
+                    &[
+                        "-s",
+                        serial,
+                        "shell",
+                        "input",
+                        "tap",
+                        &format_coordinate(tap_x),
+                        &format_coordinate(tap_y),
+                    ],
+                )?;
+                thread::sleep(Duration::from_millis(150));
+            }
+            let escaped = escape_input_text(&text);
+            run_tool(
+                runner,
+                repo_root,
+                "adb",
+                &["-s", serial, "shell", "input", "text", &escaped],
+            )?;
+            thread::sleep(ACTION_SETTLE_DELAY);
+            Ok(())
+        }
+        InteractionRequest::Swipe { x, y } | InteractionRequest::Drag { x, y } => {
+            let snapshot = inspect_ui_with_android_uiautomator(repo_root, serial, runner)?.snapshot;
+            let start_x = snapshot.screen.width / 2.0;
+            let start_y = snapshot.screen.height * 0.75;
+            let end_x = x.unwrap_or(start_x);
+            let end_y = y.unwrap_or(snapshot.screen.height * 0.25);
+            run_tool(
+                runner,
+                repo_root,
+                "adb",
+                &[
+                    "-s",
+                    serial,
+                    "shell",
+                    "input",
+                    "swipe",
+                    &format_coordinate(start_x),
+                    &format_coordinate(start_y),
+                    &format_coordinate(end_x),
+                    &format_coordinate(end_y),
+                    "300",
+                ],
+            )?;
+            thread::sleep(ACTION_SETTLE_DELAY);
+            Ok(())
+        }
+    }
+}
+
 fn parse_uiautomator_dump(raw: &str) -> AtomResult<AndroidUiSnapshot> {
     let elements = extract_node_tags(raw)
         .into_iter()

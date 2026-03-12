@@ -12,7 +12,7 @@ pub use atom_backends::{DestinationCapability, DestinationDescriptor};
 pub fn list_destinations(
     repo_root: &Utf8Path,
     registry: &DeployBackendRegistry,
-    runner: &mut impl ToolRunner,
+    runner: &mut dyn ToolRunner,
 ) -> AtomResult<Vec<DestinationDescriptor>> {
     let mut destinations = Vec::new();
     for backend in registry.iter() {
@@ -28,7 +28,7 @@ pub fn list_backend_destinations(
     repo_root: &Utf8Path,
     registry: &DeployBackendRegistry,
     backend_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &mut dyn ToolRunner,
 ) -> AtomResult<Vec<DestinationDescriptor>> {
     let backend = registry.get(backend_id).ok_or_else(|| {
         AtomError::with_path(
@@ -55,6 +55,7 @@ pub fn render_destination_lines(destinations: &[DestinationDescriptor]) -> Strin
                 DestinationCapability::InspectUi => "inspect_ui",
                 DestinationCapability::Interact => "interact",
                 DestinationCapability::Evaluate => "evaluate",
+                DestinationCapability::Debug => "debug",
             })
             .collect::<Vec<_>>()
             .join(",");

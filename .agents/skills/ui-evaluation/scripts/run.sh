@@ -15,44 +15,50 @@ mode=${1:-}
 
 case "$mode" in
   tap)
-    destination=${2:?destination id required}
-    target_id=${3:?target id required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom interact tap --target "$target" --destination "$destination" --target-id "$target_id"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    target_id=${4:?target id required}
+    target=${5:-$EXAMPLE_TARGET}
+    run_atom interact tap --platform "$platform" --target "$target" --destination "$destination" --target-id "$target_id"
     ;;
   long-press)
-    destination=${2:?destination id required}
-    target_id=${3:?target id required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom interact long-press --target "$target" --destination "$destination" --target-id "$target_id"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    target_id=${4:?target id required}
+    target=${5:-$EXAMPLE_TARGET}
+    run_atom interact long-press --platform "$platform" --target "$target" --destination "$destination" --target-id "$target_id"
     ;;
   swipe)
-    destination=${2:?destination id required}
-    x=${3:?x required}
-    y=${4:?y required}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom interact swipe --target "$target" --destination "$destination" --x "$x" --y "$y"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    x=${4:?x required}
+    y=${5:?y required}
+    target=${6:-$EXAMPLE_TARGET}
+    run_atom interact swipe --platform "$platform" --target "$target" --destination "$destination" --x "$x" --y "$y"
     ;;
   drag)
-    destination=${2:?destination id required}
-    x=${3:?x required}
-    y=${4:?y required}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom interact drag --target "$target" --destination "$destination" --x "$x" --y "$y"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    x=${4:?x required}
+    y=${5:?y required}
+    target=${6:-$EXAMPLE_TARGET}
+    run_atom interact drag --platform "$platform" --target "$target" --destination "$destination" --x "$x" --y "$y"
     ;;
   type-text)
-    destination=${2:?destination id required}
-    target_id=${3:?target id required}
-    text=${4:?text required}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom interact type-text --target "$target" --destination "$destination" --target-id "$target_id" --text "$text"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    target_id=${4:?target id required}
+    text=${5:?text required}
+    target=${6:-$EXAMPLE_TARGET}
+    run_atom interact type-text --platform "$platform" --target "$target" --destination "$destination" --target-id "$target_id" --text "$text"
     ;;
   evaluate)
-    destination=${2:?destination id required}
-    artifacts_dir=${3:?artifacts dir required}
-    plan=${4:-$DEFAULT_PLAN}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom evaluate run --target "$target" --destination "$destination" --plan "$plan" --artifacts-dir "$artifacts_dir"
+    platform=${2:?platform required}
+    destination=${3:?destination id required}
+    artifacts_dir=${4:?artifacts dir required}
+    plan=${5:-$DEFAULT_PLAN}
+    target=${6:-$EXAMPLE_TARGET}
+    run_atom evaluate run --platform "$platform" --target "$target" --destination "$destination" --plan "$plan" --artifacts-dir "$artifacts_dir"
     ;;
   example-plan)
     printf '%s\n' "$DEFAULT_PLAN"

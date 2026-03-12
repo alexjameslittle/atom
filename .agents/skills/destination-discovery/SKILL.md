@@ -19,8 +19,9 @@ Use this skill when:
 
 ## Steps
 
-1. Run `scripts/run.sh all-json` for the full destination inventory.
-2. Run `scripts/run.sh ios-json` or `scripts/run.sh android-json` when only one platform matters.
+1. Run `mise exec -- scripts/run.sh all-json` for the full destination inventory.
+2. Run `mise exec -- scripts/run.sh ios-json` or `mise exec -- scripts/run.sh android-json` when
+   only one platform matters.
 3. Pick an available destination id whose capabilities cover the intended evidence or evaluation
    workflow.
 

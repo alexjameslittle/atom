@@ -23,7 +23,7 @@ Use this skill when changes affect:
 
 1. Run dry-run prebuild and capture the plan output.
 2. Run real prebuild to emit the generated tree.
-3. Run `scripts/check-tree.sh`.
+3. Run `mise exec -- scripts/check-tree.sh`.
 4. Compare generated output against expectations for determinism.
 
 ## What to check

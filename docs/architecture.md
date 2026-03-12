@@ -56,12 +56,17 @@ Dependency direction should move one way:
   - Registers iOS deploy and CNG backends for the canonical CLI binary
   - Owns iOS destination discovery, deploy/stop/evaluate implementation, and iOS host templates
   - Owns iOS-specific CNG planning/emission and backend compatibility checks
+- `atom-backend-ios-debug`
+  - First-party iOS debugger support crate used by `atom-backend-ios`
+  - Owns LLDB process orchestration, stop parsing, and native debug-session plumbing for iOS
 - `atom-backend-android`
   - First-party Android backend implementation crate
   - Registers Android deploy and CNG backends for the canonical CLI binary
   - Owns Android destination discovery, deploy/stop/evaluate implementation, and Android host
     templates
   - Owns Android-specific CNG planning/emission and backend compatibility checks
+  - Android automation and evaluation remain supported even when Android debugger backends are not
+    shipped
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
   - Links the first-party config plugin registry used during `atom prebuild`

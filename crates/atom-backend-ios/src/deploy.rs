@@ -1,17 +1,22 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use atom_backend_ios_debug::{IosAttachOptions, IosLldbClient};
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, ScreenInfo, SessionLaunchBehavior, ToolRunner, UiBounds, UiNode, UiSnapshot,
+    BackendAutomationSession, BackendDebugSession, BackendDefinition, DebugBacktrace,
+    DebugBreakpoint, DebugSourceLocation, DebugStop, DebugThread, DebuggerKind, DeployBackend,
+    DeployBackendRegistry, DestinationCapability, DestinationDescriptor, InteractionRequest,
+    InteractionResult, LaunchMode, ScreenInfo, SessionLaunchBehavior, SharedToolRunner, ToolRunner,
+    UiBounds, UiNode, UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
 use atom_deploy::{
-    capture_tool, find_bazel_output_owned, generated_target, run_bazel_owned, run_tool, stream_tool,
+    bazel_source_map_prefix, capture_tool, find_bazel_output_owned, generated_target,
+    run_bazel_owned, run_tool, stream_tool,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -21,6 +26,8 @@ use serde_json::Value;
 const BACKEND_ID: &str = "ios";
 const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DEBUG_PID_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const DEBUG_PID_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SCREENSHOT_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const SCREENSHOT_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,11 +68,27 @@ struct VideoCapture {
 struct IosAutomationSession<'a> {
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
-    runner: &'a mut dyn ToolRunner,
+    runner: &'a SharedToolRunner<'a>,
     destination_id: String,
     launch_behavior: SessionLaunchBehavior,
     launch: Option<IosAppLaunch>,
     video_capture: Option<VideoCapture>,
+}
+
+struct IosDebugBuild {
+    installable_app: Utf8PathBuf,
+    bundle_id: String,
+    executable_path: Utf8PathBuf,
+    source_map_prefix: Option<String>,
+}
+
+struct IosDebugSession<'a> {
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    runner: &'a SharedToolRunner<'a>,
+    destination_id: String,
+    client: Option<IosLldbClient>,
+    breakpoints: BTreeMap<String, String>,
 }
 
 impl IosDestination {
@@ -150,7 +173,7 @@ impl DeployBackend for IosDeployBackend {
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
-        runner: &'a mut dyn ToolRunner,
+        runner: &'a SharedToolRunner<'a>,
         launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Box<dyn BackendAutomationSession + 'a>> {
         Ok(Box::new(IosAutomationSession {
@@ -161,6 +184,31 @@ impl DeployBackend for IosDeployBackend {
             launch_behavior,
             launch: None,
             video_capture: None,
+        }))
+    }
+
+    fn new_debug_session<'a>(
+        &self,
+        repo_root: &'a Utf8Path,
+        manifest: &'a NormalizedManifest,
+        destination_id: &'a str,
+        runner: &'a SharedToolRunner<'a>,
+        _launch_behavior: SessionLaunchBehavior,
+        debugger: DebuggerKind,
+    ) -> AtomResult<Box<dyn BackendDebugSession + 'a>> {
+        if debugger != DebuggerKind::Native {
+            return Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "iOS only supports the native debugger",
+            ));
+        }
+        Ok(Box::new(IosDebugSession {
+            repo_root,
+            manifest,
+            runner,
+            destination_id: destination_id.to_owned(),
+            client: None,
+            breakpoints: BTreeMap::new(),
         }))
     }
 }
@@ -181,22 +229,46 @@ impl BackendAutomationSession for IosAutomationSession<'_> {
         "mov"
     }
 
+    fn attach_existing(&mut self) -> AtomResult<bool> {
+        if self.launch.is_some() {
+            return Ok(true);
+        }
+        let mut runner = self.runner.borrow_mut();
+        if let Some(launch) = attach_running_ios_app(
+            self.repo_root,
+            self.manifest,
+            &self.destination_id,
+            &mut **runner,
+        )? {
+            self.launch = Some(launch);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     fn ensure_launched(&mut self) -> AtomResult<()> {
         if self.launch.is_some() {
             return Ok(());
         }
         if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
-            && let Some(launch) = attach_ios_app(
-                self.repo_root,
-                self.manifest,
-                &self.destination_id,
-                self.runner,
-            )?
+            && let Some(launch) = {
+                let mut runner = self.runner.borrow_mut();
+                attach_ios_app(
+                    self.repo_root,
+                    self.manifest,
+                    &self.destination_id,
+                    &mut **runner,
+                )?
+            }
         {
             self.launch = Some(launch);
             return Ok(());
         }
-        let Some(destination) = list_ios_destinations(self.repo_root, self.runner)?
+        let destinations = {
+            let mut runner = self.runner.borrow_mut();
+            list_ios_destinations(self.repo_root, &mut **runner)?
+        };
+        let Some(destination) = destinations
             .into_iter()
             .find(|destination| destination.id == self.destination_id)
         else {
@@ -206,21 +278,39 @@ impl BackendAutomationSession for IosAutomationSession<'_> {
                 &self.destination_id,
             ));
         };
-        let launch = launch_ios_app(self.repo_root, self.manifest, &destination, self.runner)?;
-        wait_for_launch_ready(
-            self.repo_root,
-            &launch.destination_id,
-            &launch.app_name,
-            &launch.app_slug,
-            self.runner,
-        )?;
+        let launch = {
+            let mut runner = self.runner.borrow_mut();
+            launch_ios_app(self.repo_root, self.manifest, &destination, &mut **runner)?
+        };
+        {
+            let mut runner = self.runner.borrow_mut();
+            wait_for_launch_ready(
+                self.repo_root,
+                &launch.destination_id,
+                &launch.app_name,
+                &launch.app_slug,
+                &mut **runner,
+            )?;
+        }
         self.launch = Some(launch);
         Ok(())
     }
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
         self.ensure_launched()?;
-        interact_with_idb(self.repo_root, &self.destination_id, self.runner, request)
+        let mut runner = self.runner.borrow_mut();
+        interact_with_idb(self.repo_root, &self.destination_id, &mut **runner, request)
+    }
+
+    fn interact_without_snapshot(&mut self, request: InteractionRequest) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let mut runner = self.runner.borrow_mut();
+        interact_with_idb_without_snapshot(
+            self.repo_root,
+            &self.destination_id,
+            &mut **runner,
+            request,
+        )
     }
 
     fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
@@ -234,13 +324,15 @@ impl BackendAutomationSession for IosAutomationSession<'_> {
     fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
-        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
+        let mut runner = self.runner.borrow_mut();
+        capture_screenshot_for_launch(self.repo_root, &launch, output_path, &mut **runner)
     }
 
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
-        capture_logs_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
+        let mut runner = self.runner.borrow_mut();
+        capture_logs_for_launch(self.repo_root, &launch, output_path, seconds, &mut **runner)
     }
 
     fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
@@ -274,6 +366,155 @@ impl BackendAutomationSession for IosAutomationSession<'_> {
     }
 }
 
+impl IosDebugSession<'_> {
+    fn resolve_destination(&self) -> AtomResult<IosDestination> {
+        let mut runner = self.runner.borrow_mut();
+        resolve_requested_ios_destination(self.repo_root, &mut **runner, &self.destination_id)
+    }
+
+    fn ensure_client(&mut self) -> AtomResult<&mut IosLldbClient> {
+        self.client.as_mut().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "iOS debugger session has not been attached or launched",
+            )
+        })
+    }
+}
+
+impl BackendDebugSession for IosDebugSession<'_> {
+    fn kind(&self) -> DebuggerKind {
+        DebuggerKind::Native
+    }
+
+    fn launch(&mut self) -> AtomResult<()> {
+        if self.client.is_some() {
+            return Ok(());
+        }
+        let destination = self.resolve_destination()?;
+        if destination.kind != IosDestinationKind::Simulator {
+            return Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "iOS debugger support currently requires a simulator destination",
+            ));
+        }
+        let build = {
+            let mut runner = self.runner.borrow_mut();
+            build_ios_debug_app(self.repo_root, self.manifest, &destination, &mut **runner)?
+        };
+        let destination_id = {
+            let mut runner = self.runner.borrow_mut();
+            launch_ios_debug_app(self.repo_root, &destination, &build, true, &mut **runner)?
+        };
+        let pid = {
+            let mut runner = self.runner.borrow_mut();
+            read_ios_debug_pid(
+                self.repo_root,
+                &destination_id,
+                &build.bundle_id,
+                &mut **runner,
+            )?
+        };
+        self.client = Some(IosLldbClient::attach(
+            self.repo_root,
+            &IosAttachOptions {
+                executable_path: build.executable_path,
+                pid,
+                source_map_prefix: build.source_map_prefix,
+            },
+        )?);
+        self.breakpoints.clear();
+        Ok(())
+    }
+
+    fn attach(&mut self) -> AtomResult<()> {
+        if self.client.is_some() {
+            return Ok(());
+        }
+        let destination = self.resolve_destination()?;
+        if destination.kind != IosDestinationKind::Simulator {
+            return Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "iOS debugger support currently requires a simulator destination",
+            ));
+        }
+        let build = {
+            let mut runner = self.runner.borrow_mut();
+            build_ios_debug_app(self.repo_root, self.manifest, &destination, &mut **runner)?
+        };
+        let destination_id = {
+            let mut runner = self.runner.borrow_mut();
+            attach_or_launch_ios_debug_app(self.repo_root, &destination, &build, &mut **runner)?
+        };
+        let pid = {
+            let mut runner = self.runner.borrow_mut();
+            read_ios_debug_pid(
+                self.repo_root,
+                &destination_id,
+                &build.bundle_id,
+                &mut **runner,
+            )?
+        };
+        self.client = Some(IosLldbClient::attach(
+            self.repo_root,
+            &IosAttachOptions {
+                executable_path: build.executable_path,
+                pid,
+                source_map_prefix: build.source_map_prefix,
+            },
+        )?);
+        self.breakpoints.clear();
+        Ok(())
+    }
+
+    fn set_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<DebugBreakpoint> {
+        let breakpoint = self.ensure_client()?.set_breakpoint(&location)?;
+        self.breakpoints.insert(
+            format!("{}:{}", location.file, location.line),
+            breakpoint.id.clone(),
+        );
+        Ok(breakpoint)
+    }
+
+    fn clear_breakpoint(&mut self, location: DebugSourceLocation) -> AtomResult<()> {
+        let key = format!("{}:{}", location.file, location.line);
+        let breakpoint_id = self.breakpoints.remove(&key).ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                format!("no active iOS breakpoint matches {key}"),
+            )
+        })?;
+        self.ensure_client()?.clear_breakpoint(&breakpoint_id)
+    }
+
+    fn wait_for_stop(&mut self, timeout_ms: Option<u64>) -> AtomResult<DebugStop> {
+        self.ensure_client()?.wait_for_stop(timeout_ms)
+    }
+
+    fn threads(&mut self) -> AtomResult<Vec<DebugThread>> {
+        self.ensure_client()?.threads()
+    }
+
+    fn backtrace(&mut self, thread_id: Option<&str>) -> AtomResult<DebugBacktrace> {
+        self.ensure_client()?.backtrace(thread_id)
+    }
+
+    fn pause(&mut self) -> AtomResult<DebugStop> {
+        self.ensure_client()?.pause()
+    }
+
+    fn resume(&mut self) -> AtomResult<()> {
+        self.ensure_client()?.resume()
+    }
+
+    fn shutdown(&mut self) -> AtomResult<()> {
+        if let Some(client) = self.client.as_mut() {
+            client.shutdown()?;
+        }
+        Ok(())
+    }
+}
+
 fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDescriptor {
     let display_name = destination.display_label();
     let id = destination.id.clone();
@@ -290,6 +531,7 @@ fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDe
             DestinationCapability::InspectUi,
             DestinationCapability::Interact,
             DestinationCapability::Evaluate,
+            DestinationCapability::Debug,
         ],
         IosDestinationKind::Device => vec![DestinationCapability::Launch],
     };
@@ -303,6 +545,11 @@ fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDe
         available: destination.is_available,
         debug_state: destination.state,
         capabilities,
+        debuggers: if matches!(destination.kind, IosDestinationKind::Simulator) {
+            vec![DebuggerKind::Native]
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -315,7 +562,7 @@ fn deploy_ios(
 ) -> AtomResult<()> {
     let destination = resolve_ios_destination(repo_root, runner, requested_destination)?;
     let target = generated_target(manifest, BACKEND_ID);
-    let build_args = ios_bazel_args(&target, &destination);
+    let build_args = ios_bazel_args(&target, &destination, false);
 
     run_step(
         "Building iOS app...",
@@ -702,16 +949,20 @@ fn parse_idb_targets(json: &str) -> AtomResult<Vec<IosDestination>> {
     Ok(destinations)
 }
 
-fn ios_bazel_args(target: &str, destination: &IosDestination) -> Vec<String> {
+fn ios_bazel_args(target: &str, destination: &IosDestination, debug_build: bool) -> Vec<String> {
     let cpu = match destination.kind {
         IosDestinationKind::Simulator => "sim_arm64,x86_64",
         IosDestinationKind::Device => "arm64",
     };
-    vec![
+    let mut args = vec![
         "build".to_owned(),
         target.to_owned(),
         format!("--ios_multi_cpus={cpu}"),
-    ]
+    ];
+    if debug_build {
+        args.push("--compilation_mode=dbg".to_owned());
+    }
+    args
 }
 
 fn resolve_ios_installable_artifact(path: &Utf8Path) -> AtomResult<Utf8PathBuf> {
@@ -801,6 +1052,246 @@ fn find_descendant_with_suffix(root: &Utf8Path, suffix: &str) -> AtomResult<Opti
     Ok(None)
 }
 
+fn build_ios_debug_app(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &IosDestination,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<IosDebugBuild> {
+    let target = generated_target(manifest, BACKEND_ID);
+    let build_args = ios_bazel_args(&target, destination, true);
+    run_bazel_owned(runner, repo_root, &build_args)?;
+    let app_bundle = find_bazel_output_owned(
+        runner,
+        repo_root,
+        &build_args,
+        &target,
+        &[".app", ".ipa"],
+        "iOS app artifact",
+    )?;
+    let installable_app = resolve_ios_installable_artifact(&app_bundle)?;
+    let bundle_id = manifest
+        .ios
+        .bundle_id
+        .clone()
+        .ok_or_else(|| AtomError::new(AtomErrorCode::InternalBug, "missing iOS bundle id"))?;
+    let executable_path = resolve_ios_app_executable(repo_root, runner, &installable_app)?;
+    Ok(IosDebugBuild {
+        installable_app,
+        bundle_id,
+        source_map_prefix: bazel_source_map_prefix(&executable_path)?,
+        executable_path,
+    })
+}
+
+fn resolve_ios_app_executable(
+    repo_root: &Utf8Path,
+    runner: &mut dyn ToolRunner,
+    installable_app: &Utf8Path,
+) -> AtomResult<Utf8PathBuf> {
+    let info_plist = installable_app.join("Info.plist");
+    if info_plist.exists()
+        && let Ok(executable_name) = capture_tool(
+            runner,
+            repo_root,
+            "plutil",
+            &[
+                "-extract",
+                "CFBundleExecutable",
+                "raw",
+                "-o",
+                "-",
+                info_plist.as_str(),
+            ],
+        )
+    {
+        let executable_name = executable_name.trim();
+        if !executable_name.is_empty() {
+            let executable_path = installable_app.join(executable_name);
+            if executable_path.exists() {
+                return Ok(executable_path);
+            }
+        }
+    }
+
+    if let Some(bundle_stem) = installable_app.file_stem() {
+        let candidate = installable_app.join(bundle_stem);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    for entry in fs::read_dir(installable_app).map_err(|error| {
+        AtomError::with_path(
+            AtomErrorCode::ExternalToolFailed,
+            format!("failed to inspect iOS app bundle: {error}"),
+            installable_app.as_str(),
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            AtomError::with_path(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to inspect iOS app bundle: {error}"),
+                installable_app.as_str(),
+            )
+        })?;
+        let path = Utf8PathBuf::from_path_buf(entry.path()).map_err(|_| {
+            AtomError::with_path(
+                AtomErrorCode::ExternalToolFailed,
+                "iOS app bundle contained a non-UTF-8 path",
+                installable_app.as_str(),
+            )
+        })?;
+        if path.is_file() && path.extension().is_none() {
+            return Ok(path);
+        }
+    }
+
+    Err(AtomError::with_path(
+        AtomErrorCode::ExternalToolFailed,
+        "could not resolve the iOS app executable from the built bundle",
+        installable_app.as_str(),
+    ))
+}
+
+fn launch_ios_debug_app(
+    repo_root: &Utf8Path,
+    destination: &IosDestination,
+    build: &IosDebugBuild,
+    wait_for_debugger: bool,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<String> {
+    let destination_id = match destination.kind {
+        IosDestinationKind::Simulator => prepare_ios_simulator(repo_root, runner, destination)?,
+        IosDestinationKind::Device => destination.id.clone(),
+    };
+    run_idb(
+        runner,
+        repo_root,
+        &destination_id,
+        &[
+            "install".to_owned(),
+            build.installable_app.as_str().to_owned(),
+        ],
+    )?;
+    if wait_for_debugger {
+        let _ = run_idb(
+            runner,
+            repo_root,
+            &destination_id,
+            &["terminate".to_owned(), build.bundle_id.clone()],
+        );
+    }
+
+    let pid_file = ios_debug_pid_file(&destination_id, &build.bundle_id)?;
+    let _ = fs::remove_file(&pid_file);
+    run_idb(
+        runner,
+        repo_root,
+        &destination_id,
+        &[
+            "launch".to_owned(),
+            "-p".to_owned(),
+            pid_file.as_str().to_owned(),
+            if wait_for_debugger {
+                "-d".to_owned()
+            } else {
+                "-f".to_owned()
+            },
+            build.bundle_id.clone(),
+        ],
+    )?;
+    Ok(destination_id)
+}
+
+fn attach_or_launch_ios_debug_app(
+    repo_root: &Utf8Path,
+    destination: &IosDestination,
+    build: &IosDebugBuild,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<String> {
+    let destination_id = match destination.kind {
+        IosDestinationKind::Simulator => prepare_ios_simulator(repo_root, runner, destination)?,
+        IosDestinationKind::Device => destination.id.clone(),
+    };
+    if ios_app_is_running(repo_root, runner, &destination_id, &build.bundle_id)? {
+        launch_ios_debug_app(repo_root, destination, build, false, runner)
+    } else {
+        launch_ios_debug_app(repo_root, destination, build, true, runner)
+    }
+}
+
+fn read_ios_debug_pid(
+    _repo_root: &Utf8Path,
+    destination_id: &str,
+    bundle_id: &str,
+    _runner: &mut dyn ToolRunner,
+) -> AtomResult<u32> {
+    let pid_file = ios_debug_pid_file(destination_id, bundle_id)?;
+    let deadline = Instant::now() + DEBUG_PID_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(&pid_file) {
+            let pid = if let Ok(pid) = contents.trim().parse::<u32>() {
+                pid
+            } else {
+                let parsed = serde_json::from_str::<Value>(&contents).map_err(|error| {
+                    AtomError::with_path(
+                        AtomErrorCode::ExternalToolFailed,
+                        format!("idb wrote an invalid debugger pid payload: {error}"),
+                        pid_file.as_str(),
+                    )
+                })?;
+                let pid = parsed.get("pid").and_then(Value::as_u64).ok_or_else(|| {
+                    AtomError::with_path(
+                        AtomErrorCode::ExternalToolFailed,
+                        "idb debugger pid payload did not contain a numeric pid field",
+                        pid_file.as_str(),
+                    )
+                })?;
+                u32::try_from(pid).map_err(|error| {
+                    AtomError::with_path(
+                        AtomErrorCode::ExternalToolFailed,
+                        format!("idb wrote an out-of-range debugger pid: {error}"),
+                        pid_file.as_str(),
+                    )
+                })?
+            };
+            let _ = fs::remove_file(&pid_file);
+            return Ok(pid);
+        }
+        thread::sleep(DEBUG_PID_READY_POLL_INTERVAL);
+    }
+    Err(AtomError::with_path(
+        AtomErrorCode::ExternalToolFailed,
+        "timed out waiting for idb to write the debugger pid file",
+        pid_file.as_str(),
+    ))
+}
+
+fn ios_debug_pid_file(destination_id: &str, bundle_id: &str) -> AtomResult<Utf8PathBuf> {
+    let file_name = format!(
+        "atom-ios-debug-{}-{}.pid",
+        sanitize_debug_path_component(destination_id),
+        sanitize_debug_path_component(bundle_id)
+    );
+    Utf8PathBuf::from_path_buf(std::env::temp_dir().join(file_name)).map_err(|_| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            "temporary iOS debugger pid path was not valid UTF-8",
+        )
+    })
+}
+
+fn sanitize_debug_path_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => character,
+            _ => '_',
+        })
+        .collect()
+}
+
 fn ios_app_is_running(
     repo_root: &Utf8Path,
     runner: &mut dyn ToolRunner,
@@ -831,7 +1322,7 @@ fn launch_ios_app(
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<IosAppLaunch> {
     let target = generated_target(manifest, BACKEND_ID);
-    let build_args = ios_bazel_args(&target, destination);
+    let build_args = ios_bazel_args(&target, destination, false);
     run_bazel_owned(runner, repo_root, &build_args)?;
     let app_bundle = find_bazel_output_owned(
         runner,
@@ -892,6 +1383,26 @@ fn attach_ios_app(
     if !snapshot_matches_ios_app(&snapshot, &manifest.app.name, &manifest.app.slug)
         || !snapshot_is_launch_ready(&snapshot)
     {
+        return Ok(None);
+    }
+    Ok(Some(IosAppLaunch {
+        destination_id: destination_id.to_owned(),
+        bundle_id,
+        app_name: manifest.app.name.clone(),
+        app_slug: manifest.app.slug.clone(),
+    }))
+}
+
+fn attach_running_ios_app(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination_id: &str,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<Option<IosAppLaunch>> {
+    let Some(bundle_id) = manifest.ios.bundle_id.clone() else {
+        return Ok(None);
+    };
+    if !ios_app_is_running(repo_root, runner, destination_id, &bundle_id)? {
         return Ok(None);
     }
     Ok(Some(IosAppLaunch {
@@ -1036,6 +1547,96 @@ fn interact_with_idb(
                 snapshot: inspect_ui_with_idb(repo_root, destination_id, runner)?,
                 message: None,
             })
+        }
+    }
+}
+
+fn interact_with_idb_without_snapshot(
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    runner: &mut dyn ToolRunner,
+    request: InteractionRequest,
+) -> AtomResult<()> {
+    match request {
+        InteractionRequest::InspectUi => {
+            let _ = inspect_ui_with_idb(repo_root, destination_id, runner)?;
+            Ok(())
+        }
+        InteractionRequest::Tap { target_id, x, y } => {
+            let snapshot = inspect_ui_with_idb(repo_root, destination_id, runner)?;
+            let (tap_x, tap_y) = resolve_interaction_point(&snapshot, target_id.as_deref(), x, y)?;
+            run_idb(
+                runner,
+                repo_root,
+                destination_id,
+                &[
+                    "ui".to_owned(),
+                    "tap".to_owned(),
+                    format_coordinate(tap_x),
+                    format_coordinate(tap_y),
+                ],
+            )
+        }
+        InteractionRequest::LongPress { target_id, x, y } => {
+            let snapshot = inspect_ui_with_idb(repo_root, destination_id, runner)?;
+            let (tap_x, tap_y) = resolve_interaction_point(&snapshot, target_id.as_deref(), x, y)?;
+            run_idb(
+                runner,
+                repo_root,
+                destination_id,
+                &[
+                    "ui".to_owned(),
+                    "tap".to_owned(),
+                    "--duration".to_owned(),
+                    "1.0".to_owned(),
+                    format_coordinate(tap_x),
+                    format_coordinate(tap_y),
+                ],
+            )
+        }
+        InteractionRequest::TypeText { target_id, text } => {
+            if let Some(target_id) = target_id.as_deref() {
+                let snapshot = inspect_ui_with_idb(repo_root, destination_id, runner)?;
+                let (tap_x, tap_y) =
+                    resolve_interaction_point(&snapshot, Some(target_id), None, None)?;
+                run_idb(
+                    runner,
+                    repo_root,
+                    destination_id,
+                    &[
+                        "ui".to_owned(),
+                        "tap".to_owned(),
+                        format_coordinate(tap_x),
+                        format_coordinate(tap_y),
+                    ],
+                )?;
+            }
+            run_idb(
+                runner,
+                repo_root,
+                destination_id,
+                &["ui".to_owned(), "text".to_owned(), text],
+            )
+        }
+        InteractionRequest::Swipe { x, y } | InteractionRequest::Drag { x, y } => {
+            let snapshot = inspect_ui_with_idb(repo_root, destination_id, runner)?;
+            let start_x = snapshot.screen.width / 2.0;
+            let start_y = snapshot.screen.height * 0.75;
+            let end_x = x.unwrap_or(start_x);
+            let end_y = y.unwrap_or(snapshot.screen.height * 0.25);
+            run_idb(
+                runner,
+                repo_root,
+                destination_id,
+                &[
+                    "ui".to_owned(),
+                    "swipe".to_owned(),
+                    format_coordinate(start_x),
+                    format_coordinate(start_y),
+                    format_coordinate(end_x),
+                    format_coordinate(end_y),
+                ],
+            )
         }
     }
 }

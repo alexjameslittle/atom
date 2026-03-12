@@ -24,7 +24,7 @@ atom-ffi -> atom-manifest -> atom-modules -> atom-backends -> atom-cng -> atom-d
 
 ## Steps
 
-1. Run `scripts/check-deps.sh`.
+1. Run `mise exec -- scripts/check-deps.sh`.
 2. Compare against the intended flow above.
 3. Confirm generic crates (`atom-backends`, `atom-cng`, `atom-deploy`) stay free of concrete
    first-party backend ids and backend-specific hook names.

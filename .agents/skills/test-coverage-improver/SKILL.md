@@ -20,7 +20,7 @@ Use this skill when:
 
 ## Steps
 
-1. Run `scripts/audit.sh`.
+1. Run `mise exec -- scripts/audit.sh`.
 2. For each changed file, identify the nearest existing test target or prove that none exists.
 3. Prefer backend-specific assertions in backend crate `rust_test` targets instead of parking them
    in generic crate tests.

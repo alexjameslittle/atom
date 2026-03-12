@@ -650,13 +650,25 @@ fn execute_evaluate(
     match &args.command {
         EvaluateCommand::Run(args) => {
             let manifest = load_manifest(&repo_root, &args.target.target)?;
+            let platform = args.target.platform.as_backend_id();
+            preflight_run_backend(&manifest, &deploy_registry, platform, || {
+                let modules = resolve_modules(&repo_root, &manifest.modules)?;
+                let generation_registry = first_party_generation_backend_registry()?;
+                let plan = build_generation_plan(
+                    &manifest,
+                    &modules,
+                    &default_config_plugin_registry(),
+                    &generation_registry,
+                )?;
+                emit_host_tree(&repo_root, &plan, &generation_registry).map(|_| ())
+            })?;
             let plan = resolve_cli_path(&repo_root, &args.plan);
             let artifacts_dir = resolve_cli_path(&repo_root, &args.artifacts_dir);
             let result = evaluate_run(
                 &repo_root,
                 &manifest,
                 &deploy_registry,
-                args.target.platform.as_backend_id(),
+                platform,
                 &args.target.destination,
                 &plan,
                 &artifacts_dir,
@@ -762,8 +774,9 @@ mod tests {
     };
 
     use atom_backends::{
-        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-        LaunchMode, SessionLaunchBehavior, ToolRunner,
+        BackendAutomationSession, BackendDebugSession, BackendDefinition, DebuggerKind,
+        DeployBackend, DeployBackendRegistry, LaunchMode, SessionLaunchBehavior, SharedToolRunner,
+        ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -826,10 +839,22 @@ mod tests {
             _repo_root: &'a Utf8Path,
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
-            _runner: &'a mut dyn ToolRunner,
+            _runner: &'a SharedToolRunner<'a>,
             _launch_behavior: SessionLaunchBehavior,
         ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
             unreachable!("CLI tests do not construct automation sessions")
+        }
+
+        fn new_debug_session<'a>(
+            &self,
+            _repo_root: &'a Utf8Path,
+            _manifest: &'a NormalizedManifest,
+            _destination_id: &'a str,
+            _runner: &'a SharedToolRunner<'a>,
+            _launch_behavior: SessionLaunchBehavior,
+            _debugger: DebuggerKind,
+        ) -> atom_ffi::AtomResult<Box<dyn BackendDebugSession + 'a>> {
+            unreachable!("CLI tests do not construct debug sessions")
         }
     }
 

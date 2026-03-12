@@ -12,22 +12,29 @@ mode=${1:-all}
 
 case "$mode" in
   all)
-    run_atom destinations
+    printf '==> iOS\n'
+    run_atom destinations --platform ios
+    printf '\n==> Android\n'
+    run_atom destinations --platform android
     ;;
   all-json)
-    run_atom destinations --json
+    printf '{\n  "ios": '
+    run_atom destinations --platform ios --json
+    printf ',\n  "android": '
+    run_atom destinations --platform android --json
+    printf '\n}\n'
     ;;
   ios)
-    run_atom devices ios
+    run_atom devices --platform ios
     ;;
   ios-json)
-    run_atom devices ios --json
+    run_atom devices --platform ios --json
     ;;
   android)
-    run_atom devices android
+    run_atom devices --platform android
     ;;
   android-json)
-    run_atom devices android --json
+    run_atom devices --platform android --json
     ;;
   *)
     echo "unknown mode: $mode" >&2

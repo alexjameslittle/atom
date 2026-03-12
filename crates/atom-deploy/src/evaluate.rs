@@ -1,16 +1,19 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
-    ToolRunner,
+    BackendAutomationSession, BackendDebugSession, DebugBacktrace, DebugBreakpoint,
+    DebugSourceLocation, DebugStop, DebugThread, DebuggerKind, DeployBackendRegistry,
+    DestinationCapability, DestinationDescriptor, SharedToolRunner, ToolRunner,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
+use crate::debugger::debug_session_with_registry;
 use crate::destinations::list_backend_destinations;
 
 pub use atom_backends::{
@@ -34,22 +37,29 @@ pub fn inspect_ui(
     destination_id: &str,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<UiSnapshot> {
-    let descriptor =
-        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
+    let shared_runner = SharedToolRunner::new(runner);
+    let descriptor = resolve_destination_descriptor(
+        repo_root,
+        registry,
+        backend_id,
+        destination_id,
+        &shared_runner,
+    )?;
     require_capability(&descriptor, DestinationCapability::InspectUi)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluationSession::new(
         repo_root,
         manifest,
         registry,
         backend_id,
         destination_id,
-        runner,
+        &shared_runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
     session.ensure_launched()?;
     let mut snapshot = session.interact(InteractionRequest::InspectUi)?;
     session.shutdown_video()?;
+    session.shutdown_debug_sessions()?;
     if snapshot.snapshot.screenshot_path.is_none() {
         let screenshot = session.capture_auto_screenshot()?;
         snapshot.snapshot.screenshot_path = Some(screenshot.as_str().to_owned());
@@ -69,16 +79,22 @@ pub fn interact(
     request: InteractionRequest,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<InteractionResult> {
-    let descriptor =
-        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
+    let shared_runner = SharedToolRunner::new(runner);
+    let descriptor = resolve_destination_descriptor(
+        repo_root,
+        registry,
+        backend_id,
+        destination_id,
+        &shared_runner,
+    )?;
     require_capability(&descriptor, DestinationCapability::Interact)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluationSession::new(
         repo_root,
         manifest,
         registry,
         backend_id,
         destination_id,
-        runner,
+        &shared_runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
@@ -100,16 +116,22 @@ pub fn capture_screenshot(
     output_path: &Utf8Path,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor =
-        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
+    let shared_runner = SharedToolRunner::new(runner);
+    let descriptor = resolve_destination_descriptor(
+        repo_root,
+        registry,
+        backend_id,
+        destination_id,
+        &shared_runner,
+    )?;
     require_capability(&descriptor, DestinationCapability::Screenshot)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluationSession::new(
         repo_root,
         manifest,
         registry,
         backend_id,
         destination_id,
-        runner,
+        &shared_runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
@@ -134,16 +156,22 @@ pub fn capture_logs(
     seconds: u64,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor =
-        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
+    let shared_runner = SharedToolRunner::new(runner);
+    let descriptor = resolve_destination_descriptor(
+        repo_root,
+        registry,
+        backend_id,
+        destination_id,
+        &shared_runner,
+    )?;
     require_capability(&descriptor, DestinationCapability::Logs)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluationSession::new(
         repo_root,
         manifest,
         registry,
         backend_id,
         destination_id,
-        runner,
+        &shared_runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
@@ -168,16 +196,22 @@ pub fn capture_video(
     seconds: u64,
     runner: &mut impl ToolRunner,
 ) -> AtomResult<()> {
-    let descriptor =
-        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
+    let shared_runner = SharedToolRunner::new(runner);
+    let descriptor = resolve_destination_descriptor(
+        repo_root,
+        registry,
+        backend_id,
+        destination_id,
+        &shared_runner,
+    )?;
     require_capability(&descriptor, DestinationCapability::Video)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluationSession::new(
         repo_root,
         manifest,
         registry,
         backend_id,
         destination_id,
-        runner,
+        &shared_runner,
         descriptor,
         SessionLaunchBehavior::AttachOrLaunch,
     )?;
@@ -205,19 +239,25 @@ pub fn evaluate_run(
 ) -> AtomResult<EvaluateCommandOutput> {
     let plan = load_evaluation_plan(plan_path)?;
     write_parent_dir(artifacts_dir)?;
+    let shared_runner = SharedToolRunner::new(runner);
 
-    let descriptor =
-        resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
+    let descriptor = resolve_destination_descriptor(
+        repo_root,
+        registry,
+        backend_id,
+        destination_id,
+        &shared_runner,
+    )?;
     require_plan_capabilities(&descriptor, &plan)?;
 
     let started_at_ms = timestamp_millis();
-    let mut session = AutomationSession::new(
+    let mut session = EvaluationSession::new(
         repo_root,
         manifest,
         registry,
         backend_id,
         destination_id,
-        runner,
+        &shared_runner,
         descriptor,
         SessionLaunchBehavior::LaunchOnly,
     )?;
@@ -267,11 +307,15 @@ pub fn evaluate_run(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Step dispatch enumerates every public evaluation step in one place for the evaluator."
+)]
 fn execute_step(
     index: usize,
     step: EvaluationStep,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let started_at_ms = timestamp_millis();
@@ -324,6 +368,13 @@ fn execute_step(
             session,
             InteractionRequest::TypeText { target_id, text },
         ),
+        EvaluationStep::DebugTap { target_id, x, y } => execute_debug_interaction_step(
+            index,
+            "debug_tap",
+            started_at_ms,
+            session,
+            InteractionRequest::Tap { target_id, x, y },
+        ),
         EvaluationStep::Screenshot { name } => execute_screenshot_step(
             index,
             started_at_ms,
@@ -355,13 +406,91 @@ fn execute_step(
             name,
             seconds.unwrap_or(60),
         ),
+        EvaluationStep::DebugLaunch { debugger } => {
+            execute_debug_launch_step(index, started_at_ms, session, debugger)
+        }
+        EvaluationStep::DebugAttach { debugger } => {
+            execute_debug_attach_step(index, started_at_ms, session, debugger)
+        }
+        EvaluationStep::DebugSetBreakpoint {
+            debugger,
+            file,
+            line,
+            name,
+        } => execute_debug_set_breakpoint_step(
+            index,
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            debugger,
+            file,
+            line,
+            name,
+        ),
+        EvaluationStep::DebugClearBreakpoint {
+            debugger,
+            file,
+            line,
+        } => {
+            execute_debug_clear_breakpoint_step(index, started_at_ms, session, debugger, file, line)
+        }
+        EvaluationStep::DebugWaitForStop {
+            debugger,
+            timeout_ms,
+            name,
+        } => execute_debug_wait_for_stop_step(
+            index,
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            debugger,
+            timeout_ms,
+            name,
+        ),
+        EvaluationStep::DebugThreads { debugger, name } => execute_debug_threads_step(
+            index,
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            debugger,
+            name,
+        ),
+        EvaluationStep::DebugBacktrace {
+            debugger,
+            thread_id,
+            name,
+        } => execute_debug_backtrace_step(
+            index,
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            debugger,
+            thread_id.as_deref(),
+            name,
+        ),
+        EvaluationStep::DebugPause { debugger, name } => execute_debug_pause_step(
+            index,
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            debugger,
+            name,
+        ),
+        EvaluationStep::DebugResume { debugger } => {
+            execute_debug_resume_step(index, started_at_ms, session, debugger)
+        }
     }
 }
 
 fn execute_launch_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
     Ok(simple_step(index, "launch", started_at_ms))
@@ -370,7 +499,7 @@ fn execute_launch_step(
 fn execute_wait_for_ui_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
@@ -384,7 +513,7 @@ fn execute_interaction_step(
     index: usize,
     kind: &str,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     request: InteractionRequest,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
@@ -392,11 +521,23 @@ fn execute_interaction_step(
     Ok(simple_step(index, kind, started_at_ms))
 }
 
+fn execute_debug_interaction_step(
+    index: usize,
+    kind: &str,
+    started_at_ms: u128,
+    session: &mut EvaluationSession<'_>,
+    request: InteractionRequest,
+) -> AtomResult<StepRecord> {
+    session.ensure_launched()?;
+    session.interact_without_snapshot(request)?;
+    Ok(simple_step(index, kind, started_at_ms))
+}
+
 fn execute_screenshot_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
@@ -421,7 +562,7 @@ fn execute_inspect_ui_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
@@ -456,7 +597,7 @@ fn execute_start_video_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
@@ -474,7 +615,7 @@ fn execute_start_video_step(
 fn execute_stop_video_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let output_path = session.stop_video()?;
@@ -498,7 +639,7 @@ fn execute_collect_logs_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
     seconds: u64,
@@ -520,17 +661,254 @@ fn execute_collect_logs_step(
     ))
 }
 
+fn execute_debug_launch_step(
+    index: usize,
+    started_at_ms: u128,
+    session: &mut EvaluationSession<'_>,
+    debugger: DebuggerKind,
+) -> AtomResult<StepRecord> {
+    session.debug_launch(debugger)?;
+    Ok(simple_step(index, "debug_launch", started_at_ms))
+}
+
+fn execute_debug_attach_step(
+    index: usize,
+    started_at_ms: u128,
+    session: &mut EvaluationSession<'_>,
+    debugger: DebuggerKind,
+) -> AtomResult<StepRecord> {
+    session.debug_attach(debugger)?;
+    Ok(simple_step(index, "debug_attach", started_at_ms))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug breakpoint steps need explicit artifact, session, and source location inputs."
+)]
+fn execute_debug_set_breakpoint_step(
+    index: usize,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    session: &mut EvaluationSession<'_>,
+    artifacts: &mut Vec<ArtifactRecord>,
+    debugger: DebuggerKind,
+    file: String,
+    line: u32,
+    name: Option<String>,
+) -> AtomResult<StepRecord> {
+    let breakpoint = session.debug_set_breakpoint(debugger, file, line)?;
+    let artifact_name = artifact_name(name, index, "breakpoint", "json");
+    let output_path = artifacts_dir.join(&artifact_name);
+    write_json(&output_path, &breakpoint)?;
+    artifacts.push(ArtifactRecord {
+        name: artifact_name.clone(),
+        kind: "debug_breakpoint".to_owned(),
+        path: output_path.as_str().to_owned(),
+    });
+    Ok(step_with_artifacts(
+        index,
+        "debug_set_breakpoint",
+        started_at_ms,
+        vec![artifact_name],
+    ))
+}
+
+fn execute_debug_clear_breakpoint_step(
+    index: usize,
+    started_at_ms: u128,
+    session: &mut EvaluationSession<'_>,
+    debugger: DebuggerKind,
+    file: String,
+    line: u32,
+) -> AtomResult<StepRecord> {
+    session.debug_clear_breakpoint(debugger, file, line)?;
+    Ok(simple_step(index, "debug_clear_breakpoint", started_at_ms))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug stop steps need explicit artifact, session, and timeout inputs."
+)]
+fn execute_debug_wait_for_stop_step(
+    index: usize,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    session: &mut EvaluationSession<'_>,
+    artifacts: &mut Vec<ArtifactRecord>,
+    debugger: DebuggerKind,
+    timeout_ms: Option<u64>,
+    name: Option<String>,
+) -> AtomResult<StepRecord> {
+    let stop = session.debug_wait_for_stop(debugger, timeout_ms)?;
+    write_debug_stop_artifact(
+        index,
+        "debug_wait_for_stop",
+        started_at_ms,
+        artifacts_dir,
+        artifacts,
+        name,
+        "stop",
+        &stop,
+    )
+}
+
+fn execute_debug_threads_step(
+    index: usize,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    session: &mut EvaluationSession<'_>,
+    artifacts: &mut Vec<ArtifactRecord>,
+    debugger: DebuggerKind,
+    name: Option<String>,
+) -> AtomResult<StepRecord> {
+    let threads = session.debug_threads(debugger)?;
+    write_debug_json_artifact(
+        index,
+        "debug_threads",
+        started_at_ms,
+        artifacts_dir,
+        artifacts,
+        name,
+        "threads",
+        "debug_threads",
+        &threads,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug backtrace steps need explicit artifact, session, debugger, and thread selection inputs."
+)]
+fn execute_debug_backtrace_step(
+    index: usize,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    session: &mut EvaluationSession<'_>,
+    artifacts: &mut Vec<ArtifactRecord>,
+    debugger: DebuggerKind,
+    thread_id: Option<&str>,
+    name: Option<String>,
+) -> AtomResult<StepRecord> {
+    let backtrace = session.debug_backtrace(debugger, thread_id)?;
+    write_debug_json_artifact(
+        index,
+        "debug_backtrace",
+        started_at_ms,
+        artifacts_dir,
+        artifacts,
+        name,
+        "backtrace",
+        "debug_backtrace",
+        &backtrace,
+    )
+}
+
+fn execute_debug_pause_step(
+    index: usize,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    session: &mut EvaluationSession<'_>,
+    artifacts: &mut Vec<ArtifactRecord>,
+    debugger: DebuggerKind,
+    name: Option<String>,
+) -> AtomResult<StepRecord> {
+    let stop = session.debug_pause(debugger)?;
+    write_debug_stop_artifact(
+        index,
+        "debug_pause",
+        started_at_ms,
+        artifacts_dir,
+        artifacts,
+        name,
+        "pause",
+        &stop,
+    )
+}
+
+fn execute_debug_resume_step(
+    index: usize,
+    started_at_ms: u128,
+    session: &mut EvaluationSession<'_>,
+    debugger: DebuggerKind,
+) -> AtomResult<StepRecord> {
+    session.debug_resume(debugger)?;
+    Ok(simple_step(index, "debug_resume", started_at_ms))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug stop artifacts need explicit step metadata plus stop payload details."
+)]
+fn write_debug_stop_artifact(
+    index: usize,
+    kind: &str,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    artifacts: &mut Vec<ArtifactRecord>,
+    name: Option<String>,
+    prefix: &str,
+    stop: &DebugStop,
+) -> AtomResult<StepRecord> {
+    write_debug_json_artifact(
+        index,
+        kind,
+        started_at_ms,
+        artifacts_dir,
+        artifacts,
+        name,
+        prefix,
+        "debug_stop",
+        stop,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debug JSON artifacts need explicit step metadata, output naming, and payload inputs."
+)]
+fn write_debug_json_artifact<T: Serialize>(
+    index: usize,
+    kind: &str,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    artifacts: &mut Vec<ArtifactRecord>,
+    name: Option<String>,
+    prefix: &str,
+    artifact_kind: &str,
+    value: &T,
+) -> AtomResult<StepRecord> {
+    let artifact_name = artifact_name(name, index, prefix, "json");
+    let output_path = artifacts_dir.join(&artifact_name);
+    write_json(&output_path, value)?;
+    artifacts.push(ArtifactRecord {
+        name: artifact_name.clone(),
+        kind: artifact_kind.to_owned(),
+        path: output_path.as_str().to_owned(),
+    });
+    Ok(step_with_artifacts(
+        index,
+        kind,
+        started_at_ms,
+        vec![artifact_name],
+    ))
+}
+
 fn wait_for_ui(
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluationSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
 ) -> AtomResult<()> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     while Instant::now() < deadline {
-        let snapshot = session.interact(InteractionRequest::InspectUi)?.snapshot;
-        if snapshot_matches(&snapshot, target_id, text) {
-            return Ok(());
+        match session.interact(InteractionRequest::InspectUi) {
+            Ok(result) => {
+                if snapshot_matches(&result.snapshot, target_id, text) {
+                    return Ok(());
+                }
+            }
+            Err(error) if error.code == AtomErrorCode::AutomationUnavailable => {}
+            Err(error) => return Err(error),
         }
         thread::sleep(Duration::from_millis(150));
     }
@@ -582,9 +960,13 @@ fn resolve_destination_descriptor(
     registry: &DeployBackendRegistry,
     backend_id: &str,
     destination_id: &str,
-    runner: &mut impl ToolRunner,
+    runner: &SharedToolRunner<'_>,
 ) -> AtomResult<DestinationDescriptor> {
-    if let Some(destination) = list_backend_destinations(repo_root, registry, backend_id, runner)?
+    let destinations = {
+        let mut runner = runner.borrow_mut();
+        list_backend_destinations(repo_root, registry, backend_id, &mut **runner)?
+    };
+    if let Some(destination) = destinations
         .into_iter()
         .find(|destination| destination.id == destination_id)
     {
@@ -628,12 +1010,22 @@ fn require_plan_capabilities(
             | EvaluationStep::LongPress { .. }
             | EvaluationStep::Swipe { .. }
             | EvaluationStep::Drag { .. }
-            | EvaluationStep::TypeText { .. } => DestinationCapability::Interact,
+            | EvaluationStep::TypeText { .. }
+            | EvaluationStep::DebugTap { .. } => DestinationCapability::Interact,
             EvaluationStep::Screenshot { .. } => DestinationCapability::Screenshot,
             EvaluationStep::StartVideo { .. } | EvaluationStep::StopVideo => {
                 DestinationCapability::Video
             }
             EvaluationStep::CollectLogs { .. } => DestinationCapability::Logs,
+            EvaluationStep::DebugLaunch { .. }
+            | EvaluationStep::DebugAttach { .. }
+            | EvaluationStep::DebugSetBreakpoint { .. }
+            | EvaluationStep::DebugClearBreakpoint { .. }
+            | EvaluationStep::DebugWaitForStop { .. }
+            | EvaluationStep::DebugThreads { .. }
+            | EvaluationStep::DebugBacktrace { .. }
+            | EvaluationStep::DebugPause { .. }
+            | EvaluationStep::DebugResume { .. } => DestinationCapability::Debug,
         };
         require_capability(descriptor, capability)?;
     }
@@ -649,11 +1041,21 @@ fn step_kind(step: &EvaluationStep) -> &'static str {
         EvaluationStep::Swipe { .. } => "swipe",
         EvaluationStep::Drag { .. } => "drag",
         EvaluationStep::TypeText { .. } => "type_text",
+        EvaluationStep::DebugTap { .. } => "debug_tap",
         EvaluationStep::Screenshot { .. } => "screenshot",
         EvaluationStep::InspectUi { .. } => "inspect_ui",
         EvaluationStep::StartVideo { .. } => "start_video",
         EvaluationStep::StopVideo => "stop_video",
         EvaluationStep::CollectLogs { .. } => "collect_logs",
+        EvaluationStep::DebugLaunch { .. } => "debug_launch",
+        EvaluationStep::DebugAttach { .. } => "debug_attach",
+        EvaluationStep::DebugSetBreakpoint { .. } => "debug_set_breakpoint",
+        EvaluationStep::DebugClearBreakpoint { .. } => "debug_clear_breakpoint",
+        EvaluationStep::DebugWaitForStop { .. } => "debug_wait_for_stop",
+        EvaluationStep::DebugThreads { .. } => "debug_threads",
+        EvaluationStep::DebugBacktrace { .. } => "debug_backtrace",
+        EvaluationStep::DebugPause { .. } => "debug_pause",
+        EvaluationStep::DebugResume { .. } => "debug_resume",
     }
 }
 
@@ -697,12 +1099,20 @@ fn load_evaluation_plan(path: &Utf8Path) -> AtomResult<EvaluationPlan> {
     })
 }
 
-struct AutomationSession<'a> {
+struct EvaluationSession<'a> {
+    repo_root: &'a Utf8Path,
+    manifest: &'a NormalizedManifest,
+    registry: &'a DeployBackendRegistry,
+    backend_id: &'a str,
+    destination_id: &'a str,
+    runner: &'a SharedToolRunner<'a>,
     descriptor: DestinationDescriptor,
-    backend: Box<dyn BackendAutomationSession + 'a>,
+    automation: Box<dyn BackendAutomationSession + 'a>,
+    automation_started: bool,
+    debug_sessions: BTreeMap<DebuggerKind, Box<dyn BackendDebugSession + 'a>>,
 }
 
-impl<'a> AutomationSession<'a> {
+impl<'a> EvaluationSession<'a> {
     #[expect(
         clippy::too_many_arguments,
         reason = "Automation sessions are assembled from explicit repo, manifest, registry, destination, and launch inputs."
@@ -710,15 +1120,15 @@ impl<'a> AutomationSession<'a> {
     fn new(
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
-        registry: &DeployBackendRegistry,
+        registry: &'a DeployBackendRegistry,
         backend_id: &'a str,
         destination_id: &'a str,
-        runner: &'a mut dyn ToolRunner,
+        runner: &'a SharedToolRunner<'a>,
         descriptor: DestinationDescriptor,
         launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Self> {
         debug_assert_eq!(descriptor.id, destination_id);
-        let backend = automation_session_with_registry(
+        let automation = automation_session_with_registry(
             registry,
             repo_root,
             manifest,
@@ -728,49 +1138,174 @@ impl<'a> AutomationSession<'a> {
             launch_behavior,
         )?;
         Ok(Self {
+            repo_root,
+            manifest,
+            registry,
+            backend_id,
+            destination_id,
+            runner,
             descriptor,
-            backend,
+            automation,
+            automation_started: false,
+            debug_sessions: BTreeMap::new(),
         })
     }
 
     fn ensure_launched(&mut self) -> AtomResult<()> {
-        self.backend.ensure_launched()
+        if !self.automation_started
+            && !self.debug_sessions.is_empty()
+            && self.automation.attach_existing()?
+        {
+            self.automation_started = true;
+            return Ok(());
+        }
+        self.automation.ensure_launched()?;
+        self.automation_started = true;
+        Ok(())
     }
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
-        self.backend.interact(request)
+        self.automation.interact(request)
+    }
+
+    fn interact_without_snapshot(&mut self, request: InteractionRequest) -> AtomResult<()> {
+        self.automation.interact_without_snapshot(request)
     }
 
     fn video_extension(&self) -> &'static str {
-        self.backend.video_extension()
+        self.automation.video_extension()
     }
 
     fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
-        self.backend.capture_auto_screenshot()
+        self.automation.capture_auto_screenshot()
     }
 
     fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
-        self.backend.capture_screenshot(output_path)
+        self.automation.capture_screenshot(output_path)
     }
 
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
-        self.backend.capture_logs(output_path, seconds)
+        self.automation.capture_logs(output_path, seconds)
     }
 
     fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
-        self.backend.capture_video(output_path, seconds)
+        self.automation.capture_video(output_path, seconds)
     }
 
     fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
-        self.backend.start_video(output_path)
+        self.automation.start_video(output_path)
     }
 
     fn stop_video(&mut self) -> AtomResult<Utf8PathBuf> {
-        self.backend.stop_video()
+        self.automation.stop_video()
     }
 
     fn shutdown_video(&mut self) -> AtomResult<()> {
-        self.backend.shutdown_video()
+        self.automation.shutdown_video()
+    }
+
+    fn debug_launch(&mut self, debugger: DebuggerKind) -> AtomResult<()> {
+        self.debug_session(debugger, SessionLaunchBehavior::LaunchOnly)?
+            .launch()
+    }
+
+    fn debug_attach(&mut self, debugger: DebuggerKind) -> AtomResult<()> {
+        self.debug_session(debugger, SessionLaunchBehavior::AttachOrLaunch)?
+            .attach()
+    }
+
+    fn debug_set_breakpoint(
+        &mut self,
+        debugger: DebuggerKind,
+        file: String,
+        line: u32,
+    ) -> AtomResult<DebugBreakpoint> {
+        self.require_debug_session(debugger)?
+            .set_breakpoint(DebugSourceLocation { file, line })
+    }
+
+    fn debug_clear_breakpoint(
+        &mut self,
+        debugger: DebuggerKind,
+        file: String,
+        line: u32,
+    ) -> AtomResult<()> {
+        self.require_debug_session(debugger)?
+            .clear_breakpoint(DebugSourceLocation { file, line })
+    }
+
+    fn debug_wait_for_stop(
+        &mut self,
+        debugger: DebuggerKind,
+        timeout_ms: Option<u64>,
+    ) -> AtomResult<DebugStop> {
+        self.require_debug_session(debugger)?
+            .wait_for_stop(timeout_ms)
+    }
+
+    fn debug_threads(&mut self, debugger: DebuggerKind) -> AtomResult<Vec<DebugThread>> {
+        self.require_debug_session(debugger)?.threads()
+    }
+
+    fn debug_backtrace(
+        &mut self,
+        debugger: DebuggerKind,
+        thread_id: Option<&str>,
+    ) -> AtomResult<DebugBacktrace> {
+        self.require_debug_session(debugger)?.backtrace(thread_id)
+    }
+
+    fn debug_pause(&mut self, debugger: DebuggerKind) -> AtomResult<DebugStop> {
+        self.require_debug_session(debugger)?.pause()
+    }
+
+    fn debug_resume(&mut self, debugger: DebuggerKind) -> AtomResult<()> {
+        self.require_debug_session(debugger)?.resume()
+    }
+
+    fn shutdown_debug_sessions(&mut self) -> AtomResult<()> {
+        for session in self.debug_sessions.values_mut() {
+            session.shutdown()?;
+        }
+        Ok(())
+    }
+
+    fn debug_session(
+        &mut self,
+        debugger: DebuggerKind,
+        launch_behavior: SessionLaunchBehavior,
+    ) -> AtomResult<&mut (dyn BackendDebugSession + '_)> {
+        use std::collections::btree_map::Entry;
+
+        match self.debug_sessions.entry(debugger) {
+            Entry::Occupied(entry) => Ok(entry.into_mut().as_mut()),
+            Entry::Vacant(entry) => {
+                let session = debug_session_with_registry(
+                    self.registry,
+                    self.repo_root,
+                    self.manifest,
+                    self.backend_id,
+                    self.destination_id,
+                    self.runner,
+                    launch_behavior,
+                    debugger,
+                )?;
+                Ok(entry.insert(session).as_mut())
+            }
+        }
+    }
+
+    fn require_debug_session(
+        &mut self,
+        debugger: DebuggerKind,
+    ) -> AtomResult<&mut (dyn BackendDebugSession + '_)> {
+        let session = self.debug_sessions.get_mut(&debugger).ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                format!("debugger session {debugger:?} has not been attached or launched"),
+            )
+        })?;
+        Ok(&mut **session)
     }
 }
 
@@ -780,7 +1315,7 @@ fn automation_session_with_registry<'a>(
     manifest: &'a NormalizedManifest,
     backend_id: &'a str,
     destination_id: &'a str,
-    runner: &'a mut dyn ToolRunner,
+    runner: &'a SharedToolRunner<'a>,
     launch_behavior: SessionLaunchBehavior,
 ) -> AtomResult<Box<dyn BackendAutomationSession + 'a>> {
     let backend = registry.get(backend_id).map(Box::as_ref).ok_or_else(|| {
@@ -845,8 +1380,9 @@ mod tests {
     use std::fs;
 
     use atom_backends::{
-        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-        DestinationCapability, DestinationDescriptor, ToolRunner,
+        BackendAutomationSession, BackendDebugSession, BackendDefinition, DebuggerKind,
+        DeployBackend, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
+        SharedToolRunner, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -869,6 +1405,19 @@ mod tests {
             _args: &[String],
         ) -> atom_ffi::AtomResult<()> {
             Ok(())
+        }
+
+        fn capture_output(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<atom_backends::ToolCommandOutput> {
+            Ok(atom_backends::ToolCommandOutput {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
         }
 
         fn capture(
@@ -938,6 +1487,7 @@ mod tests {
                     DestinationCapability::Logs,
                     DestinationCapability::Evaluate,
                 ],
+                debuggers: Vec::new(),
             }])
         }
 
@@ -967,10 +1517,22 @@ mod tests {
             _repo_root: &'a Utf8Path,
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
-            _runner: &'a mut dyn ToolRunner,
+            _runner: &'a SharedToolRunner<'a>,
             _launch_behavior: SessionLaunchBehavior,
         ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
             Ok(Box::new(FixtureSession::default()))
+        }
+
+        fn new_debug_session<'a>(
+            &self,
+            _repo_root: &'a Utf8Path,
+            _manifest: &'a NormalizedManifest,
+            _destination_id: &'a str,
+            _runner: &'a SharedToolRunner<'a>,
+            _launch_behavior: SessionLaunchBehavior,
+            _debugger: DebuggerKind,
+        ) -> atom_ffi::AtomResult<Box<dyn BackendDebugSession + 'a>> {
+            unreachable!("evaluation tests do not construct debug sessions")
         }
     }
 
@@ -982,6 +1544,10 @@ mod tests {
     impl BackendAutomationSession for FixtureSession {
         fn video_extension(&self) -> &'static str {
             "mp4"
+        }
+
+        fn attach_existing(&mut self) -> atom_ffi::AtomResult<bool> {
+            Ok(false)
         }
 
         fn ensure_launched(&mut self) -> atom_ffi::AtomResult<()> {
@@ -1018,6 +1584,13 @@ mod tests {
                 snapshot,
                 message: None,
             })
+        }
+
+        fn interact_without_snapshot(
+            &mut self,
+            _request: InteractionRequest,
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
         }
 
         fn capture_auto_screenshot(&mut self) -> atom_ffi::AtomResult<Utf8PathBuf> {
@@ -1072,6 +1645,7 @@ mod tests {
             available: true,
             debug_state: "ready".to_owned(),
             capabilities: vec![DestinationCapability::Launch],
+            debuggers: Vec::new(),
         };
         let plan = EvaluationPlan {
             steps: vec![EvaluationStep::Screenshot { name: None }],

@@ -1115,7 +1115,7 @@ Definitions:
 - A `destination` is a debuggable runtime instance on a platform, such as an iOS simulator, iOS
   device, Android emulator, Android device, local desktop process, or terminal session.
 - A destination advertises a capability set chosen from `launch`, `logs`, `screenshot`, `video`,
-  `inspect_ui`, `interact`, and `evaluate`.
+  `inspect_ui`, `interact`, `evaluate`, and `debug`.
 - An `evaluation run` is a sequenced execution of launch, wait, inspect, interact, and
   artifact-capture steps against one selected destination, producing a machine-readable proof
   bundle.
@@ -1139,6 +1139,11 @@ Rules:
   availability, debug state, and capability set.
 - Machine-readable destination payloads MAY add `backend_id` or other backend-owned metadata, but
   MUST preserve the top-level `platform` field for compatibility with existing consumers.
+- Debugging support is destination-specific. Destinations that do not advertise the `debug`
+  capability MUST reject debug-oriented evaluation plans with `AUTOMATION_UNAVAILABLE`.
+- iOS simulator destinations SHOULD advertise `debug` capability when the first-party iOS debugger
+  backend is available. Android destinations MAY omit `debug` capability until Android debugger
+  backends are shipped.
 - Evidence and interaction commands MUST work against the same runnable targets accepted by
   `atom run`, surfaced through the destination model.
 - Log capture MUST be able to collect Atom runtime logs plus relevant host-process logs for the
@@ -1317,6 +1322,8 @@ consumes Atom via `bzlmod`.
 - MUST write a machine-readable artifact manifest plus referenced artifacts under the requested
   output directory
 - MUST stop on the first failed required step and surface the underlying automation or tool failure
+- MUST reject any plan step that requires `debug` capability when the selected destination does not
+  advertise that capability
 
 `atom test`:
 
@@ -1344,6 +1351,9 @@ Evaluation contract rules:
 - An evaluation plan MUST support, at minimum, these step kinds: `launch`, `wait_for_ui`, `tap`,
   `long_press`, `swipe`, `drag`, `type_text`, `screenshot`, `inspect_ui`, `start_video`,
   `stop_video`, and `collect_logs`.
+- Evaluation plans MAY additionally include `debug_launch`, `debug_attach`, `debug_set_breakpoint`,
+  `debug_clear_breakpoint`, `debug_wait_for_stop`, `debug_threads`, `debug_backtrace`,
+  `debug_pause`, and `debug_resume` when the selected destination advertises the `debug` capability.
 - Interaction and wait steps MUST accept either a semantic target descriptor or an explicit
   coordinate descriptor.
 - Evaluation output MUST include a machine-readable bundle manifest with the selected destination

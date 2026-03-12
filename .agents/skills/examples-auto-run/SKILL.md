@@ -20,12 +20,13 @@ Use this skill when:
 
 ## Steps
 
-1. Run `scripts/run.sh smoke` for a portable dry-run prebuild.
-2. Run `scripts/run.sh generated-tree` when you need the emitted host tree for inspection.
-3. Run `scripts/run.sh evaluate <destination> <artifacts-dir> [plan]` when the branch needs a proof
-   bundle from the hello-world demo surface.
-4. Run `scripts/run.sh android` or `scripts/run.sh ios` on the appropriate host when the branch
-   needs a real platform build.
+1. Run `mise exec -- scripts/run.sh smoke` for a portable dry-run prebuild.
+2. Run `mise exec -- scripts/run.sh generated-tree` when you need the emitted host tree for
+   inspection.
+3. Run `mise exec -- scripts/run.sh evaluate <platform> <destination> <artifacts-dir> [plan]` when
+   the branch needs a proof bundle from the hello-world demo surface.
+4. Run `mise exec -- scripts/run.sh android` or `mise exec -- scripts/run.sh ios` on the appropriate
+   host when the branch needs a real platform build.
 5. Report skipped platform builds or evaluation runs explicitly when the host environment cannot
    support them.
 

@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "atom-backend-ios-debug",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_backend_ios_debug",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/atom-backends",
+        "//crates/atom-ffi",
+        "@crates//:camino",
+    ],
+)
+
+rust_test(
+    name = "atom-backend-ios-debug-test",
+    crate = ":atom-backend-ios-debug",
+)

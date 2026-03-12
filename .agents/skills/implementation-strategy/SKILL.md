@@ -21,7 +21,7 @@ Use this skill when:
 
 ## Steps
 
-1. Run `scripts/collect.sh`.
+1. Run `mise exec -- scripts/collect.sh`.
 2. Identify the primary source-of-truth docs, code targets, and verification entrypoints for the
    task.
 3. Draft a plan that names the files to change, the invariants to preserve, and the checks to run.
