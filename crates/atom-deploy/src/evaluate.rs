@@ -37,7 +37,7 @@ pub fn inspect_ui(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::InspectUi)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluateSession::new(
         repo_root,
         manifest,
         registry,
@@ -72,7 +72,7 @@ pub fn interact(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Interact)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluateSession::new(
         repo_root,
         manifest,
         registry,
@@ -103,7 +103,7 @@ pub fn capture_screenshot(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Screenshot)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluateSession::new(
         repo_root,
         manifest,
         registry,
@@ -137,7 +137,7 @@ pub fn capture_logs(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Logs)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluateSession::new(
         repo_root,
         manifest,
         registry,
@@ -171,7 +171,7 @@ pub fn capture_video(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Video)?;
-    let mut session = AutomationSession::new(
+    let mut session = EvaluateSession::new(
         repo_root,
         manifest,
         registry,
@@ -211,7 +211,7 @@ pub fn evaluate_run(
     require_plan_capabilities(&descriptor, &plan)?;
 
     let started_at_ms = timestamp_millis();
-    let mut session = AutomationSession::new(
+    let mut session = EvaluateSession::new(
         repo_root,
         manifest,
         registry,
@@ -271,7 +271,7 @@ fn execute_step(
     index: usize,
     step: EvaluationStep,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let started_at_ms = timestamp_millis();
@@ -361,7 +361,7 @@ fn execute_step(
 fn execute_launch_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
     Ok(simple_step(index, "launch", started_at_ms))
@@ -370,7 +370,7 @@ fn execute_launch_step(
 fn execute_wait_for_ui_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
@@ -384,7 +384,7 @@ fn execute_interaction_step(
     index: usize,
     kind: &str,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     request: InteractionRequest,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
@@ -396,7 +396,7 @@ fn execute_screenshot_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
@@ -421,7 +421,7 @@ fn execute_inspect_ui_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
@@ -456,7 +456,7 @@ fn execute_start_video_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
@@ -474,7 +474,7 @@ fn execute_start_video_step(
 fn execute_stop_video_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let output_path = session.stop_video()?;
@@ -498,7 +498,7 @@ fn execute_collect_logs_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
     seconds: u64,
@@ -521,7 +521,7 @@ fn execute_collect_logs_step(
 }
 
 fn wait_for_ui(
-    session: &mut AutomationSession<'_>,
+    session: &mut EvaluateSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
@@ -697,12 +697,12 @@ fn load_evaluation_plan(path: &Utf8Path) -> AtomResult<EvaluationPlan> {
     })
 }
 
-struct AutomationSession<'a> {
+struct EvaluateSession<'a> {
     descriptor: DestinationDescriptor,
-    backend: Box<dyn BackendAutomationSession + 'a>,
+    session: Box<dyn BackendAutomationSession + 'a>,
 }
 
-impl<'a> AutomationSession<'a> {
+impl<'a> EvaluateSession<'a> {
     #[expect(
         clippy::too_many_arguments,
         reason = "Automation sessions are assembled from explicit repo, manifest, registry, destination, and launch inputs."
@@ -718,7 +718,7 @@ impl<'a> AutomationSession<'a> {
         launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Self> {
         debug_assert_eq!(descriptor.id, destination_id);
-        let backend = automation_session_with_registry(
+        let session = automation_session_with_registry(
             registry,
             repo_root,
             manifest,
@@ -729,48 +729,48 @@ impl<'a> AutomationSession<'a> {
         )?;
         Ok(Self {
             descriptor,
-            backend,
+            session,
         })
     }
 
     fn ensure_launched(&mut self) -> AtomResult<()> {
-        self.backend.ensure_launched()
+        self.session.ensure_launched()
     }
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
-        self.backend.interact(request)
+        self.session.interact(request)
     }
 
     fn video_extension(&self) -> &'static str {
-        self.backend.video_extension()
+        self.session.video_extension()
     }
 
     fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
-        self.backend.capture_auto_screenshot()
+        self.session.capture_auto_screenshot()
     }
 
     fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
-        self.backend.capture_screenshot(output_path)
+        self.session.capture_screenshot(output_path)
     }
 
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
-        self.backend.capture_logs(output_path, seconds)
+        self.session.capture_logs(output_path, seconds)
     }
 
     fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
-        self.backend.capture_video(output_path, seconds)
+        self.session.capture_video(output_path, seconds)
     }
 
     fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
-        self.backend.start_video(output_path)
+        self.session.start_video(output_path)
     }
 
     fn stop_video(&mut self) -> AtomResult<Utf8PathBuf> {
-        self.backend.stop_video()
+        self.session.stop_video()
     }
 
     fn shutdown_video(&mut self) -> AtomResult<()> {
-        self.backend.shutdown_video()
+        self.session.shutdown_video()
     }
 }
 
@@ -845,8 +845,9 @@ mod tests {
     use std::fs;
 
     use atom_backends::{
-        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-        DestinationCapability, DestinationDescriptor, ToolRunner,
+        BackendAutomationSession, BackendDebugSession, BackendDefinition,
+        BackendUiAutomationSession, DeployBackend, DeployBackendRegistry, DestinationCapability,
+        DestinationDescriptor, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -979,7 +980,11 @@ mod tests {
         snapshots: VecDeque<UiSnapshot>,
     }
 
-    impl BackendAutomationSession for FixtureSession {
+    impl BackendDebugSession for FixtureSession {
+        fn debugger_transports(&self) -> &'static [atom_backends::DebuggerTransport] {
+            &[]
+        }
+
         fn video_extension(&self) -> &'static str {
             "mp4"
         }
@@ -988,6 +993,36 @@ mod tests {
             Ok(())
         }
 
+        fn capture_logs(
+            &mut self,
+            _output_path: &Utf8Path,
+            _seconds: u64,
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn capture_video(
+            &mut self,
+            _output_path: &Utf8Path,
+            _seconds: u64,
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn start_video(&mut self, _output_path: &Utf8Path) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn stop_video(&mut self) -> atom_ffi::AtomResult<Utf8PathBuf> {
+            Ok(Utf8PathBuf::from("fixture.mp4"))
+        }
+
+        fn shutdown_video(&mut self) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+    }
+
+    impl BackendUiAutomationSession for FixtureSession {
         fn interact(
             &mut self,
             _request: InteractionRequest,
@@ -1025,34 +1060,6 @@ mod tests {
         }
 
         fn capture_screenshot(&mut self, _output_path: &Utf8Path) -> atom_ffi::AtomResult<()> {
-            Ok(())
-        }
-
-        fn capture_logs(
-            &mut self,
-            _output_path: &Utf8Path,
-            _seconds: u64,
-        ) -> atom_ffi::AtomResult<()> {
-            Ok(())
-        }
-
-        fn capture_video(
-            &mut self,
-            _output_path: &Utf8Path,
-            _seconds: u64,
-        ) -> atom_ffi::AtomResult<()> {
-            Ok(())
-        }
-
-        fn start_video(&mut self, _output_path: &Utf8Path) -> atom_ffi::AtomResult<()> {
-            Ok(())
-        }
-
-        fn stop_video(&mut self) -> atom_ffi::AtomResult<Utf8PathBuf> {
-            Ok(Utf8PathBuf::from("fixture.mp4"))
-        }
-
-        fn shutdown_video(&mut self) -> atom_ffi::AtomResult<()> {
             Ok(())
         }
     }

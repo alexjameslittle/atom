@@ -17,6 +17,13 @@ pub enum SessionLaunchBehavior {
     LaunchOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebuggerTransport {
+    IosLldb,
+    AndroidJvm,
+    AndroidNativeLldb,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DestinationCapability {
@@ -252,18 +259,14 @@ pub struct EvaluationBundleManifest {
 
 #[expect(
     clippy::missing_errors_doc,
-    reason = "Trait methods document the shared automation session contract once at the trait boundary."
+    reason = "Trait methods document the shared debug-session contract once at the trait boundary."
 )]
-pub trait BackendAutomationSession {
+pub trait BackendDebugSession {
+    fn debugger_transports(&self) -> &'static [DebuggerTransport];
+
     fn video_extension(&self) -> &'static str;
 
     fn ensure_launched(&mut self) -> AtomResult<()>;
-
-    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult>;
-
-    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf>;
-
-    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()>;
 
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()>;
 
@@ -274,6 +277,25 @@ pub trait BackendAutomationSession {
     fn stop_video(&mut self) -> AtomResult<Utf8PathBuf>;
 
     fn shutdown_video(&mut self) -> AtomResult<()>;
+}
+
+#[expect(
+    clippy::missing_errors_doc,
+    reason = "Trait methods document the shared UI automation contract once at the trait boundary."
+)]
+pub trait BackendUiAutomationSession {
+    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult>;
+
+    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf>;
+
+    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()>;
+}
+
+pub trait BackendAutomationSession: BackendDebugSession + BackendUiAutomationSession {}
+
+impl<T> BackendAutomationSession for T where
+    T: BackendDebugSession + BackendUiAutomationSession + ?Sized
+{
 }
 
 #[expect(

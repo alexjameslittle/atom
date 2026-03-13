@@ -33,6 +33,8 @@ Dependency direction should move one way:
   - Resolves dependency order and initialization order
 - `atom-backends`
   - Owns backend contracts, shared destination/evaluation/CNG data types, and generic registries
+  - Defines separate deploy-session seams for backend-owned debug-session orchestration and
+    backend-owned UI automation
   - Defines the compile-time seam for first-party backend composition without dynamic loading
   - Stays platform-neutral; concrete iOS/Android behavior lives in backend implementation crates
 - `atom-cng`
@@ -47,6 +49,8 @@ Dependency direction should move one way:
 - `atom-deploy`
   - Device discovery and destination selection
   - Dispatches run/stop/evaluate flows through registered `DeployBackend` contracts
+  - Coordinates generic evaluation steps over backend-provided debug-session and UI-automation
+    contracts without owning concrete debugger transport logic
   - Owns generic evidence capture, UI evaluation, and proof-bundle orchestration
   - Preserves compatibility fields such as serialized destination `platform`; backend ids are
     additive dispatch data, not replacements for stable machine-readable payload fields
@@ -55,12 +59,14 @@ Dependency direction should move one way:
   - First-party iOS backend implementation crate
   - Registers iOS deploy and CNG backends for the canonical CLI binary
   - Owns iOS destination discovery, deploy/stop/evaluate implementation, and iOS host templates
+  - Owns iOS-specific debug-session orchestration such as LLDB-facing launch or attach behavior
   - Owns iOS-specific CNG planning/emission and backend compatibility checks
 - `atom-backend-android`
   - First-party Android backend implementation crate
   - Registers Android deploy and CNG backends for the canonical CLI binary
   - Owns Android destination discovery, deploy/stop/evaluate implementation, and Android host
     templates
+  - Owns Android-specific debug-session orchestration such as JVM and native LLDB attach behavior
   - Owns Android-specific CNG planning/emission and backend compatibility checks
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows

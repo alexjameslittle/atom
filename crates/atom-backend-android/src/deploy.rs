@@ -4,9 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, SessionLaunchBehavior, ToolRunner, UiSnapshot,
+    BackendAutomationSession, BackendDebugSession, BackendDefinition, BackendUiAutomationSession,
+    DebuggerTransport, DeployBackend, DeployBackendRegistry, DestinationCapability,
+    DestinationDescriptor, InteractionRequest, InteractionResult, LaunchMode,
+    SessionLaunchBehavior, ToolRunner, UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
@@ -29,6 +30,10 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const ANDROID_DEBUGGER_TRANSPORTS: &[DebuggerTransport] = &[
+    DebuggerTransport::AndroidJvm,
+    DebuggerTransport::AndroidNativeLldb,
+];
 
 struct AndroidDeployBackend;
 
@@ -186,7 +191,11 @@ impl AndroidAutomationSession<'_> {
     }
 }
 
-impl BackendAutomationSession for AndroidAutomationSession<'_> {
+impl BackendDebugSession for AndroidAutomationSession<'_> {
+    fn debugger_transports(&self) -> &'static [DebuggerTransport] {
+        ANDROID_DEBUGGER_TRANSPORTS
+    }
+
     fn video_extension(&self) -> &'static str {
         "mp4"
     }
@@ -226,26 +235,6 @@ impl BackendAutomationSession for AndroidAutomationSession<'_> {
         Ok(())
     }
 
-    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
-        self.ensure_launched()?;
-        let launch = self.active_launch()?;
-        interact_with_android_uiautomator(self.repo_root, &launch.serial, self.runner, request)
-    }
-
-    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
-        let root = self.repo_root.join("cng-output").join("artifacts");
-        write_parent_dir(&root)?;
-        let path = root.join(format!("inspect-{}.png", timestamp_suffix()));
-        self.capture_screenshot(&path)?;
-        Ok(path)
-    }
-
-    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
-        self.ensure_launched()?;
-        let launch = self.active_launch()?;
-        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
-    }
-
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
@@ -280,6 +269,28 @@ impl BackendAutomationSession for AndroidAutomationSession<'_> {
             let _ = self.stop_video()?;
         }
         Ok(())
+    }
+}
+
+impl BackendUiAutomationSession for AndroidAutomationSession<'_> {
+    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        interact_with_android_uiautomator(self.repo_root, &launch.serial, self.runner, request)
+    }
+
+    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
+        let root = self.repo_root.join("cng-output").join("artifacts");
+        write_parent_dir(&root)?;
+        let path = root.join(format!("inspect-{}.png", timestamp_suffix()));
+        BackendUiAutomationSession::capture_screenshot(self, &path)?;
+        Ok(path)
+    }
+
+    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
     }
 }
 
@@ -1191,12 +1202,15 @@ pub(crate) fn timestamp_suffix() -> String {
 mod tests {
     use std::collections::VecDeque;
 
-    use atom_backends::DestinationCapability;
+    use atom_backends::{
+        DebuggerTransport, DeployBackend, DestinationCapability, SessionLaunchBehavior, ToolRunner,
+    };
     use atom_ffi::{AtomError, AtomErrorCode};
+    use atom_manifest::testing::fixture_manifest;
     use camino::{Utf8Path, Utf8PathBuf};
 
     use super::{
-        AndroidDestination, BACKEND_ID, destination_descriptor_from_android,
+        AndroidDeployBackend, AndroidDestination, BACKEND_ID, destination_descriptor_from_android,
         find_android_destination, list_android_destinations, list_android_devices,
         parse_adb_devices,
     };
@@ -1221,7 +1235,7 @@ mod tests {
         }
     }
 
-    impl atom_backends::ToolRunner for FakeToolRunner {
+    impl ToolRunner for FakeToolRunner {
         fn run(
             &mut self,
             _repo_root: &Utf8Path,
@@ -1454,5 +1468,31 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
 
         let error = list_android_devices(&root, &mut runner).expect_err("lookup should fail");
         assert_eq!(error.code, AtomErrorCode::ExternalToolFailed);
+    }
+
+    #[test]
+    fn android_sessions_declare_jvm_and_native_debugger_transports() {
+        let root = Utf8PathBuf::from(".");
+        let manifest = fixture_manifest(&root);
+        let mut runner = FakeToolRunner::default();
+        let backend = AndroidDeployBackend;
+
+        let session = backend
+            .new_automation_session(
+                &root,
+                &manifest,
+                "fixture-destination",
+                &mut runner,
+                SessionLaunchBehavior::LaunchOnly,
+            )
+            .expect("session should construct");
+
+        assert_eq!(
+            session.debugger_transports(),
+            &[
+                DebuggerTransport::AndroidJvm,
+                DebuggerTransport::AndroidNativeLldb,
+            ]
+        );
     }
 }

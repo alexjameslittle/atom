@@ -4,9 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, ScreenInfo, SessionLaunchBehavior, ToolRunner, UiBounds, UiNode, UiSnapshot,
+    BackendAutomationSession, BackendDebugSession, BackendDefinition, BackendUiAutomationSession,
+    DebuggerTransport, DeployBackend, DeployBackendRegistry, DestinationCapability,
+    DestinationDescriptor, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
+    SessionLaunchBehavior, ToolRunner, UiBounds, UiNode, UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
@@ -24,6 +25,7 @@ const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const SCREENSHOT_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const SCREENSHOT_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const IOS_DEBUGGER_TRANSPORTS: &[DebuggerTransport] = &[DebuggerTransport::IosLldb];
 
 struct IosDeployBackend;
 
@@ -176,7 +178,11 @@ impl IosAutomationSession<'_> {
     }
 }
 
-impl BackendAutomationSession for IosAutomationSession<'_> {
+impl BackendDebugSession for IosAutomationSession<'_> {
+    fn debugger_transports(&self) -> &'static [DebuggerTransport] {
+        IOS_DEBUGGER_TRANSPORTS
+    }
+
     fn video_extension(&self) -> &'static str {
         "mov"
     }
@@ -218,25 +224,6 @@ impl BackendAutomationSession for IosAutomationSession<'_> {
         Ok(())
     }
 
-    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
-        self.ensure_launched()?;
-        interact_with_idb(self.repo_root, &self.destination_id, self.runner, request)
-    }
-
-    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
-        let root = self.repo_root.join("cng-output").join("artifacts");
-        write_parent_dir(&root)?;
-        let path = root.join(format!("inspect-{}.png", timestamp_suffix()));
-        self.capture_screenshot(&path)?;
-        Ok(path)
-    }
-
-    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
-        self.ensure_launched()?;
-        let launch = self.active_launch()?;
-        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
-    }
-
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
         let launch = self.active_launch()?;
@@ -271,6 +258,27 @@ impl BackendAutomationSession for IosAutomationSession<'_> {
             let _ = self.stop_video()?;
         }
         Ok(())
+    }
+}
+
+impl BackendUiAutomationSession for IosAutomationSession<'_> {
+    fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
+        self.ensure_launched()?;
+        interact_with_idb(self.repo_root, &self.destination_id, self.runner, request)
+    }
+
+    fn capture_auto_screenshot(&mut self) -> AtomResult<Utf8PathBuf> {
+        let root = self.repo_root.join("cng-output").join("artifacts");
+        write_parent_dir(&root)?;
+        let path = root.join(format!("inspect-{}.png", timestamp_suffix()));
+        BackendUiAutomationSession::capture_screenshot(self, &path)?;
+        Ok(path)
+    }
+
+    fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
+        self.ensure_launched()?;
+        let launch = self.active_launch()?;
+        capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
     }
 }
 
@@ -1578,12 +1586,57 @@ fn timestamp_suffix() -> String {
 
 #[cfg(test)]
 mod tests {
-    use atom_backends::DestinationCapability;
+    use atom_backends::{
+        DebuggerTransport, DeployBackend, DestinationCapability, SessionLaunchBehavior, ToolRunner,
+    };
+    use atom_manifest::testing::fixture_manifest;
+    use camino::{Utf8Path, Utf8PathBuf};
 
     use super::{
-        BACKEND_ID, IosDestination, IosDestinationKind, destination_descriptor_from_ios,
-        parse_idb_targets,
+        BACKEND_ID, IosDeployBackend, IosDestination, IosDestinationKind,
+        destination_descriptor_from_ios, parse_idb_targets,
     };
+
+    #[derive(Default)]
+    struct FakeToolRunner;
+
+    impl ToolRunner for FakeToolRunner {
+        fn run(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+
+        fn capture(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<String> {
+            Ok(String::new())
+        }
+
+        fn capture_json_file(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<String> {
+            Ok(String::new())
+        }
+
+        fn stream(
+            &mut self,
+            _repo_root: &Utf8Path,
+            _tool: &str,
+            _args: &[String],
+        ) -> atom_ffi::AtomResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn parses_idb_targets_into_backend_destinations() {
@@ -1648,5 +1701,25 @@ mod tests {
         assert_eq!(descriptor.platform, "ios");
         assert_eq!(descriptor.kind, "device");
         assert_eq!(descriptor.capabilities, vec![DestinationCapability::Launch]);
+    }
+
+    #[test]
+    fn ios_sessions_declare_lldb_debugger_transport() {
+        let root = Utf8PathBuf::from(".");
+        let manifest = fixture_manifest(&root);
+        let mut runner = FakeToolRunner;
+        let backend = IosDeployBackend;
+
+        let session = backend
+            .new_automation_session(
+                &root,
+                &manifest,
+                "fixture-destination",
+                &mut runner,
+                SessionLaunchBehavior::LaunchOnly,
+            )
+            .expect("session should construct");
+
+        assert_eq!(session.debugger_transports(), &[DebuggerTransport::IosLldb]);
     }
 }
