@@ -110,7 +110,7 @@ prefix_rule(
 )
 
 prefix_rule(
-    pattern = [["mkdir", "cp", "mv", "touch", "chmod", "ln"]],
+    pattern = [["mkdir", "cp", "mv", "touch", "chmod", "ln", "rm"]],
     decision = "allow",
     justification = "Basic file operations within workspace",
 )
