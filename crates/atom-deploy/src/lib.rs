@@ -16,7 +16,7 @@ pub use atom_backends::{LaunchMode, ToolRunner};
 #[cfg(test)]
 mod tests {
     use atom_backends::{
-        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+        BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
         DestinationCapability, DestinationDescriptor, LaunchMode, SessionLaunchBehavior,
         ToolRunner,
     };
@@ -122,15 +122,15 @@ mod tests {
             Ok(())
         }
 
-        fn new_automation_session<'a>(
+        fn new_app_session<'a>(
             &self,
             _repo_root: &'a Utf8Path,
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
             _runner: &'a mut dyn ToolRunner,
             _launch_behavior: SessionLaunchBehavior,
-        ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
-            unreachable!("deploy core tests do not construct automation sessions")
+        ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
+            unreachable!("deploy core tests do not construct app sessions")
         }
     }
 
@@ -244,15 +244,15 @@ mod tests {
                 Ok(())
             }
 
-            fn new_automation_session<'a>(
+            fn new_app_session<'a>(
                 &self,
                 _repo_root: &'a Utf8Path,
                 _manifest: &'a NormalizedManifest,
                 _destination_id: &'a str,
                 _runner: &'a mut dyn ToolRunner,
                 _launch_behavior: SessionLaunchBehavior,
-            ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
-                unreachable!("deploy core tests do not construct automation sessions")
+            ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
+                unreachable!("deploy core tests do not construct app sessions")
             }
         }
 
