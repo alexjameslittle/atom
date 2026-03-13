@@ -1,6 +1,39 @@
 # Atom project Codex sandbox rules
-# Allow build toolchain commands without approval prompts.
+# Scoped to project-specific tooling — not a blanket allow-all.
 
+# ── Version control ──────────────────────────────────────────────────
+# Block force-pushes to main/master (forbidden > allow when rules overlap).
+prefix_rule(
+    pattern = ["git", "push", "--force"],
+    decision = "forbidden",
+    justification = "Never force-push; protect branch history",
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--force-with-lease"],
+    decision = "forbidden",
+    justification = "Never force-push; protect branch history",
+)
+
+prefix_rule(
+    pattern = ["git", "push", "-f"],
+    decision = "forbidden",
+    justification = "Never force-push; protect branch history",
+)
+
+prefix_rule(
+    pattern = ["git"],
+    decision = "allow",
+    justification = "Branch inspection, commit, push, pull, diff — core workflow",
+)
+
+prefix_rule(
+    pattern = ["gh"],
+    decision = "allow",
+    justification = "GitHub CLI for PRs, issues, and checks",
+)
+
+# ── Build toolchain ──────────────────────────────────────────────────
 prefix_rule(
     pattern = ["bazelisk"],
     decision = "allow",
@@ -20,11 +53,24 @@ prefix_rule(
 )
 
 prefix_rule(
-    pattern = [["scripts/verify.sh", "scripts/bootstrap.sh", "scripts/setup-buildbuddy.sh", "scripts/setup-android-sdk.sh", "scripts/setup-idb.sh", "scripts/install-hooks.sh", "scripts/check-generic-backend-leaks.sh"]],
+    pattern = ["cargo"],
     decision = "allow",
-    justification = "Project setup and verification scripts",
+    justification = "Rust package manager and build tool",
 )
 
+prefix_rule(
+    pattern = ["rustc"],
+    decision = "allow",
+    justification = "Rust compiler",
+)
+
+prefix_rule(
+    pattern = ["rustup"],
+    decision = "allow",
+    justification = "Rust toolchain installer/manager",
+)
+
+# ── Linters ──────────────────────────────────────────────────────────
 prefix_rule(
     pattern = ["shellcheck"],
     decision = "allow",
@@ -35,4 +81,99 @@ prefix_rule(
     pattern = ["actionlint"],
     decision = "allow",
     justification = "GitHub Actions linter used by verify.sh",
+)
+
+# ── Project scripts (run directly or via sh/bash) ────────────────────
+prefix_rule(
+    pattern = [["scripts/verify.sh", "scripts/bootstrap.sh", "scripts/setup-buildbuddy.sh", "scripts/setup-android-sdk.sh", "scripts/setup-idb.sh", "scripts/install-hooks.sh", "scripts/check-generic-backend-leaks.sh", "scripts/pre-commit.sh", "scripts/pre-push.sh"]],
+    decision = "allow",
+    justification = "Project setup, verification, and hook scripts",
+)
+
+prefix_rule(
+    pattern = [["sh", "bash"], ["scripts/verify.sh", "scripts/bootstrap.sh", "scripts/setup-buildbuddy.sh", "scripts/setup-android-sdk.sh", "scripts/setup-idb.sh", "scripts/install-hooks.sh", "scripts/check-generic-backend-leaks.sh", "scripts/pre-commit.sh", "scripts/pre-push.sh"]],
+    decision = "allow",
+    justification = "Project scripts invoked via sh/bash",
+)
+
+# ── Agent skill scripts ──────────────────────────────────────────────
+prefix_rule(
+    pattern = [["sh", "bash"], [".agents/skills/architecture-review/scripts/check-deps.sh", ".agents/skills/code-verification/scripts/run.sh", ".agents/skills/destination-discovery/scripts/run.sh", ".agents/skills/docs-sync/scripts/audit.sh", ".agents/skills/evidence-capture/scripts/run.sh", ".agents/skills/examples-auto-run/scripts/run.sh", ".agents/skills/implementation-strategy/scripts/collect.sh", ".agents/skills/pr-summary/scripts/draft.sh", ".agents/skills/prebuild-validation/scripts/check-tree.sh", ".agents/skills/release-review/scripts/check.sh", ".agents/skills/spec-sync/scripts/extract.sh", ".agents/skills/test-coverage-improver/scripts/audit.sh", ".agents/skills/ui-evaluation/scripts/run.sh"]],
+    decision = "allow",
+    justification = "Agent skill helper scripts",
+)
+
+# ── Read-only file/search utilities ──────────────────────────────────
+prefix_rule(
+    pattern = [["cat", "head", "tail", "less", "wc", "file"]],
+    decision = "allow",
+    justification = "Read-only file inspection",
+)
+
+prefix_rule(
+    pattern = [["ls", "find", "tree", "stat", "realpath", "dirname", "basename"]],
+    decision = "allow",
+    justification = "Directory and path inspection",
+)
+
+prefix_rule(
+    pattern = [["grep", "rg", "ag", "sed", "awk", "cut", "sort", "uniq", "tr", "diff", "comm", "tee", "xargs"]],
+    decision = "allow",
+    justification = "Text search and transformation",
+)
+
+prefix_rule(
+    pattern = [["echo", "printf", "true", "false", "test", "expr", "date", "env", "printenv", "which", "command", "type"]],
+    decision = "allow",
+    justification = "Shell builtins and environment inspection",
+)
+
+prefix_rule(
+    pattern = [["mkdir", "cp", "mv", "touch", "chmod", "ln", "rm"]],
+    decision = "allow",
+    justification = "Basic file operations within workspace",
+)
+
+prefix_rule(
+    pattern = [["pwd", "cd"]],
+    decision = "allow",
+    justification = "Working directory navigation",
+)
+
+prefix_rule(
+    pattern = [["jq", "yq"]],
+    decision = "allow",
+    justification = "JSON/YAML processing",
+)
+
+# ── Elixir/Erlang toolchain ─────────────────────────────────────────
+prefix_rule(
+    pattern = ["mix"],
+    decision = "allow",
+    justification = "Elixir build tool",
+)
+
+prefix_rule(
+    pattern = ["elixir"],
+    decision = "allow",
+    justification = "Elixir runtime",
+)
+
+prefix_rule(
+    pattern = ["iex"],
+    decision = "allow",
+    justification = "Elixir interactive shell",
+)
+
+# ── Java toolchain ───────────────────────────────────────────────────
+prefix_rule(
+    pattern = ["java"],
+    decision = "allow",
+    justification = "Java runtime (used by Bazel)",
+)
+
+prefix_rule(
+    pattern = ["javac"],
+    decision = "allow",
+    justification = "Java compiler",
 )
