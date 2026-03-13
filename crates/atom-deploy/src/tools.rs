@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use atom_backends::ToolRunner;
@@ -18,91 +18,25 @@ pub struct ProcessRunner;
 
 impl ToolRunner for ProcessRunner {
     fn run(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()> {
-        let output = Command::new(tool)
-            .args(args)
-            .current_dir(repo_root)
-            .output()
-            .map_err(|error| {
-                AtomError::new(
-                    AtomErrorCode::ExternalToolFailed,
-                    format!("failed to invoke {tool}: {error}"),
-                )
-            })?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let detail = if stderr.trim().is_empty() {
-                format!(
-                    "{tool} {} exited with status {}",
-                    args.join(" "),
-                    output.status
-                )
-            } else {
-                format!(
-                    "{tool} {} exited with status {}:\n{stderr}",
-                    args.join(" "),
-                    output.status
-                )
-            };
-            Err(AtomError::new(AtomErrorCode::ExternalToolFailed, detail))
-        }
-    }
-
-    fn capture(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<String> {
-        let output = Command::new(tool)
-            .args(args)
-            .current_dir(repo_root)
-            .output()
-            .map_err(|error| {
-                AtomError::new(
-                    AtomErrorCode::ExternalToolFailed,
-                    format!("failed to invoke {tool}: {error}"),
-                )
-            })?;
-
+        let output = command_output(repo_root, tool, args)?;
         if !output.status.success() {
             return Err(AtomError::new(
                 AtomErrorCode::ExternalToolFailed,
-                format!(
-                    "{tool} {} exited with status {}",
-                    args.join(" "),
-                    output.status
-                ),
+                command_failure_with_stderr(tool, args, output.status, &output.stderr),
             ));
         }
+        Ok(())
+    }
 
-        String::from_utf8(output.stdout).map_err(|_| {
-            AtomError::new(
-                AtomErrorCode::ExternalToolFailed,
-                format!("{tool} returned non-UTF-8 output"),
-            )
-        })
+    fn capture(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<String> {
+        let output = command_output(repo_root, tool, args)?;
+        require_success(tool, args, output.status)?;
+        utf8_stdout(tool, output.stdout)
     }
 
     fn stream(&mut self, repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<()> {
-        let status = Command::new(tool)
-            .args(args)
-            .current_dir(repo_root)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(|error| {
-                AtomError::new(
-                    AtomErrorCode::ExternalToolFailed,
-                    format!("failed to invoke {tool}: {error}"),
-                )
-            })?;
-
-        if status.success() {
-            Ok(())
-        } else {
-            Err(AtomError::new(
-                AtomErrorCode::ExternalToolFailed,
-                format!("{tool} {} exited with status {status}", args.join(" "),),
-            ))
-        }
+        let status = streamed_command_status(repo_root, tool, args)?;
+        require_success(tool, args, status)
     }
 
     fn capture_json_file(
@@ -112,35 +46,11 @@ impl ToolRunner for ProcessRunner {
         args: &[String],
     ) -> AtomResult<String> {
         let path = temp_json_output_path(tool);
-        let output = Command::new(tool)
-            .args(args)
-            .arg("--json-output")
-            .arg(&path)
-            .current_dir(repo_root)
-            .output()
-            .map_err(|error| {
-                AtomError::new(
-                    AtomErrorCode::ExternalToolFailed,
-                    format!("failed to invoke {tool}: {error}"),
-                )
-            })?;
+        let output = command_output_with_json_path(repo_root, tool, args, &path)?;
 
         if !output.status.success() {
-            let _ = fs::remove_file(&path);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let detail = if stderr.trim().is_empty() {
-                format!(
-                    "{tool} {} exited with status {}",
-                    args.join(" "),
-                    output.status
-                )
-            } else {
-                format!(
-                    "{tool} {} exited with status {}:\n{stderr}",
-                    args.join(" "),
-                    output.status
-                )
-            };
+            cleanup_path(&path);
+            let detail = command_failure_with_stderr(tool, args, output.status, &output.stderr);
             return Err(AtomError::new(AtomErrorCode::ExternalToolFailed, detail));
         }
 
@@ -150,7 +60,7 @@ impl ToolRunner for ProcessRunner {
                 format!("failed to read {tool} JSON output: {error}"),
             )
         })?;
-        let _ = fs::remove_file(&path);
+        cleanup_path(&path);
         Ok(contents)
     }
 }
@@ -164,14 +74,7 @@ pub fn run_tool(
     tool: &str,
     args: &[&str],
 ) -> AtomResult<()> {
-    runner.run(
-        repo_root,
-        tool,
-        &args
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>(),
-    )
+    runner.run(repo_root, tool, &owned_args(args))
 }
 
 /// # Errors
@@ -183,14 +86,7 @@ pub fn stream_tool(
     tool: &str,
     args: &[&str],
 ) -> AtomResult<()> {
-    runner.stream(
-        repo_root,
-        tool,
-        &args
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>(),
-    )
+    runner.stream(repo_root, tool, &owned_args(args))
 }
 
 /// # Errors
@@ -202,14 +98,7 @@ pub fn capture_tool(
     tool: &str,
     args: &[&str],
 ) -> AtomResult<String> {
-    runner.capture(
-        repo_root,
-        tool,
-        &args
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>(),
-    )
+    runner.capture(repo_root, tool, &owned_args(args))
 }
 
 /// # Errors
@@ -221,14 +110,7 @@ pub fn capture_json_tool(
     tool: &str,
     args: &[&str],
 ) -> AtomResult<String> {
-    runner.capture_json_file(
-        repo_root,
-        tool,
-        &args
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>(),
-    )
+    runner.capture_json_file(repo_root, tool, &owned_args(args))
 }
 
 /// # Errors
@@ -300,11 +182,115 @@ pub fn find_bazel_output_owned(
     suffixes: &[&str],
     artifact_name: &str,
 ) -> AtomResult<Utf8PathBuf> {
-    let mut args = build_args.to_vec();
-    "cquery".clone_into(&mut args[0]);
-    args.push("--output=files".to_owned());
+    let args = bazel_cquery_args(build_args);
     let output = capture_bazel_owned(runner, repo_root, &args)?;
     select_bazel_output_path(repo_root, &output, suffixes, artifact_name, target)
+}
+
+fn owned_args(args: &[&str]) -> Vec<String> {
+    args.iter().map(|value| (*value).to_owned()).collect()
+}
+
+fn command_output(repo_root: &Utf8Path, tool: &str, args: &[String]) -> AtomResult<Output> {
+    base_command(repo_root, tool, args)
+        .output()
+        .map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to invoke {tool}: {error}"),
+            )
+        })
+}
+
+fn command_output_with_json_path(
+    repo_root: &Utf8Path,
+    tool: &str,
+    args: &[String],
+    path: &PathBuf,
+) -> AtomResult<Output> {
+    base_command(repo_root, tool, args)
+        .arg("--json-output")
+        .arg(path)
+        .output()
+        .map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to invoke {tool}: {error}"),
+            )
+        })
+}
+
+fn streamed_command_status(
+    repo_root: &Utf8Path,
+    tool: &str,
+    args: &[String],
+) -> AtomResult<ExitStatus> {
+    base_command(repo_root, tool, args)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to invoke {tool}: {error}"),
+            )
+        })
+}
+
+fn base_command(repo_root: &Utf8Path, tool: &str, args: &[String]) -> Command {
+    let mut command = Command::new(tool);
+    command.args(args).current_dir(repo_root);
+    command
+}
+
+fn require_success(tool: &str, args: &[String], status: ExitStatus) -> AtomResult<()> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            command_failure(tool, args, status),
+        ))
+    }
+}
+
+fn utf8_stdout(tool: &str, stdout: Vec<u8>) -> AtomResult<String> {
+    String::from_utf8(stdout).map_err(|_| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("{tool} returned non-UTF-8 output"),
+        )
+    })
+}
+
+fn command_failure(tool: &str, args: &[String], status: ExitStatus) -> String {
+    format!("{tool} {} exited with status {status}", args.join(" "))
+}
+
+fn command_failure_with_stderr(
+    tool: &str,
+    args: &[String],
+    status: ExitStatus,
+    stderr: &[u8],
+) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    if stderr.trim().is_empty() {
+        command_failure(tool, args, status)
+    } else {
+        format!("{}:\n{stderr}", command_failure(tool, args, status))
+    }
+}
+
+fn cleanup_path(path: &PathBuf) {
+    let _ = fs::remove_file(path);
+}
+
+fn bazel_cquery_args(build_args: &[String]) -> Vec<String> {
+    let mut args = Vec::with_capacity(build_args.len().saturating_add(1));
+    args.push("cquery".to_owned());
+    args.extend(build_args.iter().skip(1).cloned());
+    args.push("--output=files".to_owned());
+    args
 }
 
 fn select_bazel_output_path(
@@ -353,4 +339,46 @@ fn temp_json_output_path(tool: &str) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     std::env::temp_dir().join(format!("atom-{tool}-{timestamp}.json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bazel_cquery_args, select_bazel_output};
+
+    #[test]
+    fn bazel_cquery_args_replaces_the_subcommand_and_preserves_flags() {
+        let args = bazel_cquery_args(&[
+            "build".to_owned(),
+            "//apps/demo:demo".to_owned(),
+            "--config=ci".to_owned(),
+        ]);
+
+        assert_eq!(
+            args,
+            vec![
+                "cquery".to_owned(),
+                "//apps/demo:demo".to_owned(),
+                "--config=ci".to_owned(),
+                "--output=files".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn select_bazel_output_prefers_suffix_priority_over_line_order() {
+        let output = "\n  bazel-out/demo/app.apk\n  bazel-out/demo/app.aab\n";
+
+        let selected = select_bazel_output(output, &[".aab", ".apk"]);
+
+        assert_eq!(selected, Some("bazel-out/demo/app.aab"));
+    }
+
+    #[test]
+    fn select_bazel_output_ignores_blank_lines() {
+        let output = "\n\n  bazel-out/demo/app.apk  \n\n";
+
+        let selected = select_bazel_output(output, &[".apk"]);
+
+        assert_eq!(selected, Some("bazel-out/demo/app.apk"));
+    }
 }
