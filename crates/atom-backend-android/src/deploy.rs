@@ -4,14 +4,15 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, SessionLaunchBehavior, ToolRunner, UiSnapshot,
+    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDefinition, DeployBackend,
+    DeployBackendRegistry, DestinationCapability, DestinationDescriptor, InteractionRequest,
+    InteractionResult, LaunchMode, SessionLaunchBehavior, ToolRunner, UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
 use atom_deploy::{
-    capture_tool, find_bazel_output_owned, generated_target, run_bazel_owned, run_tool, stream_tool,
+    capture_bazel_cquery_starlark_owned, capture_tool, generated_target, parse_bazel_output_paths,
+    run_bazel_owned, run_tool, stream_tool,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -55,12 +56,19 @@ struct VideoCapture {
     serial: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AndroidBuildArtifacts {
+    signed_apk: Utf8PathBuf,
+    unsigned_apk: Utf8PathBuf,
+    deploy_jar: Utf8PathBuf,
+}
+
 struct AndroidAppSession<'a> {
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
     runner: &'a mut dyn ToolRunner,
     destination_id: String,
-    launch_behavior: SessionLaunchBehavior,
+    session_options: AppSessionOptions,
     launch: Option<AndroidAppLaunch>,
     video_capture: Option<VideoCapture>,
 }
@@ -161,14 +169,14 @@ impl DeployBackend for AndroidDeployBackend {
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
-        launch_behavior: SessionLaunchBehavior,
+        options: AppSessionOptions,
     ) -> AtomResult<Box<dyn BackendAppSession + 'a>> {
         Ok(Box::new(AndroidAppSession {
             repo_root,
             manifest,
             runner,
             destination_id: destination_id.to_owned(),
-            launch_behavior,
+            session_options: options,
             launch: None,
             video_capture: None,
         }))
@@ -195,7 +203,7 @@ impl BackendAppSession for AndroidAppSession<'_> {
         if self.launch.is_some() {
             return Ok(());
         }
-        if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
+        if self.session_options.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
             && let Some(launch) = attach_android_app(
                 self.repo_root,
                 self.manifest,
@@ -215,7 +223,13 @@ impl BackendAppSession for AndroidAppSession<'_> {
                 &self.destination_id,
             ));
         };
-        let launch = launch_android_app(self.repo_root, self.manifest, &destination, self.runner)?;
+        let launch = launch_android_app(
+            self.repo_root,
+            self.manifest,
+            &destination,
+            self.session_options.build_profile,
+            self.runner,
+        )?;
         wait_for_android_launch_ready(
             self.repo_root,
             &launch.serial,
@@ -323,27 +337,18 @@ fn deploy_android(
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<()> {
     let destination = resolve_android_device(repo_root, runner, requested_destination)?;
-    let target = generated_target(manifest, BACKEND_ID);
-    let build_args = vec![
-        "build".to_owned(),
-        target.clone(),
-        "--android_platforms=//platforms:arm64-v8a".to_owned(),
-    ];
-
-    run_step(
+    let artifacts = run_step(
         "Building Android app...",
         "Built Android app",
         "Android build failed",
-        || run_bazel_owned(runner, repo_root, &build_args),
-    )?;
-
-    let apk = find_bazel_output_owned(
-        runner,
-        repo_root,
-        &build_args,
-        &target,
-        &["app.apk", ".apk"],
-        "APK",
+        || {
+            build_android_artifacts(
+                repo_root,
+                manifest,
+                AppSessionBuildProfile::Standard,
+                runner,
+            )
+        },
     )?;
     let application_id = manifest.android.application_id.as_deref().ok_or_else(|| {
         AtomError::new(
@@ -369,7 +374,13 @@ fn deploy_android(
                 runner,
                 repo_root,
                 "adb",
-                &["-s", &serial, "install", "-r", apk.as_str()],
+                &[
+                    "-s",
+                    &serial,
+                    "install",
+                    "-r",
+                    artifacts.signed_apk.as_str(),
+                ],
             )
         },
     )?;
@@ -800,28 +811,64 @@ fn wait_for_app_pid(
     ))
 }
 
+fn android_bazel_args(target: &str, build_profile: AppSessionBuildProfile) -> Vec<String> {
+    let mut args = vec![
+        "build".to_owned(),
+        target.to_owned(),
+        "--android_platforms=//platforms:arm64-v8a".to_owned(),
+    ];
+    if build_profile == AppSessionBuildProfile::Debugger {
+        args.push("--compilation_mode=dbg".to_owned());
+    }
+    args
+}
+
+fn build_android_artifacts(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    build_profile: AppSessionBuildProfile,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<AndroidBuildArtifacts> {
+    let target = generated_target(manifest, BACKEND_ID);
+    let build_args = android_bazel_args(&target, build_profile);
+    run_bazel_owned(runner, repo_root, &build_args)?;
+    resolve_android_build_artifacts(repo_root, &build_args, runner)
+}
+
+fn resolve_android_build_artifacts(
+    repo_root: &Utf8Path,
+    build_args: &[String],
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<AndroidBuildArtifacts> {
+    let output = capture_bazel_cquery_starlark_owned(
+        runner,
+        repo_root,
+        build_args,
+        r#"providers(target)["@@rules_android+//providers:providers.bzl%ApkInfo"].signed_apk.path + "\n" + providers(target)["@@rules_android+//providers:providers.bzl%ApkInfo"].deploy_jar.path + "\n" + providers(target)["@@rules_android+//providers:providers.bzl%ApkInfo"].unsigned_apk.path"#,
+    )?;
+    let paths = parse_bazel_output_paths(repo_root, &output, "Android debugger artifact")?;
+    if paths.len() != 3 {
+        return Err(AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            "bazelisk cquery did not return signed APK, deploy JAR, and unsigned APK paths",
+        ));
+    }
+    Ok(AndroidBuildArtifacts {
+        signed_apk: paths[0].clone(),
+        deploy_jar: paths[1].clone(),
+        unsigned_apk: paths[2].clone(),
+    })
+}
+
 fn launch_android_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     destination: &AndroidDestination,
+    build_profile: AppSessionBuildProfile,
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<AndroidAppLaunch> {
     let serial = prepare_android_emulator(repo_root, runner, destination)?;
-    let target = generated_target(manifest, BACKEND_ID);
-    let build_args = vec![
-        "build".to_owned(),
-        target.clone(),
-        "--android_platforms=//platforms:arm64-v8a".to_owned(),
-    ];
-    run_bazel_owned(runner, repo_root, &build_args)?;
-    let apk = find_bazel_output_owned(
-        runner,
-        repo_root,
-        &build_args,
-        &target,
-        &["app.apk", ".apk"],
-        "APK",
-    )?;
+    let artifacts = build_android_artifacts(repo_root, manifest, build_profile, runner)?;
     let application_id = manifest.android.application_id.clone().ok_or_else(|| {
         AtomError::new(AtomErrorCode::InternalBug, "missing Android application id")
     })?;
@@ -829,7 +876,13 @@ fn launch_android_app(
         runner,
         repo_root,
         "adb",
-        &["-s", &serial, "install", "-r", apk.as_str()],
+        &[
+            "-s",
+            &serial,
+            "install",
+            "-r",
+            artifacts.signed_apk.as_str(),
+        ],
     )?;
     let component = format!("{application_id}/.MainActivity");
     run_tool(
@@ -1191,12 +1244,12 @@ pub(crate) fn timestamp_suffix() -> String {
 mod tests {
     use std::collections::VecDeque;
 
-    use atom_backends::DestinationCapability;
+    use atom_backends::{AppSessionBuildProfile, DestinationCapability};
     use atom_ffi::{AtomError, AtomErrorCode};
     use camino::{Utf8Path, Utf8PathBuf};
 
     use super::{
-        AndroidDestination, BACKEND_ID, destination_descriptor_from_android,
+        AndroidDestination, BACKEND_ID, android_bazel_args, destination_descriptor_from_android,
         find_android_destination, list_android_destinations, list_android_devices,
         parse_adb_devices,
     };
@@ -1454,5 +1507,20 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
 
         let error = list_android_devices(&root, &mut runner).expect_err("lookup should fail");
         assert_eq!(error.code, AtomErrorCode::ExternalToolFailed);
+    }
+
+    #[test]
+    fn debugger_android_builds_enable_dbg_mode() {
+        let args = android_bazel_args("//apps/demo:demo", AppSessionBuildProfile::Debugger);
+
+        assert_eq!(
+            args,
+            vec![
+                "build".to_owned(),
+                "//apps/demo:demo".to_owned(),
+                "--android_platforms=//platforms:arm64-v8a".to_owned(),
+                "--compilation_mode=dbg".to_owned(),
+            ]
+        );
     }
 }

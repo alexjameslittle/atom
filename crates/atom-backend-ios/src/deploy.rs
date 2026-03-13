@@ -4,14 +4,16 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, ScreenInfo, SessionLaunchBehavior, ToolRunner, UiBounds, UiNode, UiSnapshot,
+    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDefinition, DeployBackend,
+    DeployBackendRegistry, DestinationCapability, DestinationDescriptor, InteractionRequest,
+    InteractionResult, LaunchMode, ScreenInfo, SessionLaunchBehavior, ToolRunner, UiBounds, UiNode,
+    UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
 use atom_deploy::{
-    capture_tool, find_bazel_output_owned, generated_target, run_bazel_owned, run_tool, stream_tool,
+    capture_bazel_cquery_starlark_owned, capture_tool, generated_target, parse_bazel_output_paths,
+    run_bazel_owned, run_tool, stream_tool,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -63,9 +65,15 @@ struct IosAppSession<'a> {
     manifest: &'a NormalizedManifest,
     runner: &'a mut dyn ToolRunner,
     destination_id: String,
-    launch_behavior: SessionLaunchBehavior,
+    session_options: AppSessionOptions,
     launch: Option<IosAppLaunch>,
     video_capture: Option<VideoCapture>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IosBuildArtifacts {
+    installable_app: Utf8PathBuf,
+    dsym_bundle: Option<Utf8PathBuf>,
 }
 
 impl IosDestination {
@@ -151,14 +159,14 @@ impl DeployBackend for IosDeployBackend {
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
-        launch_behavior: SessionLaunchBehavior,
+        options: AppSessionOptions,
     ) -> AtomResult<Box<dyn BackendAppSession + 'a>> {
         Ok(Box::new(IosAppSession {
             repo_root,
             manifest,
             runner,
             destination_id: destination_id.to_owned(),
-            launch_behavior,
+            session_options: options,
             launch: None,
             video_capture: None,
         }))
@@ -185,7 +193,7 @@ impl BackendAppSession for IosAppSession<'_> {
         if self.launch.is_some() {
             return Ok(());
         }
-        if self.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
+        if self.session_options.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
             && let Some(launch) = attach_ios_app(
                 self.repo_root,
                 self.manifest,
@@ -206,7 +214,13 @@ impl BackendAppSession for IosAppSession<'_> {
                 &self.destination_id,
             ));
         };
-        let launch = launch_ios_app(self.repo_root, self.manifest, &destination, self.runner)?;
+        let launch = launch_ios_app(
+            self.repo_root,
+            self.manifest,
+            &destination,
+            self.session_options.build_profile,
+            self.runner,
+        )?;
         wait_for_launch_ready(
             self.repo_root,
             &launch.destination_id,
@@ -314,25 +328,20 @@ fn deploy_ios(
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<()> {
     let destination = resolve_ios_destination(repo_root, runner, requested_destination)?;
-    let target = generated_target(manifest, BACKEND_ID);
-    let build_args = ios_bazel_args(&target, &destination);
-
-    run_step(
+    let artifacts = run_step(
         "Building iOS app...",
         "Built iOS app",
         "iOS build failed",
-        || run_bazel_owned(runner, repo_root, &build_args),
+        || {
+            build_ios_artifacts(
+                repo_root,
+                manifest,
+                &destination,
+                AppSessionBuildProfile::Standard,
+                runner,
+            )
+        },
     )?;
-
-    let app_bundle = find_bazel_output_owned(
-        runner,
-        repo_root,
-        &build_args,
-        &target,
-        &[".app", ".ipa"],
-        "iOS app artifact",
-    )?;
-    let installable_app = resolve_ios_installable_artifact(&app_bundle)?;
     let bundle_id = manifest.ios.bundle_id.as_deref().ok_or_else(|| {
         AtomError::new(
             AtomErrorCode::InternalBug,
@@ -346,7 +355,7 @@ fn deploy_ios(
             manifest,
             runner,
             &destination,
-            &installable_app,
+            &artifacts.installable_app,
             bundle_id,
             launch_mode,
         ),
@@ -355,7 +364,7 @@ fn deploy_ios(
             manifest,
             runner,
             &destination.id,
-            &installable_app,
+            &artifacts.installable_app,
             bundle_id,
             launch_mode,
         ),
@@ -702,16 +711,76 @@ fn parse_idb_targets(json: &str) -> AtomResult<Vec<IosDestination>> {
     Ok(destinations)
 }
 
-fn ios_bazel_args(target: &str, destination: &IosDestination) -> Vec<String> {
+fn ios_bazel_args(
+    target: &str,
+    destination: &IosDestination,
+    build_profile: AppSessionBuildProfile,
+) -> Vec<String> {
     let cpu = match destination.kind {
         IosDestinationKind::Simulator => "sim_arm64,x86_64",
         IosDestinationKind::Device => "arm64",
     };
-    vec![
+    let mut args = vec![
         "build".to_owned(),
         target.to_owned(),
         format!("--ios_multi_cpus={cpu}"),
-    ]
+    ];
+    if build_profile == AppSessionBuildProfile::Debugger {
+        args.push("--compilation_mode=dbg".to_owned());
+        args.push("--apple_generate_dsym".to_owned());
+        args.push("--output_groups=+dsyms".to_owned());
+    }
+    args
+}
+
+fn build_ios_artifacts(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &IosDestination,
+    build_profile: AppSessionBuildProfile,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<IosBuildArtifacts> {
+    let target = generated_target(manifest, BACKEND_ID);
+    let build_args = ios_bazel_args(&target, destination, build_profile);
+    run_bazel_owned(runner, repo_root, &build_args)?;
+    resolve_ios_build_artifacts(repo_root, &build_args, build_profile, runner)
+}
+
+fn resolve_ios_build_artifacts(
+    repo_root: &Utf8Path,
+    build_args: &[String],
+    build_profile: AppSessionBuildProfile,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<IosBuildArtifacts> {
+    let expression = if build_profile == AppSessionBuildProfile::Debugger {
+        r#"providers(target)["@@rules_apple+//apple/internal:providers.bzl%AppleBundleInfo"].archive.path + "\n" + providers(target)["@@rules_apple+//apple/internal:providers.bzl%AppleDsymBundleInfo"].direct_dsyms[0].path"#
+    } else {
+        r#"providers(target)["@@rules_apple+//apple/internal:providers.bzl%AppleBundleInfo"].archive.path"#
+    };
+    let output = capture_bazel_cquery_starlark_owned(runner, repo_root, build_args, expression)?;
+    let mut paths = parse_bazel_output_paths(repo_root, &output, "iOS debugger artifact")?;
+    let archive = paths.first().cloned().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            "bazelisk cquery did not return an iOS archive",
+        )
+    })?;
+    let dsym_bundle = if build_profile == AppSessionBuildProfile::Debugger {
+        if paths.len() != 2 {
+            return Err(AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "bazelisk cquery did not return exactly one iOS dSYM bundle",
+            ));
+        }
+        Some(paths.remove(1))
+    } else {
+        None
+    };
+
+    Ok(IosBuildArtifacts {
+        installable_app: resolve_ios_installable_artifact(&archive)?,
+        dsym_bundle,
+    })
 }
 
 fn resolve_ios_installable_artifact(path: &Utf8Path) -> AtomResult<Utf8PathBuf> {
@@ -828,20 +897,10 @@ fn launch_ios_app(
     repo_root: &Utf8Path,
     manifest: &NormalizedManifest,
     destination: &IosDestination,
+    build_profile: AppSessionBuildProfile,
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<IosAppLaunch> {
-    let target = generated_target(manifest, BACKEND_ID);
-    let build_args = ios_bazel_args(&target, destination);
-    run_bazel_owned(runner, repo_root, &build_args)?;
-    let app_bundle = find_bazel_output_owned(
-        runner,
-        repo_root,
-        &build_args,
-        &target,
-        &[".app", ".ipa"],
-        "iOS app artifact",
-    )?;
-    let installable_app = resolve_ios_installable_artifact(&app_bundle)?;
+    let artifacts = build_ios_artifacts(repo_root, manifest, destination, build_profile, runner)?;
     let bundle_id = manifest
         .ios
         .bundle_id
@@ -856,7 +915,10 @@ fn launch_ios_app(
         runner,
         repo_root,
         &destination_id,
-        &["install".to_owned(), installable_app.as_str().to_owned()],
+        &[
+            "install".to_owned(),
+            artifacts.installable_app.as_str().to_owned(),
+        ],
     )?;
     let _ = run_idb(
         runner,
@@ -1578,11 +1640,11 @@ fn timestamp_suffix() -> String {
 
 #[cfg(test)]
 mod tests {
-    use atom_backends::DestinationCapability;
+    use atom_backends::{AppSessionBuildProfile, DestinationCapability};
 
     use super::{
         BACKEND_ID, IosDestination, IosDestinationKind, destination_descriptor_from_ios,
-        parse_idb_targets,
+        ios_bazel_args, parse_idb_targets,
     };
 
     #[test]
@@ -1648,5 +1710,35 @@ mod tests {
         assert_eq!(descriptor.platform, "ios");
         assert_eq!(descriptor.kind, "device");
         assert_eq!(descriptor.capabilities, vec![DestinationCapability::Launch]);
+    }
+
+    #[test]
+    fn debugger_ios_builds_enable_dsym_generation() {
+        let args = ios_bazel_args(
+            "//apps/demo:demo",
+            &IosDestination {
+                kind: IosDestinationKind::Simulator,
+                id: "SIM-1".to_owned(),
+                alternate_id: None,
+                name: "Fixture Sim".to_owned(),
+                state: "Booted".to_owned(),
+                runtime: Some("17.0".to_owned()),
+                architecture: Some("arm64".to_owned()),
+                is_available: true,
+            },
+            AppSessionBuildProfile::Debugger,
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "build".to_owned(),
+                "//apps/demo:demo".to_owned(),
+                "--ios_multi_cpus=sim_arm64,x86_64".to_owned(),
+                "--compilation_mode=dbg".to_owned(),
+                "--apple_generate_dsym".to_owned(),
+                "--output_groups=+dsyms".to_owned(),
+            ]
+        );
     }
 }

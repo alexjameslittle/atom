@@ -8,11 +8,12 @@ pub use crate::cng::{
     GenerationBackendRegistry, GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
 };
 pub use crate::deploy::{
-    ArtifactRecord, BackendAppSession, BackendDebugSession, DebugFrame, DebugSessionRequest,
-    DebugSessionResponse, DebugSessionState, DebugThread, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, EvaluationBundleManifest, EvaluationPlan,
-    EvaluationStep, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
-    SessionLaunchBehavior, StepRecord, ToolRunner, UiBounds, UiNode, UiSnapshot,
+    AppSessionBuildProfile, AppSessionOptions, ArtifactRecord, BackendAppSession,
+    BackendDebugSession, DebugFrame, DebugSessionRequest, DebugSessionResponse, DebugSessionState,
+    DebugThread, DeployBackend, DeployBackendRegistry, DestinationCapability,
+    DestinationDescriptor, EvaluationBundleManifest, EvaluationPlan, EvaluationStep,
+    InteractionRequest, InteractionResult, LaunchMode, ResolvedSourceLocation, ScreenInfo,
+    SessionLaunchBehavior, SourceLocation, StepRecord, ToolRunner, UiBounds, UiNode, UiSnapshot,
 };
 
 pub trait BackendDefinition {
@@ -89,6 +90,7 @@ mod tests {
     use super::{
         BackendDebugSession, BackendDefinition, BackendRegistry, DebugFrame, DebugSessionRequest,
         DebugSessionResponse, DebugSessionState, DestinationCapability, DestinationDescriptor,
+        ResolvedSourceLocation, SourceLocation,
     };
 
     struct FixtureBackend {
@@ -235,6 +237,42 @@ mod tests {
             DebugSessionResponse::Stopped {
                 state: DebugSessionState::Stopped,
             }
+        );
+    }
+
+    #[test]
+    fn source_location_payloads_encode_backend_neutral_shapes() {
+        let location = SourceLocation {
+            path: "src/demo.rs".to_owned(),
+            line: 42,
+            column: Some(7),
+        };
+        let resolved = ResolvedSourceLocation::ClassLine {
+            location: location.clone(),
+            class_name: "build.atom.hello.DemoSurfaceKt".to_owned(),
+            symbol_file: Some("bazel-out/demo/app_deploy.jar".to_owned()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&location).expect("location should encode"),
+            json!({
+                "path": "src/demo.rs",
+                "line": 42,
+                "column": 7,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&resolved).expect("resolved location should encode"),
+            json!({
+                "kind": "class_line",
+                "location": {
+                    "path": "src/demo.rs",
+                    "line": 42,
+                    "column": 7,
+                },
+                "class_name": "build.atom.hello.DemoSurfaceKt",
+                "symbol_file": "bazel-out/demo/app_deploy.jar",
+            })
         );
     }
 }

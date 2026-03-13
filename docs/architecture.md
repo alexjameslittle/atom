@@ -34,6 +34,8 @@ Dependency direction should move one way:
 - `atom-backends`
   - Owns backend contracts, shared destination/evaluation/debug-session/CNG data types, and generic
     registries
+  - Carries backend-neutral evaluation/debug metadata such as app-session build profiles and
+    source-location resolution payloads
   - Defines the compile-time seam for first-party backend composition without dynamic loading
   - Stays platform-neutral; concrete iOS/Android behavior lives in backend implementation crates
 - `atom-cng`
@@ -49,6 +51,8 @@ Dependency direction should move one way:
   - Device discovery and destination selection
   - Dispatches run/stop/evaluate flows through registered `DeployBackend` contracts
   - Owns generic evidence capture, UI evaluation, and proof-bundle orchestration
+  - Passes evaluation-requested build profiles through to backend app sessions while leaving
+    artifact and symbol lookup inside backend implementation crates
   - Coordinates app sessions through backend-owned automation/debug contracts instead of embedding
     platform debugger lifecycles locally
   - Preserves compatibility fields such as serialized destination `platform`; backend ids are

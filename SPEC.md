@@ -1153,6 +1153,13 @@ Rules:
   supply them.
 - Evaluation runs MUST be able to emit a step transcript and an artifact manifest that references
   logs, screenshots, videos, and UI snapshots captured during the run.
+- Evaluation plans MAY request a `build_profile` of `standard` or `debugger`; omitted plans MUST
+  default to `standard` for backward compatibility.
+- `debugger` evaluation builds MUST reuse the same `atom evaluate run` workflow rather than require
+  a separate public CLI command.
+- When debugger-ready artifacts are requested, backend implementations MUST resolve installable
+  artifacts and local symbol sidecars deterministically from structured Bazel providers rather than
+  from ambiguous file ordering in raw `cquery --output=files` output.
 - Artifact-producing commands MUST allow caller-selected repo-relative or absolute output paths.
 - Video capture SHOULD be startable before the first interaction step and stoppable after the last
   required step so one artifact can prove the full interaction flow.
@@ -1308,6 +1315,9 @@ consumes Atom via `bzlmod`.
 `atom evaluate run --platform <platform>`:
 
 - MUST execute a machine-readable evaluation plan against one selected destination
+- MUST accept an additive plan-level `build_profile` field; omitted plans default to `standard`
+- A `debugger` build profile MUST request debugger-capable backend artifacts without introducing a
+  separate public evaluate or launch command
 - MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
   interactions
 - A `launch` step MUST not report success until the selected app process is running and the
@@ -1344,12 +1354,17 @@ Evaluation contract rules:
 - An evaluation plan MUST support, at minimum, these step kinds: `launch`, `wait_for_ui`, `tap`,
   `long_press`, `swipe`, `drag`, `type_text`, `screenshot`, `inspect_ui`, `start_video`,
   `stop_video`, and `collect_logs`.
+- Machine-readable evaluation plans MUST treat `build_profile` as additive metadata and MUST default
+  absent values to `standard`.
 - Interaction and wait steps MUST accept either a semantic target descriptor or an explicit
   coordinate descriptor.
 - Evaluation output MUST include a machine-readable bundle manifest with the selected destination
   id, platform, timestamps, executed steps, per-step status, and artifact paths.
 - Evaluation bundle manifests MAY include backend-specific `backend_id` metadata inside the
   serialized destination descriptor, but MUST preserve the `platform` field.
+- Backend-owned debugger source lookups MAY add source-location payloads, but when they do they
+  SHOULD distinguish file-line, class-line, and symbol-based resolutions and MAY include the local
+  symbol file used to satisfy the lookup.
 
 ### 10.5 Reference Algorithm: `evaluate run`
 
@@ -1358,7 +1373,7 @@ function cli_evaluate_run(args):
     destination = resolve_destination(args.destination)
     plan = load_evaluation_plan(args.plan)
     require_capabilities(destination, plan)
-    session = create_evaluation_session(destination, args.output_dir)
+    session = create_evaluation_session(destination, args.output_dir, plan.build_profile or "standard")
 
     if plan.collect_logs_on_start:
         session.logs = start_log_capture(destination, args.output_dir)
@@ -1596,6 +1611,8 @@ Required behavior:
   interaction work on runnable iOS and Android destinations
 - `atom evaluate run --platform <platform>` can orchestrate launch, waits, inspection, interactions,
   and artifact capture into one proof bundle
+- `atom evaluate run --platform <platform>` can request debugger-capable artifacts through plan
+  metadata without introducing a separate public workflow
 - automation backends are framework-owned and semantic-first per Section 9.8.4
 - the canonical example app MAY include an app-owned demo surface through native module sources, but
   framework automation MUST NOT depend on app-specific generated hooks

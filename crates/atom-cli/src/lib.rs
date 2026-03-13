@@ -762,8 +762,8 @@ mod tests {
     };
 
     use atom_backends::{
-        BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry, LaunchMode,
-        SessionLaunchBehavior, ToolRunner,
+        AppSessionOptions, BackendAppSession, BackendDefinition, DeployBackend,
+        DeployBackendRegistry, LaunchMode, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -827,7 +827,7 @@ mod tests {
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
             _runner: &'a mut dyn ToolRunner,
-            _launch_behavior: SessionLaunchBehavior,
+            _options: AppSessionOptions,
         ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
             unreachable!("CLI tests do not construct app sessions")
         }
