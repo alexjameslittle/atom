@@ -266,6 +266,8 @@ Planned command surface:
 Minimum evaluation plan capabilities:
 
 - Launch or attach to a destination.
+- Select a standard or debugger-aware build profile without changing the `atom evaluate run` command
+  surface.
 - Wait for a target UI state.
 - Capture logs, screenshots, and video.
 - Inspect the current UI tree.
@@ -304,6 +306,9 @@ Output expectations:
   focused on the selected app rather than full-device simulator noise when possible.
 - Every evaluation run produces a proof bundle with logs, screenshots, video, UI snapshots, and a
   step-by-step manifest of what the agent attempted.
+- Debugger-aware evaluation runs should still flow through the same public command and resolve
+  installable artifacts plus local symbol files from structured Bazel providers instead of relying
+  on output-file ordering heuristics.
 - UI inspection should emit machine-readable data with bounds, labels or text, and stable target
   identifiers when the backend can provide them.
 - The commands should be usable against simulators, emulators, attached physical devices, and other

@@ -3,8 +3,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAppSession, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
-    ToolRunner,
+    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, DeployBackendRegistry,
+    DestinationCapability, DestinationDescriptor, ToolRunner,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -45,7 +45,10 @@ pub fn inspect_ui(
         destination_id,
         runner,
         descriptor,
-        SessionLaunchBehavior::AttachOrLaunch,
+        AppSessionOptions {
+            launch_behavior: SessionLaunchBehavior::AttachOrLaunch,
+            build_profile: AppSessionBuildProfile::Standard,
+        },
     )?;
     session.ensure_launched()?;
     let mut snapshot = session.interact(InteractionRequest::InspectUi)?;
@@ -80,7 +83,10 @@ pub fn interact(
         destination_id,
         runner,
         descriptor,
-        SessionLaunchBehavior::AttachOrLaunch,
+        AppSessionOptions {
+            launch_behavior: SessionLaunchBehavior::AttachOrLaunch,
+            build_profile: AppSessionBuildProfile::Standard,
+        },
     )?;
     session.ensure_launched()?;
     let result = session.interact(request)?;
@@ -111,7 +117,10 @@ pub fn capture_screenshot(
         destination_id,
         runner,
         descriptor,
-        SessionLaunchBehavior::AttachOrLaunch,
+        AppSessionOptions {
+            launch_behavior: SessionLaunchBehavior::AttachOrLaunch,
+            build_profile: AppSessionBuildProfile::Standard,
+        },
     )?;
     session.ensure_launched()?;
     session.capture_screenshot(output_path)
@@ -145,7 +154,10 @@ pub fn capture_logs(
         destination_id,
         runner,
         descriptor,
-        SessionLaunchBehavior::AttachOrLaunch,
+        AppSessionOptions {
+            launch_behavior: SessionLaunchBehavior::AttachOrLaunch,
+            build_profile: AppSessionBuildProfile::Standard,
+        },
     )?;
     session.ensure_launched()?;
     session.capture_logs(output_path, seconds)
@@ -179,7 +191,10 @@ pub fn capture_video(
         destination_id,
         runner,
         descriptor,
-        SessionLaunchBehavior::AttachOrLaunch,
+        AppSessionOptions {
+            launch_behavior: SessionLaunchBehavior::AttachOrLaunch,
+            build_profile: AppSessionBuildProfile::Standard,
+        },
     )?;
     session.ensure_launched()?;
     session.capture_video(output_path, seconds)
@@ -219,7 +234,10 @@ pub fn evaluate_run(
         destination_id,
         runner,
         descriptor,
-        SessionLaunchBehavior::LaunchOnly,
+        AppSessionOptions {
+            launch_behavior: SessionLaunchBehavior::LaunchOnly,
+            build_profile: plan.build_profile,
+        },
     )?;
     let mut steps = Vec::new();
     let mut artifacts = Vec::new();
@@ -715,7 +733,7 @@ impl<'a> AppSession<'a> {
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
         descriptor: DestinationDescriptor,
-        launch_behavior: SessionLaunchBehavior,
+        options: AppSessionOptions,
     ) -> AtomResult<Self> {
         debug_assert_eq!(descriptor.id, destination_id);
         let backend = app_session_with_registry(
@@ -725,7 +743,7 @@ impl<'a> AppSession<'a> {
             backend_id,
             destination_id,
             runner,
-            launch_behavior,
+            options,
         )?;
         Ok(Self {
             descriptor,
@@ -781,7 +799,7 @@ fn app_session_with_registry<'a>(
     backend_id: &'a str,
     destination_id: &'a str,
     runner: &'a mut dyn ToolRunner,
-    launch_behavior: SessionLaunchBehavior,
+    options: AppSessionOptions,
 ) -> AtomResult<Box<dyn BackendAppSession + 'a>> {
     let backend = registry.get(backend_id).map(Box::as_ref).ok_or_else(|| {
         AtomError::with_path(
@@ -797,7 +815,7 @@ fn app_session_with_registry<'a>(
             backend_id,
         ));
     }
-    backend.new_app_session(repo_root, manifest, destination_id, runner, launch_behavior)
+    backend.new_app_session(repo_root, manifest, destination_id, runner, options)
 }
 
 fn write_json<T: Serialize>(path: &Utf8Path, value: &T) -> AtomResult<()> {
@@ -845,17 +863,17 @@ mod tests {
     use std::fs;
 
     use atom_backends::{
-        BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-        DestinationCapability, DestinationDescriptor, ToolRunner,
+        AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDefinition,
+        DeployBackend, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
+        ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
     use tempfile::tempdir;
 
     use super::{
-        EvaluationPlan, EvaluationStep, InteractionRequest, ScreenInfo, SessionLaunchBehavior,
-        UiBounds, UiNode, UiSnapshot, load_evaluation_plan, require_plan_capabilities,
-        video_artifact_name,
+        EvaluationPlan, EvaluationStep, InteractionRequest, ScreenInfo, UiBounds, UiNode,
+        UiSnapshot, load_evaluation_plan, require_plan_capabilities, video_artifact_name,
     };
 
     #[derive(Default)]
@@ -968,7 +986,7 @@ mod tests {
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
             _runner: &'a mut dyn ToolRunner,
-            _launch_behavior: SessionLaunchBehavior,
+            _options: AppSessionOptions,
         ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
             Ok(Box::new(FixtureSession::default()))
         }
@@ -1074,6 +1092,7 @@ mod tests {
             capabilities: vec![DestinationCapability::Launch],
         };
         let plan = EvaluationPlan {
+            build_profile: AppSessionBuildProfile::Standard,
             steps: vec![EvaluationStep::Screenshot { name: None }],
         };
 

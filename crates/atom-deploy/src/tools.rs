@@ -159,6 +159,21 @@ pub fn capture_bazel_owned(
 
 /// # Errors
 ///
+/// Returns an error if bazelisk cquery fails.
+pub fn capture_bazel_cquery_starlark_owned(
+    runner: &mut (impl ToolRunner + ?Sized),
+    repo_root: &Utf8Path,
+    build_args: &[String],
+    expression: &str,
+) -> AtomResult<String> {
+    let mut args = bazel_cquery_base_args(build_args);
+    args.push("--output=starlark".to_owned());
+    args.push(format!("--starlark:expr={expression}"));
+    capture_bazel_owned(runner, repo_root, &args)
+}
+
+/// # Errors
+///
 /// Returns an error if bazelisk cquery fails or no matching artifact is found.
 pub fn find_bazel_output(
     runner: &mut (impl ToolRunner + ?Sized),
@@ -185,6 +200,22 @@ pub fn find_bazel_output_owned(
     let args = bazel_cquery_args(build_args);
     let output = capture_bazel_owned(runner, repo_root, &args)?;
     select_bazel_output_path(repo_root, &output, suffixes, artifact_name, target)
+}
+
+/// # Errors
+///
+/// Returns an error if any returned path is invalid UTF-8.
+pub fn parse_bazel_output_paths(
+    repo_root: &Utf8Path,
+    output: &str,
+    artifact_name: &str,
+) -> AtomResult<Vec<Utf8PathBuf>> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| normalize_bazel_output_path(repo_root, line, artifact_name))
+        .collect()
 }
 
 fn owned_args(args: &[&str]) -> Vec<String> {
@@ -285,10 +316,15 @@ fn cleanup_path(path: &PathBuf) {
     let _ = fs::remove_file(path);
 }
 
-fn bazel_cquery_args(build_args: &[String]) -> Vec<String> {
+fn bazel_cquery_base_args(build_args: &[String]) -> Vec<String> {
     let mut args = Vec::with_capacity(build_args.len().saturating_add(1));
     args.push("cquery".to_owned());
     args.extend(build_args.iter().skip(1).cloned());
+    args
+}
+
+fn bazel_cquery_args(build_args: &[String]) -> Vec<String> {
+    let mut args = bazel_cquery_base_args(build_args);
     args.push("--output=files".to_owned());
     args
 }
@@ -307,15 +343,23 @@ fn select_bazel_output_path(
         )
     })?;
 
-    if selected.starts_with('/') {
-        Utf8PathBuf::from_path_buf(selected.into()).map_err(|_| {
+    normalize_bazel_output_path(repo_root, selected, artifact_name)
+}
+
+fn normalize_bazel_output_path(
+    repo_root: &Utf8Path,
+    path: &str,
+    artifact_name: &str,
+) -> AtomResult<Utf8PathBuf> {
+    if path.starts_with('/') {
+        Utf8PathBuf::from_path_buf(path.into()).map_err(|_| {
             AtomError::new(
                 AtomErrorCode::ExternalToolFailed,
                 format!("bazelisk returned a non-UTF-8 {artifact_name} path"),
             )
         })
     } else {
-        Ok(repo_root.join(selected))
+        Ok(repo_root.join(path))
     }
 }
 
@@ -343,7 +387,13 @@ fn temp_json_output_path(tool: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{bazel_cquery_args, select_bazel_output};
+    use camino::Utf8PathBuf;
+
+    use super::{
+        bazel_cquery_args, capture_bazel_cquery_starlark_owned, parse_bazel_output_paths,
+        select_bazel_output,
+    };
+    use atom_backends::ToolRunner;
 
     #[test]
     fn bazel_cquery_args_replaces_the_subcommand_and_preserves_flags() {
@@ -380,5 +430,91 @@ mod tests {
         let selected = select_bazel_output(output, &[".apk"]);
 
         assert_eq!(selected, Some("bazel-out/demo/app.apk"));
+    }
+
+    #[test]
+    fn parse_bazel_output_paths_normalizes_relative_and_absolute_paths() {
+        let repo_root = Utf8PathBuf::from("/repo");
+        let output = "bazel-out/demo/app.apk\n/private/tmp/app_deploy.jar\n";
+
+        let paths =
+            parse_bazel_output_paths(&repo_root, output, "artifact").expect("paths should parse");
+
+        assert_eq!(
+            paths,
+            vec![
+                Utf8PathBuf::from("/repo/bazel-out/demo/app.apk"),
+                Utf8PathBuf::from("/private/tmp/app_deploy.jar"),
+            ]
+        );
+    }
+
+    #[test]
+    fn starlark_cquery_reuses_build_flags_from_build_args() {
+        #[derive(Default)]
+        struct RecordingRunner {
+            args: Vec<String>,
+        }
+
+        impl ToolRunner for RecordingRunner {
+            fn run(
+                &mut self,
+                _repo_root: &camino::Utf8Path,
+                _tool: &str,
+                _args: &[String],
+            ) -> atom_ffi::AtomResult<()> {
+                unreachable!("run is not used")
+            }
+
+            fn capture(
+                &mut self,
+                _repo_root: &camino::Utf8Path,
+                _tool: &str,
+                args: &[String],
+            ) -> atom_ffi::AtomResult<String> {
+                self.args = args.to_vec();
+                Ok(String::new())
+            }
+
+            fn capture_json_file(
+                &mut self,
+                _repo_root: &camino::Utf8Path,
+                _tool: &str,
+                _args: &[String],
+            ) -> atom_ffi::AtomResult<String> {
+                unreachable!("capture_json_file is not used")
+            }
+
+            fn stream(
+                &mut self,
+                _repo_root: &camino::Utf8Path,
+                _tool: &str,
+                _args: &[String],
+            ) -> atom_ffi::AtomResult<()> {
+                unreachable!("stream is not used")
+            }
+        }
+
+        let mut runner = RecordingRunner::default();
+        let repo_root = Utf8PathBuf::from("/repo");
+        let build_args = vec![
+            "build".to_owned(),
+            "//apps/demo:demo".to_owned(),
+            "--compilation_mode=dbg".to_owned(),
+        ];
+
+        capture_bazel_cquery_starlark_owned(&mut runner, &repo_root, &build_args, "target.label")
+            .expect("cquery should dispatch");
+
+        assert_eq!(
+            runner.args,
+            vec![
+                "cquery".to_owned(),
+                "//apps/demo:demo".to_owned(),
+                "--compilation_mode=dbg".to_owned(),
+                "--output=starlark".to_owned(),
+                "--starlark:expr=target.label".to_owned(),
+            ]
+        );
     }
 }

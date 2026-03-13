@@ -19,6 +19,20 @@ pub enum SessionLaunchBehavior {
     LaunchOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppSessionBuildProfile {
+    #[default]
+    Standard,
+    Debugger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppSessionOptions {
+    pub launch_behavior: SessionLaunchBehavior,
+    pub build_profile: AppSessionBuildProfile,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DestinationCapability {
@@ -218,6 +232,8 @@ pub enum EvaluationStep {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationPlan {
+    #[serde(default)]
+    pub build_profile: AppSessionBuildProfile,
     pub steps: Vec<EvaluationStep>,
 }
 
@@ -268,6 +284,36 @@ pub struct DebugThread {
     #[serde(default)]
     pub name: Option<String>,
     pub selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceLocation {
+    pub path: String,
+    pub line: u32,
+    #[serde(default)]
+    pub column: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedSourceLocation {
+    FileLine {
+        location: SourceLocation,
+        #[serde(default)]
+        symbol_file: Option<String>,
+    },
+    ClassLine {
+        location: SourceLocation,
+        class_name: String,
+        #[serde(default)]
+        symbol_file: Option<String>,
+    },
+    Symbol {
+        location: SourceLocation,
+        symbol_name: String,
+        #[serde(default)]
+        symbol_file: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,7 +443,7 @@ pub trait DeployBackend: BackendDefinition {
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
-        launch_behavior: SessionLaunchBehavior,
+        options: AppSessionOptions,
     ) -> AtomResult<Box<dyn BackendAppSession + 'a>>;
 }
 

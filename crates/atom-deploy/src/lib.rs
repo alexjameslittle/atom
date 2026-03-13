@@ -7,8 +7,9 @@ mod tools;
 
 pub use crate::deploy::{deploy_backend, ensure_backend_enabled, generated_target, stop_backend};
 pub use crate::tools::{
-    CommandOutput, ProcessRunner, capture_bazel, capture_bazel_owned, capture_json_tool,
-    capture_tool, find_bazel_output, find_bazel_output_owned, run_bazel, run_bazel_owned, run_tool,
+    CommandOutput, ProcessRunner, capture_bazel, capture_bazel_cquery_starlark_owned,
+    capture_bazel_owned, capture_json_tool, capture_tool, find_bazel_output,
+    find_bazel_output_owned, parse_bazel_output_paths, run_bazel, run_bazel_owned, run_tool,
     stream_tool,
 };
 pub use atom_backends::{LaunchMode, ToolRunner};
@@ -16,8 +17,8 @@ pub use atom_backends::{LaunchMode, ToolRunner};
 #[cfg(test)]
 mod tests {
     use atom_backends::{
-        BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-        DestinationCapability, DestinationDescriptor, LaunchMode, SessionLaunchBehavior,
+        AppSessionOptions, BackendAppSession, BackendDefinition, DeployBackend,
+        DeployBackendRegistry, DestinationCapability, DestinationDescriptor, LaunchMode,
         ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
@@ -128,7 +129,7 @@ mod tests {
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
             _runner: &'a mut dyn ToolRunner,
-            _launch_behavior: SessionLaunchBehavior,
+            _options: AppSessionOptions,
         ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
             unreachable!("deploy core tests do not construct app sessions")
         }
@@ -250,7 +251,7 @@ mod tests {
                 _manifest: &'a NormalizedManifest,
                 _destination_id: &'a str,
                 _runner: &'a mut dyn ToolRunner,
-                _launch_behavior: SessionLaunchBehavior,
+                _options: AppSessionOptions,
             ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
                 unreachable!("deploy core tests do not construct app sessions")
             }
