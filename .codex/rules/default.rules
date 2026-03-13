@@ -1,0 +1,38 @@
+# Atom project Codex sandbox rules
+# Allow build toolchain commands without approval prompts.
+
+prefix_rule(
+    pattern = ["bazelisk"],
+    decision = "allow",
+    justification = "Project build tool; all subcommands are safe within workspace",
+)
+
+prefix_rule(
+    pattern = ["bazel"],
+    decision = "allow",
+    justification = "Project build tool; all subcommands are safe within workspace",
+)
+
+prefix_rule(
+    pattern = ["mise"],
+    decision = "allow",
+    justification = "Tool version manager and task runner (fmt, verify, lint, test)",
+)
+
+prefix_rule(
+    pattern = [["scripts/verify.sh", "scripts/bootstrap.sh", "scripts/setup-buildbuddy.sh", "scripts/setup-android-sdk.sh", "scripts/setup-idb.sh", "scripts/install-hooks.sh", "scripts/check-generic-backend-leaks.sh"]],
+    decision = "allow",
+    justification = "Project setup and verification scripts",
+)
+
+prefix_rule(
+    pattern = ["shellcheck"],
+    decision = "allow",
+    justification = "Shell linter used by verify.sh",
+)
+
+prefix_rule(
+    pattern = ["actionlint"],
+    decision = "allow",
+    justification = "GitHub Actions linter used by verify.sh",
+)
