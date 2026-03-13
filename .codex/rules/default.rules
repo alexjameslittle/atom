@@ -2,6 +2,25 @@
 # Scoped to project-specific tooling — not a blanket allow-all.
 
 # ── Version control ──────────────────────────────────────────────────
+# Block force-pushes to main/master (forbidden > allow when rules overlap).
+prefix_rule(
+    pattern = ["git", "push", "--force"],
+    decision = "forbidden",
+    justification = "Never force-push; protect branch history",
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--force-with-lease"],
+    decision = "forbidden",
+    justification = "Never force-push; protect branch history",
+)
+
+prefix_rule(
+    pattern = ["git", "push", "-f"],
+    decision = "forbidden",
+    justification = "Never force-push; protect branch history",
+)
+
 prefix_rule(
     pattern = ["git"],
     decision = "allow",
