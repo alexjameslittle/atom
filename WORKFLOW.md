@@ -20,30 +20,21 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 https://github.com/alexjameslittle/atom .
-    if command -v mise >/dev/null 2>&1; then
-      scripts/bootstrap.sh && scripts/setup-buildbuddy.sh
-    fi
+    scripts/bootstrap.sh && scripts/setup-buildbuddy.sh
   before_remove: |
     cd elixir && mise exec -- mix workspace.before_remove
 agent:
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command:
-    codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh
-    --model gpt-5.4 app-server
+  command: >
+    codex
+    --config shell_environment_policy.inherit=all
+    --config model_reasoning_effort=xhigh
+    --model gpt-5.4
+    app-server
   approval_policy: never
-  thread_sandbox: workspace-write
-  turn_sandbox_policy:
-    type: workspaceWrite
-    writableRoots:
-      - "/Users/alexlittle/code/symphony-workspaces"
-      - "/var/tmp"
-    readOnlyAccess:
-      type: fullAccess
-    networkAccess: true
-    excludeTmpdirEnvVar: false
-    excludeSlashTmp: false
+  thread_sandbox: danger-full-access
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
