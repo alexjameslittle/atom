@@ -9,3 +9,5 @@ node_modules/
 user.bazelrc
 .mise.local.toml
 /.android/
+.bazel
+.xdg-state
