@@ -8,7 +8,8 @@ pub use crate::cng::{
     GenerationBackendRegistry, GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
 };
 pub use crate::deploy::{
-    ArtifactRecord, BackendAutomationSession, DeployBackend, DeployBackendRegistry,
+    ArtifactRecord, BackendAppSession, BackendDebugSession, DebugFrame, DebugSessionRequest,
+    DebugSessionResponse, DebugSessionState, DebugThread, DeployBackend, DeployBackendRegistry,
     DestinationCapability, DestinationDescriptor, EvaluationBundleManifest, EvaluationPlan,
     EvaluationStep, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
     SessionLaunchBehavior, StepRecord, ToolRunner, UiBounds, UiNode, UiSnapshot,
