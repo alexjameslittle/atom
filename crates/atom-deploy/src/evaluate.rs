@@ -3,7 +3,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
+    BackendAppSession, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
     ToolRunner,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
@@ -37,7 +37,7 @@ pub fn inspect_ui(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::InspectUi)?;
-    let mut session = AutomationSession::new(
+    let mut session = AppSession::new(
         repo_root,
         manifest,
         registry,
@@ -72,7 +72,7 @@ pub fn interact(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Interact)?;
-    let mut session = AutomationSession::new(
+    let mut session = AppSession::new(
         repo_root,
         manifest,
         registry,
@@ -103,7 +103,7 @@ pub fn capture_screenshot(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Screenshot)?;
-    let mut session = AutomationSession::new(
+    let mut session = AppSession::new(
         repo_root,
         manifest,
         registry,
@@ -137,7 +137,7 @@ pub fn capture_logs(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Logs)?;
-    let mut session = AutomationSession::new(
+    let mut session = AppSession::new(
         repo_root,
         manifest,
         registry,
@@ -171,7 +171,7 @@ pub fn capture_video(
     let descriptor =
         resolve_destination_descriptor(repo_root, registry, backend_id, destination_id, runner)?;
     require_capability(&descriptor, DestinationCapability::Video)?;
-    let mut session = AutomationSession::new(
+    let mut session = AppSession::new(
         repo_root,
         manifest,
         registry,
@@ -211,7 +211,7 @@ pub fn evaluate_run(
     require_plan_capabilities(&descriptor, &plan)?;
 
     let started_at_ms = timestamp_millis();
-    let mut session = AutomationSession::new(
+    let mut session = AppSession::new(
         repo_root,
         manifest,
         registry,
@@ -271,7 +271,7 @@ fn execute_step(
     index: usize,
     step: EvaluationStep,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let started_at_ms = timestamp_millis();
@@ -361,7 +361,7 @@ fn execute_step(
 fn execute_launch_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
     Ok(simple_step(index, "launch", started_at_ms))
@@ -370,7 +370,7 @@ fn execute_launch_step(
 fn execute_wait_for_ui_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
@@ -384,7 +384,7 @@ fn execute_interaction_step(
     index: usize,
     kind: &str,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     request: InteractionRequest,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
@@ -396,7 +396,7 @@ fn execute_screenshot_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
@@ -421,7 +421,7 @@ fn execute_inspect_ui_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
@@ -456,7 +456,7 @@ fn execute_start_video_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     name: Option<String>,
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
@@ -474,7 +474,7 @@ fn execute_start_video_step(
 fn execute_stop_video_step(
     index: usize,
     started_at_ms: u128,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
 ) -> AtomResult<StepRecord> {
     let output_path = session.stop_video()?;
@@ -498,7 +498,7 @@ fn execute_collect_logs_step(
     index: usize,
     started_at_ms: u128,
     artifacts_dir: &Utf8Path,
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     artifacts: &mut Vec<ArtifactRecord>,
     name: Option<String>,
     seconds: u64,
@@ -521,7 +521,7 @@ fn execute_collect_logs_step(
 }
 
 fn wait_for_ui(
-    session: &mut AutomationSession<'_>,
+    session: &mut AppSession<'_>,
     target_id: Option<&str>,
     text: Option<&str>,
     timeout_ms: u64,
@@ -697,15 +697,15 @@ fn load_evaluation_plan(path: &Utf8Path) -> AtomResult<EvaluationPlan> {
     })
 }
 
-struct AutomationSession<'a> {
+struct AppSession<'a> {
     descriptor: DestinationDescriptor,
-    backend: Box<dyn BackendAutomationSession + 'a>,
+    backend: Box<dyn BackendAppSession + 'a>,
 }
 
-impl<'a> AutomationSession<'a> {
+impl<'a> AppSession<'a> {
     #[expect(
         clippy::too_many_arguments,
-        reason = "Automation sessions are assembled from explicit repo, manifest, registry, destination, and launch inputs."
+        reason = "App sessions are assembled from explicit repo, manifest, registry, destination, and launch inputs."
     )]
     fn new(
         repo_root: &'a Utf8Path,
@@ -718,7 +718,7 @@ impl<'a> AutomationSession<'a> {
         launch_behavior: SessionLaunchBehavior,
     ) -> AtomResult<Self> {
         debug_assert_eq!(descriptor.id, destination_id);
-        let backend = automation_session_with_registry(
+        let backend = app_session_with_registry(
             registry,
             repo_root,
             manifest,
@@ -774,7 +774,7 @@ impl<'a> AutomationSession<'a> {
     }
 }
 
-fn automation_session_with_registry<'a>(
+fn app_session_with_registry<'a>(
     registry: &DeployBackendRegistry,
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
@@ -782,7 +782,7 @@ fn automation_session_with_registry<'a>(
     destination_id: &'a str,
     runner: &'a mut dyn ToolRunner,
     launch_behavior: SessionLaunchBehavior,
-) -> AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+) -> AtomResult<Box<dyn BackendAppSession + 'a>> {
     let backend = registry.get(backend_id).map(Box::as_ref).ok_or_else(|| {
         AtomError::with_path(
             AtomErrorCode::CliUsageError,
@@ -797,7 +797,7 @@ fn automation_session_with_registry<'a>(
             backend_id,
         ));
     }
-    backend.new_automation_session(repo_root, manifest, destination_id, runner, launch_behavior)
+    backend.new_app_session(repo_root, manifest, destination_id, runner, launch_behavior)
 }
 
 fn write_json<T: Serialize>(path: &Utf8Path, value: &T) -> AtomResult<()> {
@@ -845,7 +845,7 @@ mod tests {
     use std::fs;
 
     use atom_backends::{
-        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+        BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
         DestinationCapability, DestinationDescriptor, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
@@ -962,14 +962,14 @@ mod tests {
             Ok(())
         }
 
-        fn new_automation_session<'a>(
+        fn new_app_session<'a>(
             &self,
             _repo_root: &'a Utf8Path,
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
             _runner: &'a mut dyn ToolRunner,
             _launch_behavior: SessionLaunchBehavior,
-        ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
+        ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
             Ok(Box::new(FixtureSession::default()))
         }
     }
@@ -979,7 +979,7 @@ mod tests {
         snapshots: VecDeque<UiSnapshot>,
     }
 
-    impl BackendAutomationSession for FixtureSession {
+    impl BackendAppSession for FixtureSession {
         fn video_extension(&self) -> &'static str {
             "mp4"
         }

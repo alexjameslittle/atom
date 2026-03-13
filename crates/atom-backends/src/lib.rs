@@ -8,7 +8,8 @@ pub use crate::cng::{
     GenerationBackendRegistry, GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
 };
 pub use crate::deploy::{
-    ArtifactRecord, BackendAutomationSession, DeployBackend, DeployBackendRegistry,
+    ArtifactRecord, BackendAppSession, BackendDebugSession, DebugFrame, DebugSessionRequest,
+    DebugSessionResponse, DebugSessionState, DebugThread, DeployBackend, DeployBackendRegistry,
     DestinationCapability, DestinationDescriptor, EvaluationBundleManifest, EvaluationPlan,
     EvaluationStep, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
     SessionLaunchBehavior, StepRecord, ToolRunner, UiBounds, UiNode, UiSnapshot,
@@ -80,10 +81,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use atom_ffi::AtomErrorCode;
     use serde_json::json;
 
-    use super::{BackendDefinition, BackendRegistry, DestinationCapability, DestinationDescriptor};
+    use super::{
+        BackendDebugSession, BackendDefinition, BackendRegistry, DebugFrame, DebugSessionRequest,
+        DebugSessionResponse, DebugSessionState, DestinationCapability, DestinationDescriptor,
+    };
 
     struct FixtureBackend {
         id: &'static str,
@@ -153,6 +159,82 @@ mod tests {
                 "debug_state": "ready",
                 "capabilities": ["launch"],
             })
+        );
+    }
+
+    #[test]
+    fn debug_session_wire_payloads_use_stable_snake_case_tags() {
+        let request = DebugSessionRequest::ListFrames {
+            thread_id: "thread-1".to_owned(),
+        };
+        let response = DebugSessionResponse::Frames {
+            thread_id: "thread-1".to_owned(),
+            frames: vec![DebugFrame {
+                index: 0,
+                function: "demo::main".to_owned(),
+                source_path: Some("src/main.rs".to_owned()),
+                line: Some(42),
+                column: Some(7),
+            }],
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).expect("request should encode"),
+            json!({
+                "kind": "list_frames",
+                "thread_id": "thread-1",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&response).expect("response should encode"),
+            json!({
+                "kind": "frames",
+                "thread_id": "thread-1",
+                "frames": [{
+                    "index": 0,
+                    "function": "demo::main",
+                    "source_path": "src/main.rs",
+                    "line": 42,
+                    "column": 7,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn debug_session_wait_for_stop_forwards_timeout_millis() {
+        struct RecordingDebugSession {
+            requests: Vec<DebugSessionRequest>,
+        }
+
+        impl BackendDebugSession for RecordingDebugSession {
+            fn execute(
+                &mut self,
+                request: DebugSessionRequest,
+            ) -> atom_ffi::AtomResult<DebugSessionResponse> {
+                self.requests.push(request);
+                Ok(DebugSessionResponse::Stopped {
+                    state: DebugSessionState::Stopped,
+                })
+            }
+        }
+
+        let mut session = RecordingDebugSession {
+            requests: Vec::new(),
+        };
+        let response = session
+            .wait_for_stop(Duration::from_millis(250))
+            .expect("wait_for_stop should delegate");
+
+        assert_eq!(
+            session.requests,
+            vec![DebugSessionRequest::WaitForStop { timeout_ms: 250 }]
+        );
+        assert_eq!(
+            response,
+            DebugSessionResponse::Stopped {
+                state: DebugSessionState::Stopped,
+            }
         );
     }
 }

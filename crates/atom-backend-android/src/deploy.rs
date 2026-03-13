@@ -4,7 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+    BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
     DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
     LaunchMode, SessionLaunchBehavior, ToolRunner, UiSnapshot,
 };
@@ -55,7 +55,7 @@ struct VideoCapture {
     serial: String,
 }
 
-struct AndroidAutomationSession<'a> {
+struct AndroidAppSession<'a> {
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
     runner: &'a mut dyn ToolRunner,
@@ -155,15 +155,15 @@ impl DeployBackend for AndroidDeployBackend {
         stop_android(repo_root, manifest, requested_destination, runner)
     }
 
-    fn new_automation_session<'a>(
+    fn new_app_session<'a>(
         &self,
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
         launch_behavior: SessionLaunchBehavior,
-    ) -> AtomResult<Box<dyn BackendAutomationSession + 'a>> {
-        Ok(Box::new(AndroidAutomationSession {
+    ) -> AtomResult<Box<dyn BackendAppSession + 'a>> {
+        Ok(Box::new(AndroidAppSession {
             repo_root,
             manifest,
             runner,
@@ -175,18 +175,18 @@ impl DeployBackend for AndroidDeployBackend {
     }
 }
 
-impl AndroidAutomationSession<'_> {
+impl AndroidAppSession<'_> {
     fn active_launch(&self) -> AtomResult<AndroidAppLaunch> {
         self.launch.clone().ok_or_else(|| {
             AtomError::new(
                 AtomErrorCode::InternalBug,
-                "automation session expected a launch after ensure_launched",
+                "app session expected a launch after ensure_launched",
             )
         })
     }
 }
 
-impl BackendAutomationSession for AndroidAutomationSession<'_> {
+impl BackendAppSession for AndroidAppSession<'_> {
     fn video_extension(&self) -> &'static str {
         "mp4"
     }

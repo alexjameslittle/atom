@@ -4,7 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
+    BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
     DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
     LaunchMode, ScreenInfo, SessionLaunchBehavior, ToolRunner, UiBounds, UiNode, UiSnapshot,
 };
@@ -58,7 +58,7 @@ struct VideoCapture {
     child: Child,
 }
 
-struct IosAutomationSession<'a> {
+struct IosAppSession<'a> {
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
     runner: &'a mut dyn ToolRunner,
@@ -145,15 +145,15 @@ impl DeployBackend for IosDeployBackend {
         stop_ios(repo_root, manifest, requested_destination, runner)
     }
 
-    fn new_automation_session<'a>(
+    fn new_app_session<'a>(
         &self,
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
         launch_behavior: SessionLaunchBehavior,
-    ) -> AtomResult<Box<dyn BackendAutomationSession + 'a>> {
-        Ok(Box::new(IosAutomationSession {
+    ) -> AtomResult<Box<dyn BackendAppSession + 'a>> {
+        Ok(Box::new(IosAppSession {
             repo_root,
             manifest,
             runner,
@@ -165,18 +165,18 @@ impl DeployBackend for IosDeployBackend {
     }
 }
 
-impl IosAutomationSession<'_> {
+impl IosAppSession<'_> {
     fn active_launch(&self) -> AtomResult<IosAppLaunch> {
         self.launch.clone().ok_or_else(|| {
             AtomError::new(
                 AtomErrorCode::InternalBug,
-                "automation session expected a launch after ensure_launched",
+                "app session expected a launch after ensure_launched",
             )
         })
     }
 }
 
-impl BackendAutomationSession for IosAutomationSession<'_> {
+impl BackendAppSession for IosAppSession<'_> {
     fn video_extension(&self) -> &'static str {
         "mov"
     }
