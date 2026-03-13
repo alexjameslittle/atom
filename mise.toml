@@ -5,9 +5,10 @@ rust = "1.92.0"
 java = "temurin-21"
 actionlint = "1.7.11"
 shellcheck = "0.11.0"
+erlang = "28.1"
+elixir = "1.19.5-otp-28"
 
 # Android SDK env vars (ANDROID_HOME, ANDROID_NDK_HOME, PATH additions) are
 # NOT set here because Bazel's android_sdk_repository extension eagerly
 # resolves when ANDROID_HOME is present, breaking non-Android builds.
 # Run scripts/setup-android-sdk.sh to create a .mise.local.toml with them.
-
