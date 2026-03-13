@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use atom_ffi::AtomResult;
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -250,11 +252,90 @@ pub struct EvaluationBundleManifest {
     pub artifacts: Vec<ArtifactRecord>,
 }
 
+// Debug-session requests live in the backend contract crate so later LLDB/JVM orchestration can
+// stay behind backend implementations while atom-deploy remains a generic coordinator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugSessionState {
+    Running,
+    Stopped,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugThread {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebugFrame {
+    pub index: usize,
+    pub function: String,
+    #[serde(default)]
+    pub source_path: Option<String>,
+    #[serde(default)]
+    pub line: Option<u32>,
+    #[serde(default)]
+    pub column: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DebugSessionRequest {
+    Attach,
+    InspectState,
+    WaitForStop { timeout_ms: u64 },
+    Pause,
+    Resume,
+    ListThreads,
+    ListFrames { thread_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DebugSessionResponse {
+    Attached {
+        state: DebugSessionState,
+    },
+    State {
+        state: DebugSessionState,
+    },
+    Stopped {
+        state: DebugSessionState,
+    },
+    Paused,
+    Resumed,
+    Threads {
+        threads: Vec<DebugThread>,
+    },
+    Frames {
+        thread_id: String,
+        frames: Vec<DebugFrame>,
+    },
+}
+
 #[expect(
     clippy::missing_errors_doc,
-    reason = "Trait methods document the shared automation session contract once at the trait boundary."
+    reason = "Trait methods document the shared debug-session contract once at the trait boundary."
 )]
-pub trait BackendAutomationSession {
+pub trait BackendDebugSession {
+    fn execute(&mut self, request: DebugSessionRequest) -> AtomResult<DebugSessionResponse>;
+
+    fn wait_for_stop(&mut self, timeout: Duration) -> AtomResult<DebugSessionResponse> {
+        self.execute(DebugSessionRequest::WaitForStop {
+            timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+        })
+    }
+}
+
+#[expect(
+    clippy::missing_errors_doc,
+    reason = "Trait methods document the shared app-session contract once at the trait boundary."
+)]
+pub trait BackendAppSession {
     fn video_extension(&self) -> &'static str;
 
     fn ensure_launched(&mut self) -> AtomResult<()>;
@@ -274,6 +355,10 @@ pub trait BackendAutomationSession {
     fn stop_video(&mut self) -> AtomResult<Utf8PathBuf>;
 
     fn shutdown_video(&mut self) -> AtomResult<()>;
+
+    fn debug_session(&mut self) -> Option<&mut dyn BackendDebugSession> {
+        None
+    }
 }
 
 #[expect(
@@ -306,14 +391,14 @@ pub trait DeployBackend: BackendDefinition {
         runner: &mut dyn ToolRunner,
     ) -> AtomResult<()>;
 
-    fn new_automation_session<'a>(
+    fn new_app_session<'a>(
         &self,
         repo_root: &'a Utf8Path,
         manifest: &'a NormalizedManifest,
         destination_id: &'a str,
         runner: &'a mut dyn ToolRunner,
         launch_behavior: SessionLaunchBehavior,
-    ) -> AtomResult<Box<dyn BackendAutomationSession + 'a>>;
+    ) -> AtomResult<Box<dyn BackendAppSession + 'a>>;
 }
 
 pub type DeployBackendRegistry = BackendRegistry<Box<dyn DeployBackend>>;

@@ -762,8 +762,8 @@ mod tests {
     };
 
     use atom_backends::{
-        BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-        LaunchMode, SessionLaunchBehavior, ToolRunner,
+        BackendAppSession, BackendDefinition, DeployBackend, DeployBackendRegistry, LaunchMode,
+        SessionLaunchBehavior, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -821,15 +821,15 @@ mod tests {
             Ok(())
         }
 
-        fn new_automation_session<'a>(
+        fn new_app_session<'a>(
             &self,
             _repo_root: &'a Utf8Path,
             _manifest: &'a NormalizedManifest,
             _destination_id: &'a str,
             _runner: &'a mut dyn ToolRunner,
             _launch_behavior: SessionLaunchBehavior,
-        ) -> atom_ffi::AtomResult<Box<dyn BackendAutomationSession + 'a>> {
-            unreachable!("CLI tests do not construct automation sessions")
+        ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
+            unreachable!("CLI tests do not construct app sessions")
         }
     }
 
