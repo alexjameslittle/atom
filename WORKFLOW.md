@@ -28,11 +28,8 @@ agent:
   max_turns: 20
 codex:
   command: >
-    codex
-    --config shell_environment_policy.inherit=all
-    --config model_reasoning_effort=xhigh
-    --model gpt-5.4
-    app-server
+    codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh
+    --model gpt-5.4 app-server
   approval_policy: never
   thread_sandbox: danger-full-access
 ---
