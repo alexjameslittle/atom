@@ -3,7 +3,7 @@ use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 
-use crate::{BackendDefinition, BackendRegistry};
+use crate::{BackendDefinition, BackendDoctorReport, BackendRegistry, DoctorSystem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchMode {
@@ -282,6 +282,10 @@ pub trait BackendAutomationSession {
 )]
 pub trait DeployBackend: BackendDefinition {
     fn is_enabled(&self, manifest: &NormalizedManifest) -> bool;
+
+    fn doctor(&self, _repo_root: &Utf8Path, _system: &dyn DoctorSystem) -> BackendDoctorReport {
+        BackendDoctorReport::new(self.platform(), false, Vec::new())
+    }
 
     fn list_destinations(
         &self,

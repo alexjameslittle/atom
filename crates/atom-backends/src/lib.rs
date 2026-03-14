@@ -1,5 +1,6 @@
 mod cng;
 mod deploy;
+mod doctor;
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 
@@ -12,6 +13,10 @@ pub use crate::deploy::{
     DestinationCapability, DestinationDescriptor, EvaluationBundleManifest, EvaluationPlan,
     EvaluationStep, InteractionRequest, InteractionResult, LaunchMode, ScreenInfo,
     SessionLaunchBehavior, StepRecord, ToolRunner, UiBounds, UiNode, UiSnapshot,
+};
+pub use crate::doctor::{
+    BackendDoctorReport, CapturedCommand, CommandInvocation, DoctorCheck, DoctorSeverity,
+    DoctorStatus, DoctorSystem, ProcessDoctorSystem, combined_command_output, first_version_token,
 };
 
 pub trait BackendDefinition {

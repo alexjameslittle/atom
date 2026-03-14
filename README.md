@@ -47,12 +47,17 @@ The hello-world app now proves:
 
 ```sh
 ./scripts/bootstrap.sh
+bazelisk run //:atom -- doctor
 mise run verify
 ```
 
 The Git hooks in [`.githooks`](.githooks) are installed automatically by the bootstrap task, and
 GitHub PR verification is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Rust
 formatting, Clippy, and tests are all executed through Bazel entrypoints.
+
+Use `atom doctor` to confirm Bazel, Rust, Xcode, Android, and Java prerequisites before digging
+through Bazel analysis failures. Android-specific problems stay as warnings so iOS-only macOS
+machines can still validate their environment quickly.
 
 ## Standalone CLI Artifact
 
