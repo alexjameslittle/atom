@@ -311,8 +311,24 @@ where
         return Ok(version_output(cwd));
     }
 
-    let cli = Cli::try_parse_from(&args)
-        .map_err(|error| AtomError::new(AtomErrorCode::CliUsageError, error.to_string()))?;
+    let cli = match Cli::try_parse_from(&args) {
+        Ok(cli) => cli,
+        Err(error) => {
+            return match error.kind() {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
+                    Ok(CommandOutput {
+                        stdout: error.to_string().into_bytes(),
+                        stderr: Vec::new(),
+                        exit_code: 0,
+                    })
+                }
+                _ => Err(AtomError::new(
+                    AtomErrorCode::CliUsageError,
+                    error.to_string(),
+                )),
+            };
+        }
+    };
     let mut runner = ProcessRunner;
     execute(&cli, cwd, &mut runner)
 }
@@ -947,6 +963,17 @@ mod tests {
         let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let error = run_from_args(["atom", "unknown"], &cwd).expect_err("invalid command");
         assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn help_flag_returns_success_output() {
+        let directory = tempdir().expect("tempdir");
+        let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let output = run_from_args(["atom", "--help"], &cwd).expect("help should succeed");
+
+        assert_eq!(output.exit_code, 0);
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: atom"));
+        assert!(output.stderr.is_empty());
     }
 
     #[test]
