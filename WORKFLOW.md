@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "atom-37f58834c300"
+  project_slug: "atom-cross-platform-4ab83d713483"
   active_states:
     - Todo
     - In Progress
