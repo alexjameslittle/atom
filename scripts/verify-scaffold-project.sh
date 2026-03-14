@@ -17,12 +17,13 @@ fi
 tmp_parent=${ATOM_VERIFY_TMP_ROOT:-${TMPDIR:-/tmp}}
 mkdir -p "$tmp_parent"
 scratch_root=$(mktemp -d "$tmp_parent/atom-scaffold.XXXXXX")
-trap 'rm -rf "$scratch_root"' EXIT INT TERM
 
 project_name=ci_test_app
 project_root="$scratch_root/$project_name"
 atom_bin="$repo_root/bazel-bin/crates/atom-cli/atom"
 plan_path="$scratch_root/$project_name.prebuild.bin"
+
+trap '(cd "$project_root" 2>/dev/null && bazelisk shutdown 2>/dev/null) || true; rm -rf "$scratch_root"' EXIT INT TERM
 
 bazelisk build //:atom >/dev/null
 (cd "$scratch_root" && "$atom_bin" new "$project_name" >/dev/null)
