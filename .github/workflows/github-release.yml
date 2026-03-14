@@ -38,16 +38,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          binary="dist/${ATOM_BINARY_NAME}"
-          chmod 755 "$binary"
-          shasum -a 256 "$binary" > "${binary}.sha256"
-          ls -lh "$binary" "${binary}.sha256"
+          mkdir -p release
+          cp "dist/${ATOM_BINARY_NAME}" "release/${ATOM_BINARY_NAME}"
+          chmod 755 "release/${ATOM_BINARY_NAME}"
+          (
+            cd release
+            shasum -a 256 "${ATOM_BINARY_NAME}" > "${ATOM_BINARY_NAME}.sha256"
+            tar -czf "${ATOM_BINARY_NAME}.tar.gz" "${ATOM_BINARY_NAME}"
+            ls -lh \
+              "${ATOM_BINARY_NAME}" \
+              "${ATOM_BINARY_NAME}.sha256" \
+              "${ATOM_BINARY_NAME}.tar.gz"
+          )
 
       - name: Smoke test release binary
         shell: bash
         run: |
           set -euo pipefail
-          "./dist/${ATOM_BINARY_NAME}" --help > /tmp/atom-help.txt
+          "./release/${ATOM_BINARY_NAME}" --help > /tmp/atom-help.txt
           sed -n '1,20p' /tmp/atom-help.txt
 
       - name: Publish prerelease
@@ -59,5 +67,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/${{ env.ATOM_BINARY_NAME }}
-            dist/${{ env.ATOM_BINARY_NAME }}.sha256
+            release/${{ env.ATOM_BINARY_NAME }}
+            release/${{ env.ATOM_BINARY_NAME }}.sha256
+            release/${{ env.ATOM_BINARY_NAME }}.tar.gz
