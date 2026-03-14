@@ -1,6 +1,7 @@
 name: CLI Binary
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
@@ -17,6 +18,8 @@ concurrency:
 env:
   BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  ATOM_ARTIFACT_NAME: atom-macos-arm64
+  ATOM_BINARY_NAME: atom-darwin-arm64
 
 jobs:
   build-atom-macos-arm64:
@@ -40,23 +43,23 @@ jobs:
           set -euo pipefail
           artifact=$(bazelisk cquery //crates/atom-cli:atom --output=files | tail -n 1)
           mkdir -p dist
-          cp "$artifact" dist/atom
-          chmod 755 dist/atom
-          strip -S -x dist/atom || true
-          file dist/atom
-          ls -lh dist/atom
+          cp "$artifact" "dist/${ATOM_BINARY_NAME}"
+          chmod 755 "dist/${ATOM_BINARY_NAME}"
+          strip -S -x "dist/${ATOM_BINARY_NAME}" || true
+          file "dist/${ATOM_BINARY_NAME}"
+          ls -lh "dist/${ATOM_BINARY_NAME}"
 
       - name: Smoke test standalone binary
         shell: bash
         run: |
           set -euo pipefail
-          ./dist/atom --help > /tmp/atom-help.txt
+          "./dist/${ATOM_BINARY_NAME}" --help > /tmp/atom-help.txt
           sed -n '1,20p' /tmp/atom-help.txt
 
       - name: Upload atom artifact
         uses: actions/upload-artifact@v4
         with:
-          name: atom-macos-arm64
-          path: dist/atom
+          name: ${{ env.ATOM_ARTIFACT_NAME }}
+          path: dist/${{ env.ATOM_BINARY_NAME }}
           if-no-files-found: error
           compression-level: 0

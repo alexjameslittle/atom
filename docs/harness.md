@@ -41,8 +41,10 @@ The verification harness runs:
 
 CI runs the main verification matrix in [../.github/workflows/ci.yml](../.github/workflows/ci.yml)
 and a standalone CLI artifact workflow in
-[../.github/workflows/cli-binary.yml](../.github/workflows/cli-binary.yml), both sharing the same
-toolchain setup action.
+[../.github/workflows/cli-binary.yml](../.github/workflows/cli-binary.yml), plus a tag-triggered
+GitHub prerelease workflow in
+[../.github/workflows/github-release.yml](../.github/workflows/github-release.yml), all sharing the
+same toolchain setup action.
 
 The verification matrix currently runs:
 
@@ -50,10 +52,14 @@ The verification matrix currently runs:
 - **test (linux)**: host tests, prebuild dry-run
 - **build example apps (android)** (Linux): prebuild plus Android example app build
 - **build atom macOS arm64 binary** (macOS): Bazel build plus standalone CLI artifact upload
+- **GitHub Release** (macOS on `v*` tags): reuses the standalone CLI build and publishes prerelease
+  assets plus release notes
 
 All jobs must pass before merge.
 
 - [../.github/workflows/ci.yml](../.github/workflows/ci.yml) defines the CI matrix.
+- [../.github/workflows/github-release.yml](../.github/workflows/github-release.yml) defines
+  version-tag prerelease publishing.
 - [../.github/dependabot.yml](../.github/dependabot.yml) keeps workflow dependencies moving.
 - [../.github/settings.yml](../.github/settings.yml) captures the intended branch protection policy
   for repositories that apply GitHub settings from code.
