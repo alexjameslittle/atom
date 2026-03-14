@@ -45,3 +45,15 @@ fn run_accepts_a_device_flag_after_platform_flag() {
 
     assert_ne!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
 }
+
+#[test]
+fn help_flag_returns_usage_output() {
+    let directory = tempdir().expect("tempdir");
+    let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+
+    let output = run_from_args(["atom", "--help"], &root).expect("help should succeed");
+
+    assert_eq!(output.exit_code, 0);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: atom"));
+    assert!(output.stderr.is_empty());
+}
