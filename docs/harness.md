@@ -25,19 +25,20 @@ Android readiness probes, and only critical toolchain failures make it exit non-
 - `pre-commit` runs formatting and repository-level linters.
 - `pre-push` runs lint plus host tests and the prebuild dry-run. Example app builds rely on CI.
 - `mise run verify` is the canonical local validation command.
+- When invoking repo verification scripts directly, prefix them with `mise exec --`.
 
 The verification harness runs:
 
-- `bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation //...` (clippy via
+- `mise exec -- bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation //...`
+  (clippy via `aspect_rules_lint`)
+- `mise exec -- bazelisk run //:format.check` (rustfmt, ktfmt, swiftformat, buildifier, prettier via
   `aspect_rules_lint`)
-- `bazelisk run //:format.check` (rustfmt, ktfmt, swiftformat, buildifier, prettier via
-  `aspect_rules_lint`)
-- `bazelisk test //...`
-- `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
+- `mise exec -- bazelisk test //...`
+- `mise exec -- bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
 - `sh scripts/verify-scaffold-project.sh` (builds the CLI binary, scaffolds a temp project, points
   it at the checkout under test, and verifies the dry-run plan includes iOS + Android outputs)
-- `shellcheck`
-- `actionlint`
+- `mise exec -- shellcheck`
+- `mise exec -- actionlint`
 
 ## GitHub Guardrails
 

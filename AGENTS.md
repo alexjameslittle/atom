@@ -77,7 +77,7 @@ bloating agent context.
 - Format: `mise run fmt`
 - Verify: `mise run verify`
 - Smoke prebuild:
-  `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
+  `mise exec -- bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
 
 Local and CI verification must stay aligned. If you add a new required check, add it to
 [`scripts/verify.sh`](scripts/verify.sh).
