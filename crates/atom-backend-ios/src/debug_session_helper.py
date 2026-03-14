@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import time
+from typing import Dict, Optional
 
 import lldb
 
@@ -15,7 +16,13 @@ class HelperError(Exception):
 
 
 class DebugSession:
-    def __init__(self, repo_root: str, destination_id: str, bundle_id: str, dsym_bundle: str | None) -> None:
+    def __init__(
+        self,
+        repo_root: str,
+        destination_id: str,
+        bundle_id: str,
+        dsym_bundle: Optional[str],
+    ) -> None:
         self.repo_root = repo_root
         self.destination_id = destination_id
         self.bundle_id = bundle_id
@@ -23,7 +30,7 @@ class DebugSession:
         self.debugger = None
         self.attached = False
 
-    def handle(self, request: dict) -> dict:
+    def handle(self, request: Dict[str, object]) -> Dict[str, object]:
         kind = request.get("kind")
         if kind == "attach":
             return self.attach()
@@ -50,23 +57,16 @@ class DebugSession:
         self.debugger.SkipLLDBInitFiles(True)
         self.debugger.SetAsync(True)
 
-        for command in self.debugserver_bootstrap_commands():
-            self.run_command(command)
-        if self.dsym_bundle:
-            self.run_command(f'target symbols add "{self.dsym_bundle}"')
-        self.run_command("run")
+        process_id = self.wait_for_app_process(timeout_seconds=5.0)
+        self.run_command(f"process attach --pid {process_id}")
         self.attached = True
-        self.wait_for_state_change(2.0)
+        self.wait_for_state("stopped", timeout_seconds=2.0)
         return {"kind": "attached", "state": self.state_value()}
 
     def wait_for_stop(self, timeout_ms: int) -> dict:
         self.ensure_attached()
-        deadline = time.time() + (timeout_ms / 1000.0)
-        while time.time() < deadline:
-            if self.state_value() == "stopped":
-                return {"kind": "stopped", "state": "stopped"}
-            time.sleep(0.1)
-        raise HelperError("automation_unavailable", "timed out waiting for the iOS debugger to stop")
+        self.wait_for_state("stopped", timeout_seconds=timeout_ms / 1000.0)
+        return {"kind": "stopped", "state": "stopped"}
 
     def pause(self) -> dict:
         self.ensure_attached()
@@ -75,7 +75,7 @@ class DebugSession:
         error = self.process().Stop()
         if error.Fail():
             raise HelperError("external_tool_failed", error.GetCString() or "failed to interrupt the iOS process")
-        self.wait_for_stop(5_000)
+        self.wait_for_state("stopped", timeout_seconds=5.0)
         return {"kind": "paused"}
 
     def resume(self) -> dict:
@@ -85,7 +85,7 @@ class DebugSession:
         error = self.process().Continue()
         if error.Fail():
             raise HelperError("external_tool_failed", error.GetCString() or "failed to continue the iOS process")
-        self.wait_for_state_change(1.0)
+        self.wait_for_state("running", timeout_seconds=2.0)
         return {"kind": "resumed"}
 
     def list_threads(self) -> dict:
@@ -104,7 +104,7 @@ class DebugSession:
             )
         return {"kind": "threads", "threads": threads}
 
-    def list_frames(self, thread_id: str | None) -> dict:
+    def list_frames(self, thread_id: Optional[str]) -> dict:
         thread = self.resolve_thread(thread_id)
         frames = []
         for index in range(thread.GetNumFrames()):
@@ -141,7 +141,7 @@ class DebugSession:
             )
         return {"kind": "frames", "thread_id": str(thread.GetThreadID()), "frames": frames}
 
-    def resolve_thread(self, thread_id: str | None):
+    def resolve_thread(self, thread_id: Optional[str]):
         process = self.require_stopped_process()
         if thread_id is None:
             thread = process.GetSelectedThread()
@@ -167,18 +167,22 @@ class DebugSession:
         if not self.attached:
             raise HelperError("automation_unavailable", "the iOS debugger session is not attached")
 
-    def wait_for_state_change(self, timeout_seconds: float) -> None:
+    def wait_for_state(self, expected: str, timeout_seconds: float) -> None:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            if self.state_value() in ("running", "stopped"):
+            if self.state_value() == expected:
                 return
-            time.sleep(0.05)
+            self.pump_process_events(wait_seconds=1)
+        if self.state_value() == expected:
+            return
+        raise HelperError("automation_unavailable", f"timed out waiting for the iOS debugger to become {expected}")
 
     def state_value(self) -> str:
         if not self.attached or self.debugger is None:
             return "unknown"
+        self.pump_process_events(wait_seconds=0)
         state = self.process().GetState()
-        if state == lldb.eStateStopped:
+        if state in (lldb.eStateStopped, lldb.eStateCrashed, lldb.eStateSuspended):
             return "stopped"
         if state in (
             lldb.eStateRunning,
@@ -201,6 +205,41 @@ class DebugSession:
             raise HelperError("external_tool_failed", "LLDB did not expose an iOS process")
         return process
 
+    def wait_for_app_process(self, timeout_seconds: float) -> int:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            process_id = self.lookup_app_process()
+            if process_id is not None:
+                return process_id
+            time.sleep(0.1)
+        raise HelperError(
+            "automation_unavailable",
+            f"timed out waiting for the iOS simulator app process for {self.bundle_id}",
+        )
+
+    def lookup_app_process(self) -> Optional[int]:
+        result = subprocess.run(
+            ["xcrun", "simctl", "spawn", self.destination_id, "launchctl", "list"],
+            cwd=self.repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip() or "failed to inspect simulator processes"
+            raise HelperError("external_tool_failed", message)
+        for line in result.stdout.splitlines():
+            if f"UIKitApplication:{self.bundle_id}" not in line:
+                continue
+            columns = line.split(None, 2)
+            if len(columns) < 3:
+                continue
+            process_id = columns[0]
+            if process_id.isdigit():
+                return int(process_id)
+        return None
+
     def run_command(self, command: str) -> None:
         result = lldb.SBCommandReturnObject()
         self.debugger.GetCommandInterpreter().HandleCommand(command, result)
@@ -209,34 +248,22 @@ class DebugSession:
         message = result.GetError() or result.GetOutput() or f"LLDB command failed: {command}"
         raise HelperError("external_tool_failed", message.strip())
 
-    def debugserver_bootstrap_commands(self) -> list[str]:
-        command = [
-            "idb",
-            "debugserver",
-            "start",
-            "--udid",
-            self.destination_id,
-            self.bundle_id,
-        ]
-        result = subprocess.run(
-            command,
-            cwd=self.repo_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            message = result.stderr.strip() or result.stdout.strip() or "idb debugserver start failed"
-            raise HelperError("external_tool_failed", message)
-        commands = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if not commands:
-            raise HelperError("external_tool_failed", "idb debugserver start did not return LLDB bootstrap commands")
-        return commands
+    def pump_process_events(self, wait_seconds: int) -> None:
+        if self.debugger is None:
+            return
+        listener = self.debugger.GetListener()
+        event = lldb.SBEvent()
+        if wait_seconds > 0 and listener.WaitForEvent(wait_seconds, event):
+            self.consume_process_event(event)
+        while listener.GetNextEvent(event):
+            self.consume_process_event(event)
+
+    def consume_process_event(self, event) -> None:
+        if lldb.SBProcess.EventIsProcessEvent(event):
+            lldb.SBProcess.GetStateFromEvent(event)
 
     def cleanup(self) -> None:
         self.cleanup_debugger()
-        self.stop_debugserver()
 
     def cleanup_debugger(self) -> None:
         if self.debugger is None:
@@ -247,6 +274,7 @@ class DebugSession:
             process = None
         if process is not None:
             try:
+                self.pump_process_events(wait_seconds=0)
                 if process.GetState() not in (
                     lldb.eStateDetached,
                     lldb.eStateExited,
@@ -258,15 +286,6 @@ class DebugSession:
         lldb.SBDebugger.Destroy(self.debugger)
         self.debugger = None
         self.attached = False
-
-    def stop_debugserver(self) -> None:
-        subprocess.run(
-            ["idb", "debugserver", "stop", "--udid", self.destination_id],
-            cwd=self.repo_root,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
 
 
 def main() -> int:

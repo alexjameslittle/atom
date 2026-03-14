@@ -1040,12 +1040,7 @@ fn prepare_ios_debugger_launch(
         &artifacts.installable_app,
         true,
     )?;
-    let _ = run_idb(
-        runner,
-        repo_root,
-        &destination_id,
-        &["terminate".to_owned(), bundle_id.clone()],
-    );
+    launch_installed_ios_app(runner, repo_root, &destination_id, &bundle_id)?;
 
     Ok((
         IosAppLaunch {
