@@ -1,0 +1,6 @@
+sh_test(
+    name = "install_sh_test",
+    size = "small",
+    srcs = ["test_install_sh.sh"],
+    data = ["//:install.sh"],
+)
