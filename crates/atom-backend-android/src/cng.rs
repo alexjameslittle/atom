@@ -2,7 +2,7 @@ use atom_backends::{
     BackendContribution, BackendDefinition, BackendPlan, GenerationBackend,
     GenerationBackendRegistry, GenerationPlan,
 };
-use atom_cng::write_generated_file;
+use atom_cng::{render_rust_module_exports, write_generated_file};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::{
     AndroidConfig, AppConfig, BuildConfig, ConfigPluginRequest, NormalizedManifest, metadata_target,
@@ -138,6 +138,11 @@ fn render_android_build_file(
         .iter()
         .map(|m| metadata_target(&m.request.target_label, "_android_srcs"))
         .collect::<AtomResult<_>>()?;
+    let rust_module_labels: Vec<&str> = modules
+        .iter()
+        .filter(|module| module.manifest.kind == atom_modules::ModuleKind::Rust)
+        .map(|module| module.request.target_label.as_str())
+        .collect();
     render_template(
         "android/BUILD.bazel",
         context! {
@@ -145,6 +150,7 @@ fn render_android_build_file(
             entry_crate_label => &app.entry_crate_label,
             source_root => source_root.as_str(),
             module_labels,
+            rust_module_labels,
             package_name,
             resource_files,
             target_sdk => android.target_sdk.unwrap_or_default(),
@@ -195,12 +201,19 @@ fn render_kotlin_main_activity(app: &AppConfig, android: &AndroidConfig) -> Atom
     )
 }
 
-fn render_android_runtime_jni(app: &AppConfig, android: &AndroidConfig) -> AtomResult<String> {
+fn render_android_runtime_jni(
+    repo_root: &Utf8Path,
+    app: &AppConfig,
+    android: &AndroidConfig,
+    modules: &[ResolvedModule],
+) -> AtomResult<String> {
+    let module_exports = render_rust_module_exports(repo_root, modules)?;
     render_template(
         "android/atom_runtime_jni.rs",
         context! {
             entry_crate_name => &app.entry_crate_name,
             jni_prefix => jni_prefix(android.application_id.as_deref().unwrap_or_default()),
+            module_exports,
         },
     )
 }
@@ -435,7 +448,7 @@ fn emit_android_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomRe
         &repo_root
             .join(&android.plan.generated_root)
             .join("atom_runtime_jni.rs"),
-        &render_android_runtime_jni(&plan.manifest.app, android_config)?,
+        &render_android_runtime_jni(repo_root, &plan.manifest.app, android_config, &plan.modules)?,
     )?;
     let package_dir = android
         .plan

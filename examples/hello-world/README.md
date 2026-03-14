@@ -41,7 +41,7 @@ deterministic text field, button, and visible state changes through app-owned Sw
 while `hello_atom_plain` omits that module to prove launch, inspection, and evidence capture work
 without any demo-specific UI.
 
-The app crate opts into runtime modules and plugins in Rust:
+The app crate opts into runtime module lifecycle hooks and plugins in Rust:
 
 ```rust
 pub fn atom_runtime_config() -> atom_runtime::RuntimeConfig {
@@ -60,15 +60,17 @@ pub fn atom_runtime_config() -> atom_runtime::RuntimeConfig {
 }
 ```
 
-`device_info::runtime_module()` registers a Rust-backed module method with the runtime kernel, and
-the example `plugins/lifecycle_logger` crate uses the shared `PluginContext` API to:
+`device_info::runtime_module()` only registers module lifecycle hooks with the runtime kernel, and
+the example `plugins/lifecycle_logger` crate uses the shared `PluginContext` API plus the module
+crate's direct Rust API to:
 
 - write runtime state
 - run an async warmup task once the runtime reaches `Running`
-- call the `device_info.get` module method through the runtime
+- call `device_info::get(ctx, GetDeviceInfoRequest {})` directly from Rust
 
-That keeps the proof of state changes, async work, and module calls inside the same public runtime
-API surface used by first-party and third-party plugins.
+That keeps the proof of state changes, async work, and module access inside the same public Rust API
+surface used by first-party and third-party plugins, while the generated iOS/Android bridge keeps
+FlatBuffer serialization at the native FFI edge.
 
 Run it from the repository root:
 

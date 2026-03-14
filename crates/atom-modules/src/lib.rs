@@ -37,6 +37,7 @@ pub struct ModuleManifest {
     pub kind: ModuleKind,
     pub target_label: String,
     pub id: String,
+    pub rust_crate_name: Option<String>,
     pub atom_api_level: u32,
     pub min_atom_version: Option<String>,
     pub ios_min_deployment_target: Option<String>,
@@ -153,6 +154,7 @@ mod tests {
   "kind": "atom_module",
   "target_label": "//modules/device_info:device_info",
   "id": "device_info",
+  "rust_crate_name": "device_info",
   "atom_api_level": 1,
   "min_atom_version": "0.1.0",
   "ios_min_deployment_target": "17.0",
@@ -186,6 +188,7 @@ mod tests {
 
         assert_eq!(manifest.kind, ModuleKind::Rust);
         assert_eq!(manifest.id, "device_info");
+        assert_eq!(manifest.rust_crate_name.as_deref(), Some("device_info"));
         assert_eq!(manifest.atom_api_level, 1);
         assert_eq!(manifest.min_atom_version.as_deref(), Some("0.1.0"));
         assert_eq!(
@@ -213,6 +216,7 @@ mod tests {
   "kind": "atom_native_module",
   "target_label": "//modules/device_info:device_info",
   "id": "device_info",
+  "rust_crate_name": null,
   "atom_api_level": 1,
   "min_atom_version": null,
   "ios_min_deployment_target": null,
@@ -252,6 +256,7 @@ mod tests {
                     kind: ModuleKind::Rust,
                     target_label: "//modules/a:a".to_owned(),
                     id: "a".to_owned(),
+                    rust_crate_name: Some("a".to_owned()),
                     atom_api_level: 1,
                     min_atom_version: None,
                     ios_min_deployment_target: None,
@@ -282,6 +287,7 @@ mod tests {
                     kind: ModuleKind::Native,
                     target_label: "//modules/b:b".to_owned(),
                     id: "b".to_owned(),
+                    rust_crate_name: None,
                     atom_api_level: 1,
                     min_atom_version: None,
                     ios_min_deployment_target: None,
