@@ -34,6 +34,16 @@ bazel 8.4.2
 
 The exact versions may differ.
 
+If you want a host-only sanity check before scaffolding a workspace, you can run:
+
+```sh
+atom doctor
+```
+
+Outside a workspace, `atom doctor` compares Bazel and Rust against the bundled versions shipped in
+the installed CLI. After you scaffold a project, re-run it inside that workspace to validate the
+project's pinned toolchain and platform setup.
+
 ## Create a project
 
 ```sh
@@ -57,7 +67,8 @@ eval "$(mise env)"
 
 ## Check your environment
 
-Run `atom doctor` from inside the project so it can read the workspace's pinned tool versions:
+Re-run `atom doctor` from inside the project so it can validate the scaffolded workspace's pinned
+tool versions:
 
 ```sh
 atom doctor

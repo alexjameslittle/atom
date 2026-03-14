@@ -79,20 +79,14 @@ write_bad_release_asset() {
   printf 'badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadb  atom-darwin-arm64\n' >"$checksum_path"
 }
 
-write_release_index() {
+write_latest_release() {
   api_dir=$1
-  mkdir -p "$api_dir"
-  cat >"$api_dir/releases.json" <<'EOF'
-[
-  {
-    "tag_name": "v0.2.0",
-    "prerelease": true
-  },
-  {
-    "tag_name": "v0.1.0",
-    "prerelease": true
-  }
-]
+  mkdir -p "$api_dir/releases"
+  cat >"$api_dir/releases/latest" <<'EOF'
+{
+  "tag_name": "v0.1.0",
+  "prerelease": false
+}
 EOF
 }
 
@@ -167,7 +161,7 @@ run_installer() {
   shift
   PATH="$STUBS:$SYSTEM_PATH" \
     HOME="$home_dir" \
-    ATOM_INSTALL_RELEASES_API="file://${API_DIR}/releases.json" \
+    ATOM_INSTALL_API_BASE="file://${API_DIR}" \
     ATOM_INSTALL_DOWNLOAD_BASE="file://${DOWNLOAD_DIR}" \
     /bin/sh "$INSTALLER" "$@"
 }
@@ -181,7 +175,7 @@ run_with_fake_platform() {
     HOME="$home_dir" \
     FAKE_UNAME_S="$fake_os" \
     FAKE_UNAME_M="$fake_arch" \
-    ATOM_INSTALL_RELEASES_API="file://${API_DIR}/releases.json" \
+    ATOM_INSTALL_API_BASE="file://${API_DIR}" \
     ATOM_INSTALL_DOWNLOAD_BASE="file://${DOWNLOAD_DIR}" \
     /bin/sh "$INSTALLER" "$@"
 }
@@ -203,7 +197,7 @@ STUBS=$ROOT/stubs
 mkdir -p "$STUBS"
 write_stub_curl "$STUBS"
 write_stub_uname "$STUBS"
-write_release_index "$API_DIR"
+write_latest_release "$API_DIR"
 write_release_asset "v0.1.0" "$DOWNLOAD_DIR/v0.1.0"
 write_release_asset "v0.2.0" "$DOWNLOAD_DIR/v0.2.0"
 write_bad_release_asset "v9.9.9" "$DOWNLOAD_DIR/v9.9.9"
@@ -213,9 +207,9 @@ mkdir -p "$home_latest"
 : >"$home_latest/.zshrc"
 
 latest_output=$(run_installer "$home_latest")
-assert_contains "$latest_output" "Atom v0.2.0 installed to $home_latest/.atom/bin/atom"
+assert_contains "$latest_output" "Atom v0.1.0 installed to $home_latest/.atom/bin/atom"
 assert_contains "$(cat "$home_latest/.zshrc")" "export PATH=\"$home_latest/.atom/bin:\$PATH\""
-assert_help_version "$home_latest" "v0.2.0"
+assert_help_version "$home_latest" "v0.1.0"
 
 home_upgrade=$ROOT/home-upgrade
 mkdir -p "$home_upgrade"
@@ -224,7 +218,7 @@ mkdir -p "$home_upgrade"
 run_installer "$home_upgrade" --version v0.1.0 >/dev/null
 assert_help_version "$home_upgrade" "v0.1.0"
 run_installer "$home_upgrade" >/dev/null
-assert_help_version "$home_upgrade" "v0.2.0"
+assert_help_version "$home_upgrade" "v0.1.0"
 profile_line_count=$(grep -F -c "export PATH=\"$home_upgrade/.atom/bin:\$PATH\"" "$home_upgrade/.zshrc")
 assert_equals "1" "$profile_line_count"
 

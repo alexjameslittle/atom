@@ -416,7 +416,7 @@ fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResul
     match &cli.command {
         Commands::New(args) => execute_new(cwd, args),
         Commands::Doctor(args) => {
-            let repo_root = resolve_workspace_root(cwd)?;
+            let repo_root = resolve_doctor_root(cwd);
             execute_doctor(&repo_root, args, &first_party_deploy_backend_registry()?)
         }
         Commands::Prebuild(args) => execute_prebuild(cwd, args),
@@ -852,6 +852,10 @@ fn resolve_workspace_root(cwd: &Utf8Path) -> AtomResult<Utf8PathBuf> {
     resolve_workspace_root_with_workspace_dir(cwd, workspace_directory().as_deref())
 }
 
+fn resolve_doctor_root(cwd: &Utf8Path) -> Utf8PathBuf {
+    resolve_doctor_root_with_workspace_dir(cwd, workspace_directory().as_deref())
+}
+
 fn resolve_workspace_root_with_workspace_dir(
     cwd: &Utf8Path,
     workspace_directory: Option<&Utf8Path>,
@@ -863,6 +867,14 @@ fn resolve_workspace_root_with_workspace_dir(
             "atom commands must run inside a Bazel workspace that uses bzlmod",
         )
     })
+}
+
+fn resolve_doctor_root_with_workspace_dir(
+    cwd: &Utf8Path,
+    workspace_directory: Option<&Utf8Path>,
+) -> Utf8PathBuf {
+    let command_root = resolve_command_root(cwd, workspace_directory);
+    find_workspace_root(&command_root).unwrap_or(command_root)
 }
 
 fn workspace_directory() -> Option<Utf8PathBuf> {
@@ -912,7 +924,8 @@ mod tests {
     use super::{
         ATOM_BUILD_BAZEL_VERSION, ATOM_FRAMEWORK_VERSION, ATOM_RUST_VERSION, Cli,
         find_workspace_root, preflight_run_backend, resolve_bazel_version_with, resolve_cli_path,
-        resolve_workspace_root_with_workspace_dir, run_from_args,
+        resolve_doctor_root_with_workspace_dir, resolve_workspace_root_with_workspace_dir,
+        run_from_args,
     };
 
     struct DisabledFixtureBackend;
@@ -1084,6 +1097,16 @@ mod tests {
             .expect("workspace root");
 
         assert_eq!(repo_root, root);
+    }
+
+    #[test]
+    fn doctor_uses_current_directory_when_workspace_is_missing() {
+        let directory = tempdir().expect("tempdir");
+        let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+
+        let repo_root = resolve_doctor_root_with_workspace_dir(&cwd, None);
+
+        assert_eq!(repo_root, cwd);
     }
 
     #[test]

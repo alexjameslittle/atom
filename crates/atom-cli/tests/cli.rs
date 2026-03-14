@@ -56,7 +56,7 @@ fn new_creates_a_minimal_bootable_project_scaffold() {
 
     assert_eq!(
         String::from_utf8(output.stdout).expect("utf8 output"),
-        "Creating my_app...\nDone! Run `cd my_app && atom run --platform ios` to get started.\n"
+        "Creating my_app...\nDone! Run `cd my_app && atom run --platform ios --target //apps/my_app:my_app` to get started.\n"
     );
     assert!(project_root.is_dir());
     assert!(project_root.join("MODULE.bazel").exists());

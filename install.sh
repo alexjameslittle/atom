@@ -3,7 +3,7 @@ set -eu
 
 REPO=${ATOM_INSTALL_REPO:-alexjameslittle/atom}
 API_BASE=${ATOM_INSTALL_API_BASE:-https://api.github.com/repos/$REPO}
-RELEASES_API=${ATOM_INSTALL_RELEASES_API:-$API_BASE/releases?per_page=1}
+RELEASES_API=${ATOM_INSTALL_RELEASES_API:-$API_BASE/releases/latest}
 DOWNLOAD_BASE=${ATOM_INSTALL_DOWNLOAD_BASE:-https://github.com/$REPO/releases/download}
 
 log() {

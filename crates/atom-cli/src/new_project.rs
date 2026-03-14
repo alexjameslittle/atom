@@ -154,6 +154,10 @@ impl NewProjectConfig {
     pub(crate) fn default_run_platform(&self) -> &'static str {
         self.platforms.default_run_platform()
     }
+
+    fn default_run_target(&self) -> String {
+        format!("//apps/{0}:{0}", self.name)
+    }
 }
 
 trait NewProjectPrompter {
@@ -292,10 +296,11 @@ fn collect_prompted_project_config(
 #[must_use]
 pub(crate) fn render_success_message(config: &NewProjectConfig) -> String {
     format!(
-        "Creating {}...\nDone! Run `cd {} && atom run --platform {}` to get started.\n",
+        "Creating {}...\nDone! Run `cd {} && atom run --platform {} --target {}` to get started.\n",
         config.name,
         config.name,
-        config.default_run_platform()
+        config.default_run_platform(),
+        config.default_run_target(),
     )
 }
 
@@ -661,7 +666,7 @@ mod tests {
 
         assert_eq!(
             render_success_message(&config),
-            "Creating my_app...\nDone! Run `cd my_app && atom run --platform ios` to get started.\n"
+            "Creating my_app...\nDone! Run `cd my_app && atom run --platform ios --target //apps/my_app:my_app` to get started.\n"
         );
     }
 
@@ -677,7 +682,7 @@ mod tests {
 
         assert_eq!(
             render_success_message(&config),
-            "Creating my_app...\nDone! Run `cd my_app && atom run --platform android` to get started.\n"
+            "Creating my_app...\nDone! Run `cd my_app && atom run --platform android --target //apps/my_app:my_app` to get started.\n"
         );
     }
 }
