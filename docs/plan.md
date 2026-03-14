@@ -268,6 +268,10 @@ Minimum evaluation plan capabilities:
 - Launch or attach to a destination.
 - Select a standard or debugger-aware build profile without changing the `atom evaluate run` command
   surface.
+- Exercise debugger-session control through the same plan surface: attach, inspect current state,
+  wait for stop, pause, resume, list threads, and inspect stack frames.
+- Treat attach state as explicit data instead of assuming a fresh debugger attach is already
+  suspended.
 - Wait for a target UI state.
 - Capture logs, screenshots, and video.
 - Inspect the current UI tree.

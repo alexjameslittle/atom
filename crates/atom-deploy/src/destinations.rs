@@ -55,6 +55,7 @@ pub fn render_destination_lines(destinations: &[DestinationDescriptor]) -> Strin
                 DestinationCapability::InspectUi => "inspect_ui",
                 DestinationCapability::Interact => "interact",
                 DestinationCapability::Evaluate => "evaluate",
+                DestinationCapability::DebugSession => "debug_session",
             })
             .collect::<Vec<_>>()
             .join(",");

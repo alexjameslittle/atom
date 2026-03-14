@@ -3,8 +3,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, ToolRunner,
+    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDebugSession,
+    DebugSessionRequest, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
+    ToolRunner,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -219,6 +220,7 @@ pub fn evaluate_run(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<EvaluateCommandOutput> {
     let plan = load_evaluation_plan(plan_path)?;
+    require_debugger_build_profile(&plan)?;
     write_parent_dir(artifacts_dir)?;
 
     let descriptor =
@@ -285,6 +287,10 @@ pub fn evaluate_run(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "The evaluator keeps the public step-dispatch table in one place."
+)]
 fn execute_step(
     index: usize,
     step: EvaluationStep,
@@ -372,6 +378,85 @@ fn execute_step(
             artifacts,
             name,
             seconds.unwrap_or(60),
+        ),
+        EvaluationStep::AttachDebugger => execute_debugger_step(
+            index,
+            "attach_debugger",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            DebugSessionRequest::Attach,
+            "debugger-attach",
+            "debugger_attach",
+        ),
+        EvaluationStep::InspectDebuggerState => execute_debugger_step(
+            index,
+            "inspect_debugger_state",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            DebugSessionRequest::InspectState,
+            "debugger-state",
+            "debugger_state",
+        ),
+        EvaluationStep::WaitForDebuggerStop { timeout_ms } => execute_debugger_step(
+            index,
+            "wait_for_debugger_stop",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            DebugSessionRequest::WaitForStop {
+                timeout_ms: timeout_ms.unwrap_or(5_000),
+            },
+            "debugger-stop",
+            "debugger_stop",
+        ),
+        EvaluationStep::PauseDebugger => execute_debugger_step(
+            index,
+            "pause_debugger",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            DebugSessionRequest::Pause,
+            "debugger-pause",
+            "debugger_pause",
+        ),
+        EvaluationStep::ResumeDebugger => execute_debugger_step(
+            index,
+            "resume_debugger",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            DebugSessionRequest::Resume,
+            "debugger-resume",
+            "debugger_resume",
+        ),
+        EvaluationStep::ListDebuggerThreads => execute_debugger_step(
+            index,
+            "list_debugger_threads",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            DebugSessionRequest::ListThreads,
+            "debugger-threads",
+            "debugger_threads",
+        ),
+        EvaluationStep::ListDebuggerFrames { thread_id } => execute_debugger_step(
+            index,
+            "list_debugger_frames",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            DebugSessionRequest::ListFrames { thread_id },
+            "debugger-frames",
+            "debugger_frames",
         ),
     }
 }
@@ -538,6 +623,38 @@ fn execute_collect_logs_step(
     ))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debugger steps share the same artifact-writing helper across distinct requests."
+)]
+fn execute_debugger_step(
+    index: usize,
+    kind: &str,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    session: &mut AppSession<'_>,
+    artifacts: &mut Vec<ArtifactRecord>,
+    request: DebugSessionRequest,
+    artifact_prefix: &str,
+    artifact_kind: &str,
+) -> AtomResult<StepRecord> {
+    let response = session.debug_session()?.execute(request)?;
+    let artifact_name = artifact_name(None, index, artifact_prefix, "json");
+    let output_path = artifacts_dir.join(&artifact_name);
+    write_json(&output_path, &response)?;
+    artifacts.push(ArtifactRecord {
+        name: artifact_name.clone(),
+        kind: artifact_kind.to_owned(),
+        path: output_path.as_str().to_owned(),
+    });
+    Ok(step_with_artifacts(
+        index,
+        kind,
+        started_at_ms,
+        vec![artifact_name],
+    ))
+}
+
 fn wait_for_ui(
     session: &mut AppSession<'_>,
     target_id: Option<&str>,
@@ -652,10 +769,42 @@ fn require_plan_capabilities(
                 DestinationCapability::Video
             }
             EvaluationStep::CollectLogs { .. } => DestinationCapability::Logs,
+            EvaluationStep::AttachDebugger
+            | EvaluationStep::InspectDebuggerState
+            | EvaluationStep::WaitForDebuggerStop { .. }
+            | EvaluationStep::PauseDebugger
+            | EvaluationStep::ResumeDebugger
+            | EvaluationStep::ListDebuggerThreads
+            | EvaluationStep::ListDebuggerFrames { .. } => DestinationCapability::DebugSession,
         };
         require_capability(descriptor, capability)?;
     }
     Ok(())
+}
+
+fn require_debugger_build_profile(plan: &EvaluationPlan) -> AtomResult<()> {
+    if plan_uses_debugger_steps(plan) && plan.build_profile != AppSessionBuildProfile::Debugger {
+        return Err(AtomError::new(
+            AtomErrorCode::CliUsageError,
+            "evaluation plans that use debugger steps must set build_profile to debugger",
+        ));
+    }
+    Ok(())
+}
+
+fn plan_uses_debugger_steps(plan: &EvaluationPlan) -> bool {
+    plan.steps.iter().any(|step| {
+        matches!(
+            step,
+            EvaluationStep::AttachDebugger
+                | EvaluationStep::InspectDebuggerState
+                | EvaluationStep::WaitForDebuggerStop { .. }
+                | EvaluationStep::PauseDebugger
+                | EvaluationStep::ResumeDebugger
+                | EvaluationStep::ListDebuggerThreads
+                | EvaluationStep::ListDebuggerFrames { .. }
+        )
+    })
 }
 
 fn step_kind(step: &EvaluationStep) -> &'static str {
@@ -672,6 +821,13 @@ fn step_kind(step: &EvaluationStep) -> &'static str {
         EvaluationStep::StartVideo { .. } => "start_video",
         EvaluationStep::StopVideo => "stop_video",
         EvaluationStep::CollectLogs { .. } => "collect_logs",
+        EvaluationStep::AttachDebugger => "attach_debugger",
+        EvaluationStep::InspectDebuggerState => "inspect_debugger_state",
+        EvaluationStep::WaitForDebuggerStop { .. } => "wait_for_debugger_stop",
+        EvaluationStep::PauseDebugger => "pause_debugger",
+        EvaluationStep::ResumeDebugger => "resume_debugger",
+        EvaluationStep::ListDebuggerThreads => "list_debugger_threads",
+        EvaluationStep::ListDebuggerFrames { .. } => "list_debugger_frames",
     }
 }
 
@@ -718,6 +874,7 @@ fn load_evaluation_plan(path: &Utf8Path) -> AtomResult<EvaluationPlan> {
 struct AppSession<'a> {
     descriptor: DestinationDescriptor,
     backend: Box<dyn BackendAppSession + 'a>,
+    debug_session: Option<Box<dyn BackendDebugSession>>,
 }
 
 impl<'a> AppSession<'a> {
@@ -748,6 +905,7 @@ impl<'a> AppSession<'a> {
         Ok(Self {
             descriptor,
             backend,
+            debug_session: None,
         })
     }
 
@@ -789,6 +947,24 @@ impl<'a> AppSession<'a> {
 
     fn shutdown_video(&mut self) -> AtomResult<()> {
         self.backend.shutdown_video()
+    }
+
+    fn debug_session(&mut self) -> AtomResult<&mut (dyn BackendDebugSession + '_)> {
+        self.ensure_launched()?;
+        if self.debug_session.is_none() {
+            self.debug_session = self.backend.debug_session()?;
+        }
+        if let Some(debug_session) = self.debug_session.as_deref_mut() {
+            Ok(debug_session)
+        } else {
+            Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                format!(
+                    "destination {} does not support debugger sessions",
+                    self.descriptor.id
+                ),
+            ))
+        }
     }
 }
 
@@ -861,11 +1037,13 @@ fn timestamp_millis() -> u128 {
 mod tests {
     use std::collections::VecDeque;
     use std::fs;
+    use std::sync::{Arc, Mutex};
 
     use atom_backends::{
-        AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDefinition,
-        DeployBackend, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
-        ToolRunner,
+        AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDebugSession,
+        BackendDefinition, DebugFrame, DebugSessionRequest, DebugSessionResponse,
+        DebugSessionState, DebugThread, DeployBackend, DeployBackendRegistry,
+        DestinationCapability, DestinationDescriptor, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -873,7 +1051,8 @@ mod tests {
 
     use super::{
         EvaluationPlan, EvaluationStep, InteractionRequest, ScreenInfo, UiBounds, UiNode,
-        UiSnapshot, load_evaluation_plan, require_plan_capabilities, video_artifact_name,
+        UiSnapshot, load_evaluation_plan, require_debugger_build_profile,
+        require_plan_capabilities, video_artifact_name,
     };
 
     #[derive(Default)]
@@ -917,7 +1096,9 @@ mod tests {
         }
     }
 
-    struct FixtureBackend;
+    struct FixtureBackend {
+        debug_requests: Arc<Mutex<Vec<DebugSessionRequest>>>,
+    }
 
     impl BackendDefinition for FixtureBackend {
         fn id(&self) -> &'static str {
@@ -955,6 +1136,7 @@ mod tests {
                     DestinationCapability::Video,
                     DestinationCapability::Logs,
                     DestinationCapability::Evaluate,
+                    DestinationCapability::DebugSession,
                 ],
             }])
         }
@@ -988,13 +1170,70 @@ mod tests {
             _runner: &'a mut dyn ToolRunner,
             _options: AppSessionOptions,
         ) -> atom_ffi::AtomResult<Box<dyn BackendAppSession + 'a>> {
-            Ok(Box::new(FixtureSession::default()))
+            Ok(Box::new(FixtureSession {
+                snapshots: VecDeque::new(),
+                debug_requests: Arc::clone(&self.debug_requests),
+            }))
         }
     }
 
-    #[derive(Default)]
     struct FixtureSession {
         snapshots: VecDeque<UiSnapshot>,
+        debug_requests: Arc<Mutex<Vec<DebugSessionRequest>>>,
+    }
+
+    struct FixtureDebugSession {
+        requests: Arc<Mutex<Vec<DebugSessionRequest>>>,
+        state: DebugSessionState,
+    }
+
+    impl BackendDebugSession for FixtureDebugSession {
+        fn execute(
+            &mut self,
+            request: DebugSessionRequest,
+        ) -> atom_ffi::AtomResult<DebugSessionResponse> {
+            self.requests
+                .lock()
+                .expect("debug request log should lock")
+                .push(request.clone());
+            match request {
+                DebugSessionRequest::Attach => {
+                    Ok(DebugSessionResponse::Attached { state: self.state })
+                }
+                DebugSessionRequest::InspectState => {
+                    Ok(DebugSessionResponse::State { state: self.state })
+                }
+                DebugSessionRequest::WaitForStop { .. } => {
+                    self.state = DebugSessionState::Stopped;
+                    Ok(DebugSessionResponse::Stopped { state: self.state })
+                }
+                DebugSessionRequest::Pause => {
+                    self.state = DebugSessionState::Stopped;
+                    Ok(DebugSessionResponse::Paused)
+                }
+                DebugSessionRequest::Resume => {
+                    self.state = DebugSessionState::Running;
+                    Ok(DebugSessionResponse::Resumed)
+                }
+                DebugSessionRequest::ListThreads => Ok(DebugSessionResponse::Threads {
+                    threads: vec![DebugThread {
+                        id: "thread-1".to_owned(),
+                        name: Some("main".to_owned()),
+                        selected: true,
+                    }],
+                }),
+                DebugSessionRequest::ListFrames { thread_id } => Ok(DebugSessionResponse::Frames {
+                    thread_id: thread_id.unwrap_or_else(|| "thread-1".to_owned()),
+                    frames: vec![DebugFrame {
+                        index: 0,
+                        function: "fixture::main".to_owned(),
+                        source_path: Some("src/main.rs".to_owned()),
+                        line: Some(42),
+                        column: Some(7),
+                    }],
+                }),
+            }
+        }
     }
 
     impl BackendAppSession for FixtureSession {
@@ -1073,6 +1312,13 @@ mod tests {
         fn shutdown_video(&mut self) -> atom_ffi::AtomResult<()> {
             Ok(())
         }
+
+        fn debug_session(&mut self) -> atom_ffi::AtomResult<Option<Box<dyn BackendDebugSession>>> {
+            Ok(Some(Box::new(FixtureDebugSession {
+                requests: Arc::clone(&self.debug_requests),
+                state: DebugSessionState::Running,
+            })))
+        }
     }
 
     fn runnable_manifest(root: &Utf8PathBuf) -> NormalizedManifest {
@@ -1099,6 +1345,20 @@ mod tests {
         let error =
             require_plan_capabilities(&descriptor, &plan).expect_err("screenshot should fail");
         assert_eq!(error.code, atom_ffi::AtomErrorCode::AutomationUnavailable);
+    }
+
+    #[test]
+    fn debugger_steps_require_debugger_build_profile() {
+        let plan = EvaluationPlan {
+            build_profile: AppSessionBuildProfile::Standard,
+            steps: vec![EvaluationStep::AttachDebugger],
+        };
+
+        let error = require_debugger_build_profile(&plan)
+            .expect_err("debugger steps should require debugger build profile");
+
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+        assert!(error.message.contains("build_profile to debugger"));
     }
 
     #[test]
@@ -1134,8 +1394,11 @@ mod tests {
         fs::write(&plan_path, "{ \"steps\": [ { \"kind\": \"launch\" } ] }").expect("write");
         let artifacts_dir = root.join("artifacts");
         let mut registry = DeployBackendRegistry::new();
+        let debug_requests = Arc::new(Mutex::new(Vec::new()));
         registry
-            .register(Box::new(FixtureBackend))
+            .register(Box::new(FixtureBackend {
+                debug_requests: Arc::clone(&debug_requests),
+            }))
             .expect("fixture backend should register");
         let mut runner = FakeToolRunner;
 
@@ -1154,5 +1417,72 @@ mod tests {
         assert_eq!(output.manifest.destination.backend_id, "fixture");
         assert!(artifacts_dir.join("steps.json").exists());
         assert!(artifacts_dir.join("manifest.json").exists());
+    }
+
+    #[test]
+    fn evaluate_run_executes_debugger_steps_and_writes_json_artifacts() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8");
+        let manifest = runnable_manifest(&root);
+        let plan_path = root.join("plan.json");
+        fs::write(
+            &plan_path,
+            r#"{
+  "build_profile": "debugger",
+  "steps": [
+    { "kind": "attach_debugger" },
+    { "kind": "pause_debugger" },
+    { "kind": "list_debugger_threads" },
+    { "kind": "list_debugger_frames", "thread_id": "thread-1" },
+    { "kind": "resume_debugger" }
+  ]
+}"#,
+        )
+        .expect("write");
+        let artifacts_dir = root.join("artifacts");
+        let mut registry = DeployBackendRegistry::new();
+        let debug_requests = Arc::new(Mutex::new(Vec::new()));
+        registry
+            .register(Box::new(FixtureBackend {
+                debug_requests: Arc::clone(&debug_requests),
+            }))
+            .expect("fixture backend should register");
+        let mut runner = FakeToolRunner;
+
+        let output = super::evaluate_run(
+            &root,
+            &manifest,
+            &registry,
+            "fixture",
+            "fixture-1",
+            &plan_path,
+            &artifacts_dir,
+            &mut runner,
+        )
+        .expect("evaluation should run");
+
+        assert_eq!(
+            *debug_requests
+                .lock()
+                .expect("debug request log should lock"),
+            vec![
+                DebugSessionRequest::Attach,
+                DebugSessionRequest::Pause,
+                DebugSessionRequest::ListThreads,
+                DebugSessionRequest::ListFrames {
+                    thread_id: Some("thread-1".to_owned()),
+                },
+                DebugSessionRequest::Resume,
+            ]
+        );
+        assert!(
+            output
+                .manifest
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.kind == "debugger_threads")
+        );
+        assert!(artifacts_dir.join("02-debugger-threads.json").exists());
+        assert!(artifacts_dir.join("03-debugger-frames.json").exists());
     }
 }

@@ -43,6 +43,7 @@ pub enum DestinationCapability {
     InspectUi,
     Interact,
     Evaluate,
+    DebugSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +229,19 @@ pub enum EvaluationStep {
         #[serde(default)]
         seconds: Option<u64>,
     },
+    AttachDebugger,
+    InspectDebuggerState,
+    WaitForDebuggerStop {
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    PauseDebugger,
+    ResumeDebugger,
+    ListDebuggerThreads,
+    ListDebuggerFrames {
+        #[serde(default)]
+        thread_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -333,11 +347,16 @@ pub struct DebugFrame {
 pub enum DebugSessionRequest {
     Attach,
     InspectState,
-    WaitForStop { timeout_ms: u64 },
+    WaitForStop {
+        timeout_ms: u64,
+    },
     Pause,
     Resume,
     ListThreads,
-    ListFrames { thread_id: String },
+    ListFrames {
+        #[serde(default)]
+        thread_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,8 +421,8 @@ pub trait BackendAppSession {
 
     fn shutdown_video(&mut self) -> AtomResult<()>;
 
-    fn debug_session(&mut self) -> Option<&mut dyn BackendDebugSession> {
-        None
+    fn debug_session(&mut self) -> AtomResult<Option<Box<dyn BackendDebugSession>>> {
+        Ok(None)
     }
 }
 

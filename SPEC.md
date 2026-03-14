@@ -1155,6 +1155,8 @@ Rules:
   logs, screenshots, videos, and UI snapshots captured during the run.
 - Evaluation plans MAY request a `build_profile` of `standard` or `debugger`; omitted plans MUST
   default to `standard` for backward compatibility.
+- Evaluation plans that request debugger-session control steps MUST set `build_profile` to
+  `debugger`.
 - `debugger` evaluation builds MUST reuse the same `atom evaluate run` workflow rather than require
   a separate public CLI command.
 - When debugger-ready artifacts are requested, backend implementations MUST resolve installable
@@ -1320,6 +1322,12 @@ consumes Atom via `bzlmod`.
   separate public evaluate or launch command
 - MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
   interactions
+- MUST allow the plan to request debugger attach, state inspection, wait-for-stop, pause, resume,
+  thread inspection, and stack-frame inspection when the selected destination exposes debugger
+  support
+- MUST reject debugger control steps unless the plan sets `build_profile` to `debugger`
+- MUST treat debugger attach state as explicit runtime data: attach MAY begin in `running`,
+  `stopped`, or `unknown` state, and evaluation logic MUST NOT assume attach implies suspension
 - A `launch` step MUST not report success until the selected app process is running and the
   evaluation backend can obtain an initial UI snapshot from that launched app
 - On iOS, launch readiness MUST verify the focused foreground app identity before a UI snapshot is
@@ -1354,12 +1362,20 @@ Evaluation contract rules:
 - An evaluation plan MUST support, at minimum, these step kinds: `launch`, `wait_for_ui`, `tap`,
   `long_press`, `swipe`, `drag`, `type_text`, `screenshot`, `inspect_ui`, `start_video`,
   `stop_video`, and `collect_logs`.
+- Evaluation plans MAY additionally request debugger control step kinds: `attach_debugger`,
+  `inspect_debugger_state`, `wait_for_debugger_stop`, `pause_debugger`, `resume_debugger`,
+  `list_debugger_threads`, and `list_debugger_frames`.
 - Machine-readable evaluation plans MUST treat `build_profile` as additive metadata and MUST default
   absent values to `standard`.
+- Plans that use debugger control steps MUST set `build_profile` to `debugger`.
 - Interaction and wait steps MUST accept either a semantic target descriptor or an explicit
   coordinate descriptor.
+- Debugger frame-inspection steps MAY omit `thread_id`; when they do, the backend SHOULD use the
+  current or default thread and MUST report the resolved thread id in the machine-readable result.
 - Evaluation output MUST include a machine-readable bundle manifest with the selected destination
   id, platform, timestamps, executed steps, per-step status, and artifact paths.
+- Destinations that support debugger-session control SHOULD advertise an additive `debug_session`
+  capability in machine-readable destination payloads.
 - Evaluation bundle manifests MAY include backend-specific `backend_id` metadata inside the
   serialized destination descriptor, but MUST preserve the `platform` field.
 - Backend-owned debugger source lookups MAY add source-location payloads, but when they do they
@@ -1372,6 +1388,8 @@ Evaluation contract rules:
 function cli_evaluate_run(args):
     destination = resolve_destination(args.destination)
     plan = load_evaluation_plan(args.plan)
+    if plan.uses_debugger_steps and plan.build_profile != "debugger":
+        fail CLI_USAGE_ERROR
     require_capabilities(destination, plan)
     session = create_evaluation_session(destination, args.output_dir, plan.build_profile or "standard")
 
@@ -1381,6 +1399,8 @@ function cli_evaluate_run(args):
         session.video = start_video_capture(destination, args.output_dir)
 
     for step in plan.steps:
+        if step is a debugger control step:
+            session.debugger = session.debugger or attach_debugger(destination)
         execute_step(destination, session, step) or error from underlying command
 
     finalize_optional_captures(session)
