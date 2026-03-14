@@ -66,5 +66,21 @@ GitHub Actions now builds a standalone macOS arm64 `atom` binary artifact in
 also publish a prerelease from
 [`.github/workflows/github-release.yml`](.github/workflows/github-release.yml) with
 `atom-darwin-arm64`, `atom-darwin-arm64.sha256`, and a `.tar.gz` bundle that preserves executable
-permissions. The produced binary can be downloaded and placed on `PATH`, but Bazel-backed commands
-still expect `bazelisk` on `PATH` and a checked-out Bazel workspace rooted by `MODULE.bazel`.
+permissions.
+
+Install the latest macOS arm64 build with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alexjameslittle/atom/main/install.sh | sh
+```
+
+Install a specific release with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alexjameslittle/atom/main/install.sh | sh -s -- --version v0.1.0
+```
+
+The installer verifies the published SHA256 checksum, installs `atom` to `~/.atom/bin/atom`, and
+adds that directory to your shell `PATH` when needed. Linux and Windows installers are not shipped
+yet. Bazel-backed commands still expect `bazelisk` on `PATH` and a checked-out Bazel workspace
+rooted by `MODULE.bazel`.
