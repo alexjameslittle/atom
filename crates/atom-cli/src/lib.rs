@@ -1,4 +1,6 @@
 mod doctor;
+mod new_project;
+mod templates;
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -31,11 +33,17 @@ use atom_modules::resolve_modules;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use doctor::{DoctorArgs, execute as execute_doctor};
+use new_project::scaffold_project;
 use serde::Serialize;
 
 const ATOM_FRAMEWORK_VERSION: &str = env!("ATOM_FRAMEWORK_VERSION");
 const ATOM_RUST_VERSION: &str = env!("ATOM_RUST_VERSION");
 const ATOM_BUILD_BAZEL_VERSION: &str = env!("ATOM_BUILD_BAZEL_VERSION");
+const ATOM_MISE_BAZELISK_VERSION: &str = env!("ATOM_MISE_BAZELISK_VERSION");
+const ATOM_MISE_RUST_TOOLCHAIN_VERSION: &str = env!("ATOM_MISE_RUST_TOOLCHAIN_VERSION");
+const ATOM_MISE_JAVA_VERSION: &str = env!("ATOM_MISE_JAVA_VERSION");
+const ATOM_RULES_RUST_VERSION: &str = env!("ATOM_RULES_RUST_VERSION");
+const ATOM_JAVA_RUNTIME_VERSION: &str = env!("ATOM_JAVA_RUNTIME_VERSION");
 
 #[derive(Debug, Parser)]
 #[command(name = "atom", disable_version_flag = true)]
@@ -46,6 +54,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    New(NewArgs),
     Doctor(DoctorArgs),
     Prebuild(PrebuildArgs),
     Run(RunArgs),
@@ -57,6 +66,11 @@ enum Commands {
     Inspect(InspectArgs),
     Interact(InteractArgs),
     Evaluate(EvaluateArgs),
+}
+
+#[derive(Debug, Args)]
+struct NewArgs {
+    name: String,
 }
 
 #[derive(Debug, Args)]
@@ -390,6 +404,7 @@ fn extract_version_token(output: &str) -> Option<&str> {
 
 fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<CommandOutput> {
     match &cli.command {
+        Commands::New(args) => execute_new(cwd, args),
         Commands::Doctor(args) => {
             let repo_root = resolve_workspace_root(cwd)?;
             execute_doctor(&repo_root, args, &first_party_deploy_backend_registry()?)
@@ -405,6 +420,11 @@ fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResul
         Commands::Interact(args) => execute_interact(cwd, args, runner),
         Commands::Evaluate(args) => execute_evaluate(cwd, args, runner),
     }
+}
+
+fn execute_new(cwd: &Utf8Path, args: &NewArgs) -> AtomResult<CommandOutput> {
+    let project_root = scaffold_project(cwd, &args.name)?;
+    Ok(text_output(format!("{project_root}\n")))
 }
 
 fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOutput> {
