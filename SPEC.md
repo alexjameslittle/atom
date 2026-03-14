@@ -1175,6 +1175,7 @@ Rules:
 
 Required commands:
 
+- `atom new <name>`
 - `atom --version`
 - `atom prebuild`
 - `atom prebuild --dry-run`
@@ -1208,8 +1209,21 @@ Required commands:
 
 ### 10.3 Output Rules
 
-All CLI commands except `atom --version` MUST fail with `CLI_USAGE_ERROR` when invoked outside a
-Bazel workspace that consumes Atom via `bzlmod`.
+All CLI commands except `atom new` and `atom --version` MUST fail with `CLI_USAGE_ERROR` when
+invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
+
+`atom new <name>`:
+
+- MUST create a new project directory under the current working directory
+- MUST reject names that are not valid lowercase Rust crate identifiers
+- MUST fail with `CLI_USAGE_ERROR` when the target directory already exists
+- MUST create `MODULE.bazel`, `.bazelversion`, `.bazelrc`, `mise.toml`, `BUILD.bazel`, `README.md`,
+  and `.gitignore`
+- MUST scaffold `MODULE.bazel` with `bazel_dep(name = "atom", version = "<framework version>")` and
+  a `git_override(...)` pointing at the Atom Git repository until BCR publication exists
+- MUST scaffold `.bazelversion` from the framework's pinned Bazel version
+- MUST embed scaffold template contents in the CLI binary rather than reading template files from
+  disk at runtime
 
 `atom --version`:
 

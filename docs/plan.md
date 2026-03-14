@@ -29,15 +29,16 @@ can be added on top once the runtime, CNG, and native-module system are stable.
 
 The target developer experience is:
 
-1. Write an app crate in Rust.
-2. Declare app config in `atom_app(...)`.
-3. Add `atom_module(...)` and `atom_native_module(...)` targets to the app.
-4. Compose first-party or third-party runtime plugins in app code through `atom_runtime_config()`.
-5. Declare config/CNG plugins in `atom_app(...).config_plugins` when native-host customization is
+1. Run `atom new <name>` to scaffold the Bazel workspace wrapper.
+2. Write an app crate in Rust.
+3. Declare app config in `atom_app(...)`.
+4. Add `atom_module(...)` and `atom_native_module(...)` targets to the app.
+5. Compose first-party or third-party runtime plugins in app code through `atom_runtime_config()`.
+6. Declare config/CNG plugins in `atom_app(...).config_plugins` when native-host customization is
    needed.
-6. Run `atom prebuild` to generate iOS and Android host code.
-7. Build and run with Bazel-driven commands.
-8. Evaluate the running app through framework-owned CLI tools that can inspect, interact, and
+7. Run `atom prebuild` to generate iOS and Android host code.
+8. Build and run with Bazel-driven commands.
+9. Evaluate the running app through framework-owned CLI tools that can inspect, interact, and
    collect proof artifacts.
 
 The app author should not need to write Swift, Kotlin, Gradle, or Xcode project files directly.
@@ -796,6 +797,7 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 
 Deliverables:
 
+- `atom new <name>`
 - `atom run --platform ios`
 - `atom run --platform android`
 - `atom run --platform ios --detach`

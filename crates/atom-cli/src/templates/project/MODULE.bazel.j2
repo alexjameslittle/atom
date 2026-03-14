@@ -1,0 +1,31 @@
+module(
+    name = "{{ project_name }}",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "atom", version = "{{ framework_version }}")
+git_override(
+    module_name = "atom",
+    remote = "{{ framework_git_remote }}",
+    branch = "{{ framework_git_branch }}",
+)
+
+bazel_dep(name = "rules_rust", version = "{{ rules_rust_version }}")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    versions = ["{{ rust_version }}"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+# crate_universe needs at least one direct package until the first app crate lands.
+crate.spec(
+    package = "{{ placeholder_crate_package }}",
+    version = "{{ placeholder_crate_version }}",
+)
+crate.from_specs(name = "app_crates")
+use_repo(crate, "app_crates")
