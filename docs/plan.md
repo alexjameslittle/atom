@@ -251,6 +251,7 @@ The core abstraction should be `platform + destination`:
 
 Planned command surface:
 
+- `atom --version`
 - `atom destinations --platform <platform> --json`
 - `atom devices --platform <platform> [--json]`
 - `atom evidence logs --platform <platform> --destination <id> --output <path>`
@@ -801,6 +802,7 @@ Deliverables:
 - `atom run --platform android --detach`
 - `atom stop --platform ios`
 - `atom stop --platform android`
+- `atom --version`
 - `atom test`
 - Plugin authoring and consumption docs for first-party and third-party crates
 - Example app proving first-party and third-party-style plugin composition
