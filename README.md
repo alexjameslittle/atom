@@ -57,6 +57,9 @@ formatting, Clippy, and tests are all executed through Bazel entrypoints.
 ## Standalone CLI Artifact
 
 GitHub Actions now builds a standalone macOS arm64 `atom` binary artifact in
-[`.github/workflows/cli-binary.yml`](.github/workflows/cli-binary.yml). The produced binary can be
-downloaded and placed on `PATH`, but Bazel-backed commands still expect `bazelisk` on `PATH` and a
-checked-out Bazel workspace rooted by `MODULE.bazel`.
+[`.github/workflows/cli-binary.yml`](.github/workflows/cli-binary.yml). Version tags matching `v*`
+also publish a prerelease from
+[`.github/workflows/github-release.yml`](.github/workflows/github-release.yml) with
+`atom-darwin-arm64` and `atom-darwin-arm64.sha256` assets. The produced binary can be downloaded and
+placed on `PATH`, but Bazel-backed commands still expect `bazelisk` on `PATH` and a checked-out
+Bazel workspace rooted by `MODULE.bazel`.
