@@ -522,6 +522,8 @@ mod tests {
 
         assert!(build_file.contains("android_binary("));
         assert!(build_file.contains("custom_package = \"build.atom.fixture\""));
+        assert!(build_file.contains("\"@atom//crates/atom-runtime\""));
+        assert!(build_file.contains("\"@atom//crates/atom-ffi\""));
         assert!(manifest_xml.contains("android:minSdkVersion=\"28\""));
         assert!(manifest_xml.contains("android:targetSdkVersion=\"35\""));
         assert!(bridge.contains("fixture::atom_runtime_config()"));

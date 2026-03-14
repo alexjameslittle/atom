@@ -29,9 +29,9 @@ can be added on top once the runtime, CNG, and native-module system are stable.
 
 The target developer experience is:
 
-1. Run `atom new <name>` to scaffold the Bazel workspace wrapper.
-2. Write an app crate in Rust.
-3. Declare app config in `atom_app(...)`.
+1. Run `atom new <name>` to scaffold the Bazel workspace and a bootable app crate.
+2. Edit the generated app crate in Rust.
+3. Refine app config in `atom_app(...)`.
 4. Add `atom_module(...)` and `atom_native_module(...)` targets to the app.
 5. Compose first-party or third-party runtime plugins in app code through `atom_runtime_config()`.
 6. Declare config/CNG plugins in `atom_app(...).config_plugins` when native-host customization is

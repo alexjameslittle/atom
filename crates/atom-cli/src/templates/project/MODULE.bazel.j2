@@ -10,11 +10,39 @@ git_override(
     branch = "{{ framework_git_branch }}",
 )
 
+bazel_dep(
+    name = "apple_support",
+    version = "{{ apple_support_version }}",
+    repo_name = "build_bazel_apple_support",
+)
+bazel_dep(name = "rules_java", version = "{{ rules_java_version }}")
+bazel_dep(name = "rules_kotlin", version = "{{ rules_kotlin_version }}")
+bazel_dep(name = "rules_android", version = "{{ rules_android_version }}")
+bazel_dep(name = "rules_android_ndk", version = "{{ rules_android_ndk_version }}")
+bazel_dep(
+    name = "rules_apple",
+    version = "{{ rules_apple_version }}",
+    repo_name = "build_bazel_rules_apple",
+)
 bazel_dep(name = "rules_rust", version = "{{ rules_rust_version }}")
+bazel_dep(
+    name = "rules_swift",
+    version = "{{ rules_swift_version }}",
+    repo_name = "build_bazel_rules_swift",
+)
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
+    extra_target_triples = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-apple-ios",
+        "aarch64-apple-ios-sim",
+        "x86_64-apple-ios",
+        "aarch64-linux-android",
+        "x86_64-linux-android",
+    ],
     versions = ["{{ rust_version }}"],
 )
 use_repo(rust, "rust_toolchains")
@@ -22,10 +50,46 @@ use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
-# crate_universe needs at least one direct package until the first app crate lands.
+# crate_universe still needs at least one direct package until the app adds a real third-party crate.
 crate.spec(
     package = "{{ placeholder_crate_package }}",
     version = "{{ placeholder_crate_version }}",
 )
-crate.from_specs(name = "app_crates")
+crate.from_specs(
+    name = "app_crates",
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-apple-ios",
+        "aarch64-apple-ios-sim",
+        "x86_64-apple-ios",
+        "aarch64-linux-android",
+        "x86_64-linux-android",
+        "x86_64-unknown-linux-gnu",
+    ],
+)
 use_repo(crate, "app_crates")
+
+remote_android_extensions = use_extension(
+    "@rules_android//bzlmod_extensions:android_extensions.bzl",
+    "remote_android_tools_extensions",
+)
+use_repo(remote_android_extensions, "android_tools")
+
+android_sdk_repository_extension = use_extension(
+    "@rules_android//rules/android_sdk_repository:rule.bzl",
+    "android_sdk_repository_extension",
+)
+use_repo(android_sdk_repository_extension, "androidsdk")
+
+android_ndk_repository_extension = use_extension(
+    "@rules_android_ndk//:extension.bzl",
+    "android_ndk_repository_extension",
+)
+use_repo(android_ndk_repository_extension, "androidndk")
+
+register_toolchains(
+    "@androidsdk//:sdk-toolchain",
+    "@androidsdk//:all",
+    "@androidndk//:all",
+)

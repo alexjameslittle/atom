@@ -17,8 +17,8 @@ rust_static_library(
     edition = "2024",
     visibility = ["//visibility:private"],
     deps = [
-        "//crates/atom-ffi",
-        "//crates/atom-runtime",
+        "@atom//crates/atom-ffi",
+        "@atom//crates/atom-runtime",
         "{{ entry_crate_label }}",
     ],
 )

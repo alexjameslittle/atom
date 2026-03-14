@@ -1220,10 +1220,15 @@ invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
 - MUST reject names that are not valid lowercase Rust crate identifiers
 - MUST fail with `CLI_USAGE_ERROR` when the target directory already exists
 - MUST create `MODULE.bazel`, `.bazelversion`, `.bazelrc`, `mise.toml`, `BUILD.bazel`, `README.md`,
-  and `.gitignore`
+  `.gitignore`, `apps/<name>/BUILD.bazel`, and `apps/<name>/src/lib.rs`
 - MUST scaffold `MODULE.bazel` with `bazel_dep(name = "atom", version = "<framework version>")` and
   a `git_override(...)` pointing at the Atom Git repository until BCR publication exists
 - MUST scaffold `.bazelversion` from the framework's pinned Bazel version
+- MUST scaffold `apps/<name>/BUILD.bazel` with a minimal `atom_app(...)` target that depends on
+  `@atom//crates/atom-runtime`, derives a human-readable app name from the crate identifier, and
+  uses `com.example.<name>` as the default iOS and Android application identifier
+- MUST scaffold `apps/<name>/src/lib.rs` with `atom_runtime_config()` returning
+  `RuntimeConfig::builder().build()`
 - MUST embed scaffold template contents in the CLI binary rather than reading template files from
   disk at runtime
 

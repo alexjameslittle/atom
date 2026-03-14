@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AtomBindings {
-    public static let modules = [
+    public static let modules: [String] = [
 {% for module_id in module_ids %}
         "{{ module_id }}",
 {% endfor %}
