@@ -1175,7 +1175,7 @@ Rules:
 
 Required commands:
 
-- `atom new <name>`
+- `atom new [name]`
 - `atom doctor`
 - `atom --version`
 - `atom prebuild`
@@ -1214,10 +1214,19 @@ Required commands:
 All CLI commands except `atom new` and `atom --version` MUST fail with `CLI_USAGE_ERROR` when
 invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
 
-`atom new <name>`:
+`atom new [name]`:
 
 - MUST create a new project directory under the current working directory
 - MUST reject names that are not valid lowercase Rust crate identifiers
+- MUST prompt interactively for project name, display name, iOS bundle ID, Android package name, and
+  platform selection when `<name>` is omitted and standard input/output are attached to an
+  interactive terminal
+- MUST derive interactive defaults from the project name: title-cased display name,
+  `com.example.<name>` for both iOS bundle ID and Android package name, and both platforms
+  preselected
+- MUST skip prompts and use derived defaults when `<name>` is provided
+- MUST fail with `CLI_USAGE_ERROR` when `--no-interactive` is passed without `<name>`
+- MUST fail with `CLI_USAGE_ERROR` when `<name>` is omitted outside an interactive terminal
 - MUST fail with `CLI_USAGE_ERROR` when the target directory already exists
 - MUST create `MODULE.bazel`, `.bazelversion`, `.bazelrc`, `mise.toml`, `BUILD.bazel`, `README.md`,
   `.gitignore`, `apps/<name>/BUILD.bazel`, and `apps/<name>/src/lib.rs`
@@ -1227,8 +1236,12 @@ invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
 - MUST scaffold `apps/<name>/BUILD.bazel` with a minimal `atom_app(...)` target that depends on
   `@atom//crates/atom-runtime`, derives a human-readable app name from the crate identifier, and
   uses `com.example.<name>` as the default iOS and Android application identifier
+- MUST omit unselected platform identifier and SDK fields from `apps/<name>/BUILD.bazel` and mark
+  the unselected platform disabled in `atom_app(...)`
 - MUST scaffold `apps/<name>/src/lib.rs` with `atom_runtime_config()` returning
   `RuntimeConfig::builder().build()`
+- MUST print a success message that includes a follow-up command of the form
+  `cd <name> && atom run --platform <platform>` using the first selected platform
 - MUST embed scaffold template contents in the CLI binary rather than reading template files from
   disk at runtime
 

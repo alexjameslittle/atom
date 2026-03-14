@@ -4,11 +4,19 @@ atom_app(
     name = "{{ project_name }}",
     crate_name = "{{ project_name }}",
     app_name = "{{ project_display_name }}",
-    ios_bundle_id = "{{ project_app_id }}",
+{% if ios_enabled %}
+    ios_bundle_id = "{{ project_ios_bundle_id }}",
     ios_deployment_target = "18.0",
-    android_application_id = "{{ project_app_id }}",
+{% else %}
+    ios_enabled = False,
+{% endif %}
+{% if android_enabled %}
+    android_application_id = "{{ project_android_application_id }}",
     android_min_sdk = 24,
     android_target_sdk = 35,
+{% else %}
+    android_enabled = False,
+{% endif %}
     modules = [],
     config_plugins = [],
     deps = [

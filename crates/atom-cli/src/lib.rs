@@ -33,7 +33,7 @@ use atom_modules::resolve_modules;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use doctor::{DoctorArgs, execute as execute_doctor};
-use new_project::scaffold_project;
+use new_project::{NewProjectConfig, prompt_new_project, render_success_message, scaffold_project};
 use serde::Serialize;
 
 const ATOM_FRAMEWORK_VERSION: &str = env!("ATOM_FRAMEWORK_VERSION");
@@ -77,7 +77,9 @@ enum Commands {
 
 #[derive(Debug, Args)]
 struct NewArgs {
-    name: String,
+    #[arg(long, default_value_t = false)]
+    no_interactive: bool,
+    name: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -430,8 +432,24 @@ fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResul
 }
 
 fn execute_new(cwd: &Utf8Path, args: &NewArgs) -> AtomResult<CommandOutput> {
-    let project_root = scaffold_project(cwd, &args.name)?;
-    Ok(text_output(format!("{project_root}\n")))
+    let project = resolve_new_project_config(args)?;
+    scaffold_project(cwd, &project)?;
+    Ok(text_output(render_success_message(&project)))
+}
+
+fn resolve_new_project_config(args: &NewArgs) -> AtomResult<NewProjectConfig> {
+    if let Some(name) = &args.name {
+        return NewProjectConfig::with_defaults(name);
+    }
+
+    if args.no_interactive {
+        return Err(AtomError::new(
+            AtomErrorCode::CliUsageError,
+            "project name is required when --no-interactive is set",
+        ));
+    }
+
+    prompt_new_project()
 }
 
 fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOutput> {

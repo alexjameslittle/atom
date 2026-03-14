@@ -22,6 +22,7 @@ rust_library(
         "//crates/atom-modules",
         "@crates//:camino",
         "@crates//:clap",
+        "@crates//:dialoguer",
         "@crates//:minijinja",
         "@crates//:serde",
         "@crates//:serde_json",

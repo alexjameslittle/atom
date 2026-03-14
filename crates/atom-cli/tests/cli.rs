@@ -56,7 +56,7 @@ fn new_creates_a_minimal_bootable_project_scaffold() {
 
     assert_eq!(
         String::from_utf8(output.stdout).expect("utf8 output"),
-        format!("{project_root}\n")
+        "Creating my_app...\nDone! Run `cd my_app && atom run --platform ios` to get started.\n"
     );
     assert!(project_root.is_dir());
     assert!(project_root.join("MODULE.bazel").exists());
@@ -136,6 +136,37 @@ fn new_rejects_invalid_project_names() {
 
     assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
     assert!(error.message.contains("lowercase ASCII letters"));
+}
+
+#[test]
+fn new_requires_a_name_when_no_interactive_is_set() {
+    let directory = tempdir().expect("tempdir");
+    let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+
+    let error = run_from_args(["atom", "new", "--no-interactive"], &root)
+        .expect_err("missing name should fail");
+
+    assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    assert!(
+        error
+            .message
+            .contains("project name is required when --no-interactive is set")
+    );
+}
+
+#[test]
+fn new_requires_a_name_when_not_attached_to_a_tty() {
+    let directory = tempdir().expect("tempdir");
+    let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+
+    let error = run_from_args(["atom", "new"], &root).expect_err("missing name should fail");
+
+    assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    assert!(
+        error
+            .message
+            .contains("project name is required when not attached to an interactive terminal")
+    );
 }
 
 #[test]
