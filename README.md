@@ -53,3 +53,10 @@ mise run verify
 The Git hooks in [`.githooks`](.githooks) are installed automatically by the bootstrap task, and
 GitHub PR verification is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Rust
 formatting, Clippy, and tests are all executed through Bazel entrypoints.
+
+## Standalone CLI Artifact
+
+GitHub Actions now builds a standalone macOS arm64 `atom` binary artifact in
+[`.github/workflows/cli-binary.yml`](.github/workflows/cli-binary.yml). The produced binary can be
+downloaded and placed on `PATH`, but Bazel-backed commands still expect `bazelisk` on `PATH` and a
+checked-out Bazel workspace rooted by `MODULE.bazel`.

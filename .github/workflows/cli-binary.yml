@@ -1,0 +1,62 @@
+name: CLI Binary
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-binary-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build-atom-macos-arm64:
+    name: build atom macOS arm64 binary
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+
+      - name: Build atom binary
+        run: bazelisk build //crates/atom-cli:atom
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact=$(bazelisk cquery //crates/atom-cli:atom --output=files | tail -n 1)
+          mkdir -p dist
+          cp "$artifact" dist/atom
+          chmod 755 dist/atom
+          strip -S -x dist/atom || true
+          file dist/atom
+          ls -lh dist/atom
+
+      - name: Smoke test standalone binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./dist/atom --help > /tmp/atom-help.txt
+          sed -n '1,20p' /tmp/atom-help.txt
+
+      - name: Upload atom artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: atom-macos-arm64
+          path: dist/atom
+          if-no-files-found: error
+          compression-level: 0

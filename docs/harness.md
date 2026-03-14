@@ -35,13 +35,17 @@ The verification harness runs:
 
 ## GitHub Guardrails
 
-CI runs five parallel job executions sharing a BuildBuddy remote cache:
+CI runs the main verification matrix in [../.github/workflows/ci.yml](../.github/workflows/ci.yml)
+and a standalone CLI artifact workflow in
+[../.github/workflows/cli-binary.yml](../.github/workflows/cli-binary.yml), both sharing the same
+toolchain setup action.
+
+The verification matrix currently runs:
 
 - **lint** (Linux): clippy, format check, shellcheck, actionlint
 - **test (linux)**: host tests, prebuild dry-run
-- **test (macos)**: host tests, prebuild dry-run
-- **build example apps (ios)** (macOS): prebuild plus iOS example app build
 - **build example apps (android)** (Linux): prebuild plus Android example app build
+- **build atom macOS arm64 binary** (macOS): Bazel build plus standalone CLI artifact upload
 
 All jobs must pass before merge.
 
