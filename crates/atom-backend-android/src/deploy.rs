@@ -18,6 +18,7 @@ use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 
+use crate::agent_device;
 use crate::android_uiautomator::{
     inspect_ui_with_android_uiautomator, interact_with_android_uiautomator,
 };
@@ -51,9 +52,10 @@ struct AndroidAppLaunch {
 
 struct VideoCapture {
     output_path: Utf8PathBuf,
-    child: Child,
-    remote_path: String,
-    serial: String,
+    child: Option<Child>,
+    remote_path: Option<String>,
+    serial: Option<String>,
+    session_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +72,7 @@ struct AndroidAppSession<'a> {
     destination_id: String,
     session_options: AppSessionOptions,
     launch: Option<AndroidAppLaunch>,
+    agent_device_session: Option<String>,
     video_capture: Option<VideoCapture>,
 }
 
@@ -78,6 +81,21 @@ impl AndroidDestination {
         self.avd_name
             .as_deref()
             .map_or_else(|| self.serial.clone(), |avd| format!("avd:{avd}"))
+    }
+
+    fn agent_device_selector(&self) -> agent_device::AgentDeviceSelector {
+        if self.is_emulator {
+            if self.state == "device" {
+                return agent_device::AgentDeviceSelector::Serial(self.serial.clone());
+            }
+            return agent_device::AgentDeviceSelector::Device(
+                self.avd_name
+                    .clone()
+                    .or_else(|| self.device_name.clone())
+                    .unwrap_or_else(|| self.serial.clone()),
+            );
+        }
+        agent_device::AgentDeviceSelector::Serial(self.serial.clone())
     }
 
     fn display_label(&self) -> String {
@@ -178,6 +196,7 @@ impl DeployBackend for AndroidDeployBackend {
             destination_id: destination_id.to_owned(),
             session_options: options,
             launch: None,
+            agent_device_session: None,
             video_capture: None,
         }))
     }
@@ -192,6 +211,56 @@ impl AndroidAppSession<'_> {
             )
         })
     }
+
+    fn agent_device_session_name(&mut self) -> AtomResult<String> {
+        if let Some(session_name) = &self.agent_device_session {
+            return Ok(session_name.clone());
+        }
+        let application_id = self
+            .manifest
+            .android
+            .application_id
+            .as_deref()
+            .ok_or_else(|| {
+                AtomError::new(AtomErrorCode::InternalBug, "missing Android application id")
+            })?;
+        let session_name = format!(
+            "atom-{}-{}-{}",
+            sanitize_session_segment(application_id),
+            sanitize_session_segment(&self.destination_id),
+            timestamp_suffix(),
+        );
+        self.agent_device_session = Some(session_name.clone());
+        Ok(session_name)
+    }
+
+    fn close_agent_device_session(&mut self) -> AtomResult<()> {
+        let Some(session_name) = self.agent_device_session.take() else {
+            return Ok(());
+        };
+        let Some(destination) =
+            find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+        else {
+            return Ok(());
+        };
+        agent_device::close_session(
+            self.repo_root,
+            &destination.agent_device_selector(),
+            &session_name,
+            self.runner,
+        )
+    }
+
+    fn cleanup_agent_device_session(&mut self) -> AtomResult<()> {
+        if let Some(video) = self.video_capture.take() {
+            let _ = stop_video_capture(self.repo_root, video, self.runner)?;
+        }
+        self.close_agent_device_session()
+    }
+
+    fn cleanup_agent_device_session_best_effort(&mut self) {
+        let _ = self.cleanup_agent_device_session();
+    }
 }
 
 impl BackendAppSession for AndroidAppSession<'_> {
@@ -201,6 +270,40 @@ impl BackendAppSession for AndroidAppSession<'_> {
 
     fn ensure_launched(&mut self) -> AtomResult<()> {
         if self.launch.is_some() {
+            return Ok(());
+        }
+        let Some(destination) =
+            find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+        else {
+            return Err(AtomError::with_path(
+                AtomErrorCode::AutomationUnavailable,
+                format!("unknown destination id: {}", self.destination_id),
+                &self.destination_id,
+            ));
+        };
+        if agent_device::is_available(self.repo_root, self.runner) {
+            let session_name = self.agent_device_session_name()?;
+            if self.session_options.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
+                && let Some(launch) = attach_android_app_with_agent_device(
+                    self.repo_root,
+                    self.manifest,
+                    &destination,
+                    &session_name,
+                    self.runner,
+                )?
+            {
+                self.launch = Some(launch);
+                return Ok(());
+            }
+            let launch = launch_android_app_with_agent_device(
+                self.repo_root,
+                self.manifest,
+                &destination,
+                &session_name,
+                self.session_options.build_profile,
+                self.runner,
+            )?;
+            self.launch = Some(launch);
             return Ok(());
         }
         if self.session_options.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
@@ -214,15 +317,6 @@ impl BackendAppSession for AndroidAppSession<'_> {
             self.launch = Some(launch);
             return Ok(());
         }
-        let Some(destination) =
-            find_android_destination(self.repo_root, self.runner, &self.destination_id)?
-        else {
-            return Err(AtomError::with_path(
-                AtomErrorCode::AutomationUnavailable,
-                format!("unknown destination id: {}", self.destination_id),
-                &self.destination_id,
-            ));
-        };
         let launch = launch_android_app(
             self.repo_root,
             self.manifest,
@@ -242,6 +336,24 @@ impl BackendAppSession for AndroidAppSession<'_> {
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            let destination =
+                find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+                    .ok_or_else(|| {
+                        AtomError::with_path(
+                            AtomErrorCode::AutomationUnavailable,
+                            format!("unknown destination id: {}", self.destination_id),
+                            &self.destination_id,
+                        )
+                    })?;
+            return agent_device::interact_with_agent_device(
+                self.repo_root,
+                &destination.agent_device_selector(),
+                session_name,
+                self.runner,
+                request,
+            );
+        }
         let launch = self.active_launch()?;
         interact_with_android_uiautomator(self.repo_root, &launch.serial, self.runner, request)
     }
@@ -256,24 +368,114 @@ impl BackendAppSession for AndroidAppSession<'_> {
 
     fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            let destination =
+                find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+                    .ok_or_else(|| {
+                        AtomError::with_path(
+                            AtomErrorCode::AutomationUnavailable,
+                            format!("unknown destination id: {}", self.destination_id),
+                            &self.destination_id,
+                        )
+                    })?;
+            return agent_device::capture_screenshot(
+                self.repo_root,
+                &destination.agent_device_selector(),
+                session_name,
+                output_path,
+                self.runner,
+            );
+        }
         let launch = self.active_launch()?;
         capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
     }
 
     fn capture_logs(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            let destination =
+                find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+                    .ok_or_else(|| {
+                        AtomError::with_path(
+                            AtomErrorCode::AutomationUnavailable,
+                            format!("unknown destination id: {}", self.destination_id),
+                            &self.destination_id,
+                        )
+                    })?;
+            return capture_logs_with_agent_device(
+                self.repo_root,
+                &destination.agent_device_selector(),
+                session_name,
+                output_path,
+                seconds,
+                self.runner,
+            );
+        }
         let launch = self.active_launch()?;
         capture_logs_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
     }
 
     fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            let destination =
+                find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+                    .ok_or_else(|| {
+                        AtomError::with_path(
+                            AtomErrorCode::AutomationUnavailable,
+                            format!("unknown destination id: {}", self.destination_id),
+                            &self.destination_id,
+                        )
+                    })?;
+            agent_device::start_video_capture(
+                self.repo_root,
+                &destination.agent_device_selector(),
+                session_name,
+                output_path,
+                self.runner,
+            )?;
+            thread::sleep(Duration::from_secs(seconds));
+            agent_device::stop_video_capture(
+                self.repo_root,
+                &destination.agent_device_selector(),
+                session_name,
+                self.runner,
+            )?;
+            ensure_video_artifact(output_path)?;
+            return Ok(());
+        }
         let launch = self.active_launch()?;
         capture_video_for_launch(self.repo_root, &launch, output_path, seconds, self.runner)
     }
 
     fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            let destination =
+                find_android_destination(self.repo_root, self.runner, &self.destination_id)?
+                    .ok_or_else(|| {
+                        AtomError::with_path(
+                            AtomErrorCode::AutomationUnavailable,
+                            format!("unknown destination id: {}", self.destination_id),
+                            &self.destination_id,
+                        )
+                    })?;
+            agent_device::start_video_capture(
+                self.repo_root,
+                &destination.agent_device_selector(),
+                session_name,
+                output_path,
+                self.runner,
+            )?;
+            self.video_capture = Some(VideoCapture {
+                output_path: output_path.to_owned(),
+                child: None,
+                remote_path: None,
+                serial: Some(self.destination_id.clone()),
+                session_name: Some(session_name.to_owned()),
+            });
+            return Ok(());
+        }
         let launch = self.active_launch()?;
         self.video_capture = Some(start_video_capture(self.repo_root, &launch, output_path)?);
         Ok(())
@@ -290,10 +492,13 @@ impl BackendAppSession for AndroidAppSession<'_> {
     }
 
     fn shutdown_video(&mut self) -> AtomResult<()> {
-        if self.video_capture.is_some() {
-            let _ = self.stop_video()?;
-        }
-        Ok(())
+        self.cleanup_agent_device_session()
+    }
+}
+
+impl Drop for AndroidAppSession<'_> {
+    fn drop(&mut self) {
+        self.cleanup_agent_device_session_best_effort();
     }
 }
 
@@ -337,6 +542,15 @@ fn deploy_android(
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<()> {
     let destination = resolve_android_device(repo_root, runner, requested_destination)?;
+    if agent_device::is_available(repo_root, runner) {
+        return deploy_android_with_agent_device(
+            repo_root,
+            manifest,
+            &destination,
+            launch_mode,
+            runner,
+        );
+    }
     let artifacts = run_step(
         "Building Android app...",
         "Built Android app",
@@ -436,6 +650,9 @@ fn stop_android(
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<()> {
     let destination = resolve_android_device(repo_root, runner, requested_destination)?;
+    if agent_device::is_available(repo_root, runner) {
+        return stop_android_with_agent_device(repo_root, manifest, &destination, runner);
+    }
     let application_id = manifest.android.application_id.as_deref().ok_or_else(|| {
         AtomError::new(
             AtomErrorCode::InternalBug,
@@ -464,21 +681,157 @@ fn stop_android(
     })
 }
 
+fn deploy_android_with_agent_device(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &AndroidDestination,
+    launch_mode: LaunchMode,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<()> {
+    let artifacts = run_step(
+        "Building Android app...",
+        "Built Android app",
+        "Android build failed",
+        || {
+            build_android_artifacts(
+                repo_root,
+                manifest,
+                AppSessionBuildProfile::Standard,
+                runner,
+            )
+        },
+    )?;
+    let application_id = manifest.android.application_id.as_deref().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "validated Android manifest is missing application_id",
+        )
+    })?;
+    let selector = run_step(
+        "Preparing destination...",
+        "Destination ready",
+        "Destination preparation failed",
+        || prepare_android_agent_device_selector(repo_root, runner, destination),
+    )?;
+    let session_name = format!(
+        "atom-run-{}-{}-{}",
+        sanitize_session_segment(application_id),
+        sanitize_session_segment(&destination.destination_id()),
+        timestamp_suffix(),
+    );
+    let component = format!("{application_id}/.MainActivity");
+    let mut logs_started = false;
+    let result = (|| -> AtomResult<()> {
+        run_step(
+            "Installing app...",
+            "App installed",
+            "Installation failed",
+            || {
+                agent_device::reinstall_app(
+                    repo_root,
+                    &selector,
+                    &session_name,
+                    application_id,
+                    &artifacts.signed_apk,
+                    runner,
+                )
+            },
+        )?;
+        run_step("Launching app...", "App launched", "Launch failed", || {
+            agent_device::open_app(
+                repo_root,
+                &selector,
+                &session_name,
+                application_id,
+                &component,
+                false,
+                runner,
+            )?;
+            wait_for_android_launch_ready_with_agent_device(
+                repo_root,
+                &selector,
+                &session_name,
+                runner,
+            )
+        })?;
+        if launch_mode == LaunchMode::Attached {
+            agent_device::start_logs(repo_root, &selector, &session_name, runner)?;
+            logs_started = true;
+            let log_path = agent_device::logs_path(repo_root, &selector, &session_name, runner)?;
+            eprintln!("→ Streaming logs... (Ctrl+C to stop)");
+            stream_tool(
+                runner,
+                repo_root,
+                "tail",
+                &["-n", "+1", "-f", log_path.as_str()],
+            )?;
+        }
+        Ok(())
+    })();
+    let cleanup_result = cleanup_android_agent_device_command(
+        repo_root,
+        &selector,
+        &session_name,
+        logs_started,
+        runner,
+    );
+    if let Err(error) = result {
+        let _ = cleanup_result;
+        return Err(error);
+    }
+    cleanup_result
+}
+
+fn stop_android_with_agent_device(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &AndroidDestination,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<()> {
+    let application_id = manifest.android.application_id.as_deref().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "validated Android manifest is missing application_id",
+        )
+    })?;
+    if destination.state == "avd" {
+        return Ok(());
+    }
+    let session_name = format!(
+        "atom-stop-{}-{}-{}",
+        sanitize_session_segment(application_id),
+        sanitize_session_segment(&destination.destination_id()),
+        timestamp_suffix(),
+    );
+    let component = format!("{application_id}/.MainActivity");
+    let selector = prepare_android_agent_device_selector(repo_root, runner, destination)?;
+    let result = run_step("Stopping app...", "App stopped", "Stop failed", || {
+        agent_device::open_app(
+            repo_root,
+            &selector,
+            &session_name,
+            application_id,
+            &component,
+            false,
+            runner,
+        )?;
+        agent_device::close_app(repo_root, &selector, &session_name, application_id, runner)
+    });
+    if let Err(error) = result {
+        let _ = agent_device::close_session(repo_root, &selector, &session_name, runner);
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn resolve_android_device(
     repo_root: &Utf8Path,
     runner: &mut dyn ToolRunner,
     requested_destination: Option<&str>,
 ) -> AtomResult<AndroidDestination> {
     if let Some(requested) = requested_destination {
-        if requested.strip_prefix("avd:").is_some() {
-            if let Some(destination) = find_android_destination(repo_root, runner, requested)? {
-                return Ok(destination);
-            }
-            return Err(AtomError::with_path(
-                AtomErrorCode::ExternalToolFailed,
-                format!("unknown Android destination id: {requested}"),
-                requested,
-            ));
+        if let Some(destination) = find_android_destination(repo_root, runner, requested)? {
+            return Ok(destination);
         }
         return Ok(AndroidDestination {
             serial: requested.to_owned(),
@@ -490,26 +843,7 @@ fn resolve_android_device(
         });
     }
 
-    let mut destinations = list_android_devices(repo_root, runner)?;
-    let running_avds = destinations
-        .iter()
-        .filter_map(|destination| destination.avd_name.as_deref())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if let Ok(avds) = list_avds(repo_root, runner) {
-        for avd in avds {
-            if !running_avds.contains(&avd) {
-                destinations.push(AndroidDestination {
-                    serial: String::new(),
-                    state: "avd".to_owned(),
-                    model: None,
-                    device_name: None,
-                    is_emulator: true,
-                    avd_name: Some(avd),
-                });
-            }
-        }
-    }
+    let destinations = list_android_destinations(repo_root, runner)?;
 
     if destinations.is_empty() {
         return Err(AtomError::new(
@@ -547,7 +881,68 @@ fn list_android_destinations(
     repo_root: &Utf8Path,
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<Vec<AndroidDestination>> {
+    if agent_device::is_available(repo_root, runner) {
+        return list_android_destinations_with_agent_device(repo_root, runner);
+    }
     let mut destinations = list_android_devices(repo_root, runner)?;
+    let running_avds = destinations
+        .iter()
+        .filter_map(|destination| destination.avd_name.as_deref())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if let Ok(avds) = list_avds(repo_root, runner) {
+        for avd in avds {
+            if !running_avds.contains(&avd) {
+                destinations.push(AndroidDestination {
+                    serial: format!("avd:{avd}"),
+                    state: "avd".to_owned(),
+                    model: None,
+                    device_name: None,
+                    is_emulator: true,
+                    avd_name: Some(avd),
+                });
+            }
+        }
+    }
+    Ok(destinations)
+}
+
+fn list_android_destinations_with_agent_device(
+    repo_root: &Utf8Path,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<Vec<AndroidDestination>> {
+    let mut destinations = agent_device::list_destinations(repo_root, runner)?
+        .into_iter()
+        .map(|destination| match destination.kind {
+            agent_device::AgentDeviceDestinationKind::Emulator => {
+                let avd_name = if destination.booted {
+                    emulator_avd_name(repo_root, runner, &destination.id)?
+                } else {
+                    None
+                };
+                Ok(AndroidDestination {
+                    serial: destination.id,
+                    state: if destination.booted {
+                        "device".to_owned()
+                    } else {
+                        "avd".to_owned()
+                    },
+                    model: Some(destination.name.clone()),
+                    device_name: Some(destination.name),
+                    is_emulator: true,
+                    avd_name,
+                })
+            }
+            agent_device::AgentDeviceDestinationKind::Device => Ok(AndroidDestination {
+                serial: destination.id,
+                state: "device".to_owned(),
+                model: Some(destination.name),
+                device_name: None,
+                is_emulator: false,
+                avd_name: None,
+            }),
+        })
+        .collect::<AtomResult<Vec<_>>>()?;
     let running_avds = destinations
         .iter()
         .filter_map(|destination| destination.avd_name.as_deref())
@@ -658,6 +1053,13 @@ fn find_android_destination(
     runner: &mut dyn ToolRunner,
     requested: &str,
 ) -> AtomResult<Option<AndroidDestination>> {
+    if agent_device::is_available(repo_root, runner) {
+        return Ok(list_android_destinations(repo_root, runner)?
+            .into_iter()
+            .find(|destination| {
+                destination.destination_id() == requested || destination.serial == requested
+            }));
+    }
     let running_devices = list_android_devices(repo_root, runner)?;
     if let Some(avd_name) = requested.strip_prefix("avd:") {
         if let Some(destination) = running_devices
@@ -955,6 +1357,149 @@ fn wait_for_android_launch_ready(
     ))
 }
 
+fn launch_android_app_with_agent_device(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &AndroidDestination,
+    session_name: &str,
+    build_profile: AppSessionBuildProfile,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<AndroidAppLaunch> {
+    let selector = prepare_android_agent_device_selector(repo_root, runner, destination)?;
+    let artifacts = build_android_artifacts(repo_root, manifest, build_profile, runner)?;
+    let application_id = manifest.android.application_id.clone().ok_or_else(|| {
+        AtomError::new(AtomErrorCode::InternalBug, "missing Android application id")
+    })?;
+    agent_device::reinstall_app(
+        repo_root,
+        &selector,
+        session_name,
+        &application_id,
+        &artifacts.signed_apk,
+        runner,
+    )?;
+    let component = format!("{application_id}/.MainActivity");
+    let _ = agent_device::close_session(repo_root, &selector, session_name, runner);
+    agent_device::open_app(
+        repo_root,
+        &selector,
+        session_name,
+        &application_id,
+        &component,
+        false,
+        runner,
+    )?;
+    wait_for_android_launch_ready_with_agent_device(repo_root, &selector, session_name, runner)?;
+    Ok(AndroidAppLaunch {
+        serial: selector_serial(&selector).unwrap_or_else(|| {
+            if destination.serial.is_empty() {
+                destination.destination_id()
+            } else {
+                destination.serial.clone()
+            }
+        }),
+        application_id,
+    })
+}
+
+fn cleanup_android_agent_device_command(
+    repo_root: &Utf8Path,
+    selector: &agent_device::AgentDeviceSelector,
+    session_name: &str,
+    logs_started: bool,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<()> {
+    if logs_started {
+        agent_device::stop_logs(repo_root, selector, session_name, runner)?;
+    }
+    agent_device::close_session(repo_root, selector, session_name, runner)
+}
+
+fn attach_android_app_with_agent_device(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &AndroidDestination,
+    session_name: &str,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<Option<AndroidAppLaunch>> {
+    let Some(application_id) = manifest.android.application_id.clone() else {
+        return Ok(None);
+    };
+    let selector = prepare_android_agent_device_selector(repo_root, runner, destination)?;
+    let component = format!("{application_id}/.MainActivity");
+    if agent_device::open_app(
+        repo_root,
+        &selector,
+        session_name,
+        &application_id,
+        &component,
+        false,
+        runner,
+    )
+    .is_err()
+    {
+        let _ = agent_device::close_session(repo_root, &selector, session_name, runner);
+        return Ok(None);
+    }
+    wait_for_android_launch_ready_with_agent_device(repo_root, &selector, session_name, runner)?;
+    Ok(Some(AndroidAppLaunch {
+        serial: selector_serial(&selector).unwrap_or_else(|| {
+            if destination.serial.is_empty() {
+                destination.destination_id()
+            } else {
+                destination.serial.clone()
+            }
+        }),
+        application_id,
+    }))
+}
+
+fn prepare_android_agent_device_selector(
+    repo_root: &Utf8Path,
+    runner: &mut dyn ToolRunner,
+    destination: &AndroidDestination,
+) -> AtomResult<agent_device::AgentDeviceSelector> {
+    let selector = destination.agent_device_selector();
+    agent_device::boot_destination(repo_root, &selector, runner)?;
+    if destination.state == "avd"
+        && let Some(avd_name) = destination.avd_name.as_deref()
+    {
+        let serial = wait_for_android_emulator_serial(repo_root, runner, avd_name)?;
+        wait_for_android_boot(repo_root, runner, &serial)?;
+        return Ok(agent_device::AgentDeviceSelector::Serial(serial));
+    }
+    Ok(selector)
+}
+
+fn selector_serial(selector: &agent_device::AgentDeviceSelector) -> Option<String> {
+    match selector {
+        agent_device::AgentDeviceSelector::Serial(serial) => Some(serial.clone()),
+        agent_device::AgentDeviceSelector::Device(_) => None,
+    }
+}
+
+fn wait_for_android_launch_ready_with_agent_device(
+    repo_root: &Utf8Path,
+    selector: &agent_device::AgentDeviceSelector,
+    session_name: &str,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<()> {
+    let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(snapshot) =
+            agent_device::inspect_ui_with_agent_device(repo_root, selector, session_name, runner)
+            && snapshot_is_launch_ready(&snapshot)
+        {
+            return Ok(());
+        }
+        thread::sleep(APP_LAUNCH_READY_POLL_INTERVAL);
+    }
+    Err(AtomError::new(
+        AtomErrorCode::AutomationUnavailable,
+        "app did not become responsive after launch",
+    ))
+}
+
 fn snapshot_is_launch_ready(snapshot: &UiSnapshot) -> bool {
     snapshot.nodes.iter().any(|node| {
         !node.role.eq_ignore_ascii_case("application")
@@ -1054,6 +1599,48 @@ fn capture_logs_for_launch(
     })
 }
 
+fn capture_logs_with_agent_device(
+    repo_root: &Utf8Path,
+    selector: &agent_device::AgentDeviceSelector,
+    session_name: &str,
+    output_path: &Utf8Path,
+    seconds: u64,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<()> {
+    write_parent_dir(output_path)?;
+    agent_device::start_logs(repo_root, selector, session_name, runner).map_err(|error| {
+        AtomError::with_path(
+            AtomErrorCode::AutomationLogCaptureFailed,
+            format!("failed to start log capture: {}", error.message),
+            output_path.as_str(),
+        )
+    })?;
+    thread::sleep(Duration::from_secs(seconds));
+    agent_device::stop_logs(repo_root, selector, session_name, runner).map_err(|error| {
+        AtomError::with_path(
+            AtomErrorCode::AutomationLogCaptureFailed,
+            format!("failed to stop log capture: {}", error.message),
+            output_path.as_str(),
+        )
+    })?;
+    let log_path =
+        agent_device::logs_path(repo_root, selector, session_name, runner).map_err(|error| {
+            AtomError::with_path(
+                AtomErrorCode::AutomationLogCaptureFailed,
+                format!("failed to resolve log path: {}", error.message),
+                output_path.as_str(),
+            )
+        })?;
+    fs::copy(&log_path, output_path).map_err(|error| {
+        AtomError::with_path(
+            AtomErrorCode::AutomationLogCaptureFailed,
+            format!("failed to copy captured logs: {error}"),
+            output_path.as_str(),
+        )
+    })?;
+    Ok(())
+}
+
 fn capture_video_for_launch(
     repo_root: &Utf8Path,
     launch: &AndroidAppLaunch,
@@ -1113,9 +1700,10 @@ fn start_video_capture(
         })?;
     Ok(VideoCapture {
         output_path: output_path.to_owned(),
-        child,
-        remote_path,
-        serial: launch.serial.clone(),
+        child: Some(child),
+        remote_path: Some(remote_path),
+        serial: Some(launch.serial.clone()),
+        session_name: None,
     })
 }
 
@@ -1124,17 +1712,58 @@ fn stop_video_capture(
     video: VideoCapture,
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<Utf8PathBuf> {
-    let mut child = video.child;
-    stop_android_screenrecord(repo_root, &video.serial, &mut child, runner)?;
+    if let Some(session_name) = video.session_name.as_deref() {
+        let destination_id = video.serial.as_deref().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::InternalBug,
+                "agent-device video capture was missing destination state",
+            )
+        })?;
+        let destination =
+            find_android_destination(repo_root, runner, destination_id)?.ok_or_else(|| {
+                AtomError::with_path(
+                    AtomErrorCode::AutomationUnavailable,
+                    format!("unknown destination id: {destination_id}"),
+                    destination_id,
+                )
+            })?;
+        agent_device::stop_video_capture(
+            repo_root,
+            &destination.agent_device_selector(),
+            session_name,
+            runner,
+        )?;
+        ensure_video_artifact(&video.output_path)?;
+        return Ok(video.output_path);
+    }
+    let mut child = video.child.ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "ADB video capture was missing a recorder process",
+        )
+    })?;
+    let serial = video.serial.as_deref().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "ADB video capture was missing a device serial",
+        )
+    })?;
+    let remote_path = video.remote_path.as_deref().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "ADB video capture was missing a remote artifact path",
+        )
+    })?;
+    stop_android_screenrecord(repo_root, serial, &mut child, runner)?;
     run_tool(
         runner,
         repo_root,
         "adb",
         &[
             "-s",
-            &video.serial,
+            serial,
             "pull",
-            &video.remote_path,
+            remote_path,
             video.output_path.as_str(),
         ],
     )?;
@@ -1142,7 +1771,7 @@ fn stop_video_capture(
         runner,
         repo_root,
         "adb",
-        &["-s", &video.serial, "shell", "rm", "-f", &video.remote_path],
+        &["-s", serial, "shell", "rm", "-f", remote_path],
     )?;
     ensure_video_artifact(&video.output_path)?;
     Ok(video.output_path)
@@ -1230,6 +1859,19 @@ fn write_parent_dir(path: &Utf8Path) -> AtomResult<()> {
             directory.as_str(),
         )
     })
+}
+
+fn sanitize_session_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn timestamp_suffix() -> String {
@@ -1418,6 +2060,14 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
         let root = Utf8PathBuf::from(".");
         let mut runner = FakeToolRunner::default();
         runner.push_capture(
+            "agent-device",
+            &["--version"],
+            Err(AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "agent-device not installed",
+            )),
+        );
+        runner.push_capture(
             "adb",
             &["devices", "-l"],
             Ok(
@@ -1447,9 +2097,64 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
     }
 
     #[test]
+    fn agent_device_listing_preserves_offline_avds() {
+        let root = Utf8PathBuf::from(".");
+        let mut runner = FakeToolRunner::default();
+        runner.push_capture("agent-device", &["--version"], Ok("0.7.21\n"));
+        runner.push_capture(
+            "agent-device",
+            &[
+                "devices",
+                "--platform",
+                "android",
+                "--state-dir",
+                "./cng-output/agent-device-state",
+                "--json",
+            ],
+            Ok(
+                r#"{"success":true,"data":{"devices":[{"id":"emulator-5554","name":"FixtureApi35","platform":"android","kind":"emulator","booted":true}]}}"#,
+            ),
+        );
+        runner.push_capture(
+            "adb",
+            &[
+                "-s",
+                "emulator-5554",
+                "shell",
+                "getprop",
+                "ro.boot.qemu.avd_name",
+            ],
+            Ok("FixtureApi35\n"),
+        );
+        runner.push_capture(
+            "emulator",
+            &["-list-avds"],
+            Ok("FixtureApi35\nFixtureApi36\n"),
+        );
+
+        let destinations =
+            list_android_destinations(&root, &mut runner).expect("destinations should load");
+
+        assert_eq!(destinations.len(), 2);
+        assert_eq!(destinations[0].destination_id(), "avd:FixtureApi35");
+        assert_eq!(destinations[0].state, "device");
+        assert_eq!(destinations[1].destination_id(), "avd:FixtureApi36");
+        assert_eq!(destinations[1].state, "avd");
+        assert!(runner.captures.is_empty());
+    }
+
+    #[test]
     fn avd_identifier_resolves_to_running_emulator() {
         let root = Utf8PathBuf::from(".");
         let mut runner = FakeToolRunner::default();
+        runner.push_capture(
+            "agent-device",
+            &["--version"],
+            Err(AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "agent-device not installed",
+            )),
+        );
         runner.push_capture(
             "adb",
             &["devices", "-l"],
@@ -1476,6 +2181,35 @@ ABC123 device model:Pixel_8_Pro device:husky transport_id:2
         assert_eq!(destination.serial, "emulator-5554");
         assert_eq!(destination.state, "device");
         assert_eq!(destination.avd_name.as_deref(), Some("FixtureApi35"));
+        assert!(runner.captures.is_empty());
+    }
+
+    #[test]
+    fn avd_identifier_resolves_to_offline_avd_with_agent_device_enabled() {
+        let root = Utf8PathBuf::from(".");
+        let mut runner = FakeToolRunner::default();
+        runner.push_capture("agent-device", &["--version"], Ok("0.7.21\n"));
+        runner.push_capture("agent-device", &["--version"], Ok("0.7.21\n"));
+        runner.push_capture(
+            "agent-device",
+            &[
+                "devices",
+                "--platform",
+                "android",
+                "--state-dir",
+                "./cng-output/agent-device-state",
+                "--json",
+            ],
+            Ok(r#"{"success":true,"data":{"devices":[]}}"#),
+        );
+        runner.push_capture("emulator", &["-list-avds"], Ok("FixtureApi35\n"));
+
+        let destination = find_android_destination(&root, &mut runner, "avd:FixtureApi35")
+            .expect("lookup should succeed")
+            .expect("destination should resolve");
+
+        assert_eq!(destination.destination_id(), "avd:FixtureApi35");
+        assert_eq!(destination.state, "avd");
         assert!(runner.captures.is_empty());
     }
 

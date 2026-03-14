@@ -276,20 +276,16 @@ Minimum evaluation plan capabilities:
 
 Backend direction:
 
-- iOS should use a framework-owned `idb`-backed semantic backend. The underlying implementation may
-  still rely on XCTest-compatible primitives, but `simctl` is not sufficient as the primary
-  interaction backend.
-- For raw simulator screenshots, `simctl io screenshot` is an acceptable fallback when `idb` cannot
-  encode an image, because the semantic inspection/interaction path still stays in the
-  framework-owned backend.
+- iOS should use a framework-owned `agent-device` backend that owns destination discovery, launch,
+  semantic inspection, interaction, screenshots, logs, and video through one CLI seam.
+- The host machine still needs the Apple tooling that `agent-device` wraps; this migration changes
+  Atom's orchestration contract, not the underlying platform requirements on developer machines.
 - iOS log capture should combine Atom runtime logs with simulator or device log collection so one
   evaluation run can correlate app behavior with visible UI evidence.
-- Android should use a framework-owned UI Automator-based backend for semantic hierarchy and
-  gestures. `adb shell input` remains useful as a fallback, not as the primary contract.
-- Android log capture should combine Atom runtime logs with `logcat`-style device logs so failures
-  are inspectable without reproducing them manually.
-- Both platforms should still expose raw screenshots and video capture through native CLIs because
-  they are cheap, reliable, and excellent proof artifacts.
+- Android should use the same framework-owned `agent-device` seam for destination discovery,
+  install/open/close, semantic hierarchy, gestures, screenshots, logs, and video.
+- The host machine still needs Android SDK tooling (`adb`, emulator, platform tools) because
+  `agent-device` delegates to those platform binaries under the hood.
 
 Output expectations:
 
@@ -538,8 +534,8 @@ Deliverables:
 
 - iOS `BUILD.bazel` uses `ios_application` from `rules_apple` (replaces `swift_binary`)
 - Android `BUILD.bazel` uses `android_binary` (replaces `java_binary`)
-- `atom run --platform ios` builds, installs, and launches on iOS simulator via `idb`
-- `atom run --platform android` builds, installs, and launches on Android emulator via `adb`
+- `atom run --platform ios` builds, installs, and launches through `agent-device`
+- `atom run --platform android` builds, installs, and launches through `agent-device`
 - `atom run --platform <platform> --detach` launches, waits for an inspectable app session, and then
   returns without holding the terminal open for log streaming
 - `atom stop --platform <platform>` stops the selected app without uninstalling it
@@ -820,8 +816,8 @@ Deliverables:
 - hello-world-owned demo surface module plus a plain app variant that proves automation does not
   depend on app-specific hooks
 - Repo-local skills for destination discovery, evidence capture, and UI evaluation
-- Framework-owned iOS automation backend built on `idb`
-- Framework-owned Android UIAutomator-backed automation backend
+- Framework-owned iOS automation backend built on `agent-device`
+- Framework-owned Android automation backend built on `agent-device`
 - Proof bundles that capture logs, screenshots, video, UI snapshots, and step transcripts
 
 Exit criteria:
@@ -835,7 +831,7 @@ Exit criteria:
 - The same workflow can be executed as one evaluation run that leaves behind a machine-readable
   proof bundle
 - Agents can complete the same workflow through repo-local skills without dropping down to raw
-  `idb`, `adb`, or `xcrun`
+  `agent-device`, `idb`, `adb`, or `xcrun`
 - The same workflow supports attached physical devices when platform tooling allows it
 - The destination model is extensible to additional platforms and destination kinds without
   redefining the proof model
@@ -871,10 +867,9 @@ Exit criteria:
 The repo now has runnable generated hosts, first-party config/CNG plugins, and a Phase 6 proof
 surface. The next slice should harden the evaluation workflow end to end:
 
-1. Keep iOS destination discovery, launch, and semantic automation behind `idb` so agents stay on
-   Atom-owned commands instead of raw tool invocations.
-2. Keep Android evidence and interaction behind the matching Atom surfaces and tighten semantic
-   parity with the iOS path.
+1. Keep iOS and Android destination discovery, launch, and semantic automation behind `agent-device`
+   so agents stay on Atom-owned commands instead of raw tool invocations.
+2. Tighten semantic parity and runtime proof coverage across the shared `agent-device` backend seam.
 3. Ship repo-local skills for destination discovery, evidence capture, and UI evaluation alongside
    the CLI so agents can use the framework the same way humans do.
 4. Keep the spec, docs, example plans, and hello-world demo surface aligned as the proof model

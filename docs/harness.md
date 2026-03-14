@@ -12,9 +12,13 @@ Run:
 
 This expects `mise` to already be installed, then installs the pinned toolchain from
 [../mise.toml](../mise.toml) and configures Git to use the tracked hooks in
-[../.githooks](../.githooks). On macOS hosts with Homebrew available, bootstrap also installs the
-`idb` companion (`idb_companion`) from `facebook/fb` and installs the `fb-idb` CLI into the Homebrew
-prefix so the `idb` command is available on `PATH`.
+[../.githooks](../.githooks). Bootstrap also installs the pinned `agent-device` CLI via npm so the
+framework-owned automation backend is available on `PATH`. On macOS hosts with Homebrew available,
+bootstrap additionally installs the iOS companion tooling (`idb_companion` plus `fb-idb`) needed by
+the underlying Apple-side automation stack, and `scripts/setup-android-sdk.sh` installs the Android
+SDK tooling (`adb`, emulator, platform tools) that `agent-device` wraps on Android hosts. Atom
+scopes `agent-device` daemon state under `cng-output/agent-device-state` so sessions stay
+workspace-local instead of leaking through a shared home-directory daemon.
 
 ## Local Guardrails
 
