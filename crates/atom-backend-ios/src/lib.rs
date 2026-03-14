@@ -1,5 +1,6 @@
 mod cng;
 mod deploy;
+mod doctor;
 mod templates;
 
 use atom_backends::{DeployBackendRegistry, GenerationBackendRegistry};

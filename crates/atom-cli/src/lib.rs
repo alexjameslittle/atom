@@ -1,3 +1,5 @@
+mod doctor;
+
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::PathBuf;
@@ -28,6 +30,7 @@ use atom_manifest::load_manifest;
 use atom_modules::resolve_modules;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use doctor::{DoctorArgs, execute as execute_doctor};
 use serde::Serialize;
 
 const ATOM_FRAMEWORK_VERSION: &str = env!("ATOM_FRAMEWORK_VERSION");
@@ -43,6 +46,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    Doctor(DoctorArgs),
     Prebuild(PrebuildArgs),
     Run(RunArgs),
     Stop(StopArgs),
@@ -386,6 +390,10 @@ fn extract_version_token(output: &str) -> Option<&str> {
 
 fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<CommandOutput> {
     match &cli.command {
+        Commands::Doctor(args) => {
+            let repo_root = resolve_workspace_root(cwd)?;
+            execute_doctor(&repo_root, args, &first_party_deploy_backend_registry()?)
+        }
         Commands::Prebuild(args) => execute_prebuild(cwd, args),
         Commands::Run(args) => execute_run(cwd, args, runner),
         Commands::Stop(args) => execute_stop(cwd, args, runner),
@@ -960,6 +968,11 @@ mod tests {
         assert_eq!(output.exit_code, 0);
         assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: atom"));
         assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn doctor_command_accepts_json_flag() {
+        parse_cli(&["atom", "doctor", "--json"]);
     }
 
     #[test]

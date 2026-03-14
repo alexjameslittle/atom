@@ -32,7 +32,8 @@ Dependency direction should move one way:
   - Validates module inputs
   - Resolves dependency order and initialization order
 - `atom-backends`
-  - Owns backend contracts, shared destination/evaluation/CNG data types, and generic registries
+  - Owns backend contracts, shared destination/evaluation/CNG/doctor data types, and generic
+    registries
   - Defines the compile-time seam for first-party backend composition without dynamic loading
   - Stays platform-neutral; concrete iOS/Android behavior lives in backend implementation crates
 - `atom-cng`
@@ -55,17 +56,20 @@ Dependency direction should move one way:
   - First-party iOS backend implementation crate
   - Registers iOS deploy and CNG backends for the canonical CLI binary
   - Owns iOS destination discovery, deploy/stop/evaluate implementation, and iOS host templates
+  - Owns iOS-specific environment doctor probes
   - Owns iOS-specific CNG planning/emission and backend compatibility checks
 - `atom-backend-android`
   - First-party Android backend implementation crate
   - Registers Android deploy and CNG backends for the canonical CLI binary
   - Owns Android destination discovery, deploy/stop/evaluate implementation, and Android host
     templates
+  - Owns Android-specific environment doctor probes
   - Owns Android-specific CNG planning/emission and backend compatibility checks
 - `atom-cli`
   - Maps user commands to Bazel-aware workflows
   - Links the first-party config plugin registry used during `atom prebuild`
   - Builds the canonical first-party backend registries used for deploy/evaluate/CNG composition
+  - Aggregates core toolchain checks with backend-owned platform diagnostics for `atom doctor`
   - Exposes uniform backend-aware verbs such as `atom run --platform <platform>`
   - Must stay a thin wrapper, not an alternate build system
 - `atom-runtime`
@@ -118,6 +122,8 @@ Dependency direction should move one way:
 - Keep generic backend layers backend-neutral. `atom-backends`, `atom-cng`, and `atom-deploy` must
   not encode concrete first-party backend ids, iOS/Android-specific branching, or backend- specific
   golden tests.
+- Keep platform-specific environment diagnostics in `atom-backend-*` crates. `atom-cli` may
+  aggregate `atom doctor` output, but it must not re-embed concrete iOS/Android probing logic.
 - Keep disabled-backend failures side-effect free. CLI preflight for
   `atom run --platform <platform>` must reject disabled backends before CNG writes generated files.
 - Keep backend-specific assertions and fixtures in `atom-backend-*` crates or schema-owning crates.

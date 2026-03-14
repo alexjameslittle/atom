@@ -1175,6 +1175,7 @@ Rules:
 
 Required commands:
 
+- `atom doctor`
 - `atom --version`
 - `atom prebuild`
 - `atom prebuild --dry-run`
@@ -1195,21 +1196,36 @@ Required commands:
 
 ### 10.2 Exit Codes
 
-| Exit | Meaning                 |
-| ---- | ----------------------- |
-| `0`  | success                 |
-| `64` | CLI usage error         |
-| `65` | manifest error          |
-| `66` | module resolution error |
-| `67` | CNG error               |
-| `68` | bridge or runtime error |
-| `69` | external tool failure   |
-| `70` | internal bug            |
+| Exit | Meaning                             |
+| ---- | ----------------------------------- |
+| `1`  | critical `atom doctor` check failed |
+| `0`  | success                             |
+| `64` | CLI usage error                     |
+| `65` | manifest error                      |
+| `66` | module resolution error             |
+| `67` | CNG error                           |
+| `68` | bridge or runtime error             |
+| `69` | external tool failure               |
+| `70` | internal bug                        |
 
 ### 10.3 Output Rules
 
 All CLI commands except `atom --version` MUST fail with `CLI_USAGE_ERROR` when invoked outside a
 Bazel workspace that consumes Atom via `bzlmod`.
+
+`atom doctor`:
+
+- MUST probe Bazel/Bazelisk, Rust, mise, Xcode, iOS simulators, Android SDK/device availability, and
+  Java independently
+- MUST continue running remaining probes after any one check fails
+- MUST compare Bazel against `.bazelversion` and Rust against the pinned `mise.toml` tool version
+- MUST emit actionable remediation text for every failing check
+- MUST treat missing `mise` as a recommendation, not a critical failure
+- MUST treat iOS/Android readiness gaps as platform warnings, not critical failures
+- MUST exit `0` when all critical checks pass, even if recommendation or platform checks fail
+- MUST exit `1` when any critical check fails
+- `atom doctor --json` MUST emit a machine-readable JSON summary of checks, ready platforms, and
+  critical issue counts
 
 `atom --version`:
 

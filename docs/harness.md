@@ -16,6 +16,10 @@ This expects `mise` to already be installed, then installs the pinned toolchain 
 `idb` companion (`idb_companion`) from `facebook/fb` and installs the `fb-idb` CLI into the Homebrew
 prefix so the `idb` command is available on `PATH`.
 
+After bootstrap, run `bazelisk run //:atom -- doctor` for a fast environment sanity check before
+full verification. `atom doctor` reports pinned Bazel/Rust/mise status plus backend-owned iOS and
+Android readiness probes, and only critical toolchain failures make it exit non-zero.
+
 ## Local Guardrails
 
 - `pre-commit` runs formatting and repository-level linters.
