@@ -1,0 +1,38 @@
+{
+  "build_profile": "debugger",
+  "steps": [
+    {
+      "kind": "debug_attach",
+      "name": "attach.json"
+    },
+    {
+      "kind": "debug_pause",
+      "name": "pause.json"
+    },
+    {
+      "kind": "debug_wait_for_stop",
+      "name": "stopped.json",
+      "timeout_ms": 5000
+    },
+    {
+      "kind": "debug_threads",
+      "name": "threads.json"
+    },
+    {
+      "kind": "debug_backtrace",
+      "name": "backtrace.json"
+    },
+    {
+      "kind": "debug_resume",
+      "name": "resume.json"
+    },
+    {
+      "kind": "inspect_ui",
+      "name": "inspect.json"
+    },
+    {
+      "kind": "screenshot",
+      "name": "after-resume.png"
+    }
+  ]
+}

@@ -272,6 +272,8 @@ Minimum evaluation plan capabilities:
 - Capture logs, screenshots, and video.
 - Inspect the current UI tree.
 - Tap, long-press, swipe, drag, and type text.
+- When the plan selects `build_profile: "debugger"`, request debugger attach, stop waits,
+  pause/resume, thread inspection, and backtrace inspection without leaving `atom evaluate run`.
 - Emit a machine-readable artifact manifest plus a step transcript for proof.
 
 Backend direction:
@@ -304,8 +306,8 @@ Output expectations:
   simulator/emulator.
 - iOS evidence capture should default proof-bundle videos to `.mov` artifacts and keep log output
   focused on the selected app rather than full-device simulator noise when possible.
-- Every evaluation run produces a proof bundle with logs, screenshots, video, UI snapshots, and a
-  step-by-step manifest of what the agent attempted.
+- Every evaluation run produces a proof bundle with logs, screenshots, video, UI snapshots, debugger
+  JSON artifacts when requested, and a step-by-step manifest of what the agent attempted.
 - Debugger-aware evaluation runs should still flow through the same public command and resolve
   installable artifacts plus local symbol files from structured Bazel providers instead of relying
   on output-file ordering heuristics.

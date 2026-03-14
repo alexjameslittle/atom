@@ -3,8 +3,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, ToolRunner,
+    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, DebugSessionRequest,
+    DebugSessionResponse, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
+    ToolRunner,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
@@ -219,6 +220,7 @@ pub fn evaluate_run(
     runner: &mut impl ToolRunner,
 ) -> AtomResult<EvaluateCommandOutput> {
     let plan = load_evaluation_plan(plan_path)?;
+    require_debugger_profile(&plan)?;
     write_parent_dir(artifacts_dir)?;
 
     let descriptor =
@@ -285,6 +287,10 @@ pub fn evaluate_run(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "The evaluation dispatcher keeps the public plan step mapping in one place."
+)]
 fn execute_step(
     index: usize,
     step: EvaluationStep,
@@ -295,6 +301,68 @@ fn execute_step(
     let started_at_ms = timestamp_millis();
     match step {
         EvaluationStep::Launch => execute_launch_step(index, started_at_ms, session),
+        EvaluationStep::DebugAttach { name } => execute_debug_step(
+            index,
+            "debug_attach",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            name,
+            DebugSessionRequest::Attach,
+        ),
+        EvaluationStep::DebugWaitForStop { name, timeout_ms } => execute_debug_step(
+            index,
+            "debug_wait_for_stop",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            name,
+            DebugSessionRequest::WaitForStop {
+                timeout_ms: timeout_ms.unwrap_or(5_000),
+            },
+        ),
+        EvaluationStep::DebugPause { name } => execute_debug_step(
+            index,
+            "debug_pause",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            name,
+            DebugSessionRequest::Pause,
+        ),
+        EvaluationStep::DebugResume { name } => execute_debug_step(
+            index,
+            "debug_resume",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            name,
+            DebugSessionRequest::Resume,
+        ),
+        EvaluationStep::DebugThreads { name } => execute_debug_step(
+            index,
+            "debug_threads",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            name,
+            DebugSessionRequest::ListThreads,
+        ),
+        EvaluationStep::DebugBacktrace { name, thread_id } => execute_debug_step(
+            index,
+            "debug_backtrace",
+            started_at_ms,
+            artifacts_dir,
+            session,
+            artifacts,
+            name,
+            DebugSessionRequest::ListFrames { thread_id },
+        ),
         EvaluationStep::WaitForUi {
             target_id,
             text,
@@ -383,6 +451,37 @@ fn execute_launch_step(
 ) -> AtomResult<StepRecord> {
     session.ensure_launched()?;
     Ok(simple_step(index, "launch", started_at_ms))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Debugger steps carry the same explicit artifact/session inputs as other evaluation helpers."
+)]
+fn execute_debug_step(
+    index: usize,
+    kind: &str,
+    started_at_ms: u128,
+    artifacts_dir: &Utf8Path,
+    session: &mut AppSession<'_>,
+    artifacts: &mut Vec<ArtifactRecord>,
+    name: Option<String>,
+    request: DebugSessionRequest,
+) -> AtomResult<StepRecord> {
+    let response = session.execute_debug_request(request)?;
+    let artifact_name = artifact_name(name, index, kind, "json");
+    let output_path = artifacts_dir.join(&artifact_name);
+    write_json(&output_path, &response)?;
+    artifacts.push(ArtifactRecord {
+        name: artifact_name.clone(),
+        kind: kind.to_owned(),
+        path: output_path.as_str().to_owned(),
+    });
+    Ok(step_with_artifacts(
+        index,
+        kind,
+        started_at_ms,
+        vec![artifact_name],
+    ))
 }
 
 fn execute_wait_for_ui_step(
@@ -639,6 +738,12 @@ fn require_plan_capabilities(
     for step in &plan.steps {
         let capability = match step {
             EvaluationStep::Launch => DestinationCapability::Launch,
+            EvaluationStep::DebugAttach { .. }
+            | EvaluationStep::DebugWaitForStop { .. }
+            | EvaluationStep::DebugPause { .. }
+            | EvaluationStep::DebugResume { .. }
+            | EvaluationStep::DebugThreads { .. }
+            | EvaluationStep::DebugBacktrace { .. } => continue,
             EvaluationStep::WaitForUi { .. } | EvaluationStep::InspectUi { .. } => {
                 DestinationCapability::InspectUi
             }
@@ -658,9 +763,40 @@ fn require_plan_capabilities(
     Ok(())
 }
 
+fn require_debugger_profile(plan: &EvaluationPlan) -> AtomResult<()> {
+    if plan.build_profile == AppSessionBuildProfile::Debugger
+        || !plan.steps.iter().any(is_debug_step)
+    {
+        return Ok(());
+    }
+
+    Err(AtomError::new(
+        AtomErrorCode::CliUsageError,
+        "debugger evaluation steps require plan.build_profile to be set to \"debugger\"",
+    ))
+}
+
+fn is_debug_step(step: &EvaluationStep) -> bool {
+    matches!(
+        step,
+        EvaluationStep::DebugAttach { .. }
+            | EvaluationStep::DebugWaitForStop { .. }
+            | EvaluationStep::DebugPause { .. }
+            | EvaluationStep::DebugResume { .. }
+            | EvaluationStep::DebugThreads { .. }
+            | EvaluationStep::DebugBacktrace { .. }
+    )
+}
+
 fn step_kind(step: &EvaluationStep) -> &'static str {
     match step {
         EvaluationStep::Launch => "launch",
+        EvaluationStep::DebugAttach { .. } => "debug_attach",
+        EvaluationStep::DebugWaitForStop { .. } => "debug_wait_for_stop",
+        EvaluationStep::DebugPause { .. } => "debug_pause",
+        EvaluationStep::DebugResume { .. } => "debug_resume",
+        EvaluationStep::DebugThreads { .. } => "debug_threads",
+        EvaluationStep::DebugBacktrace { .. } => "debug_backtrace",
         EvaluationStep::WaitForUi { .. } => "wait_for_ui",
         EvaluationStep::Tap { .. } => "tap",
         EvaluationStep::LongPress { .. } => "long_press",
@@ -757,6 +893,23 @@ impl<'a> AppSession<'a> {
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
         self.backend.interact(request)
+    }
+
+    fn execute_debug_request(
+        &mut self,
+        request: DebugSessionRequest,
+    ) -> AtomResult<DebugSessionResponse> {
+        let response = {
+            let Some(debug_session) = self.backend.debug_session()? else {
+                return Err(AtomError::new(
+                    AtomErrorCode::AutomationUnavailable,
+                    "this evaluation session does not support debugger control",
+                ));
+            };
+            debug_session.execute(request)?
+        };
+        self.ensure_launched()?;
+        Ok(response)
     }
 
     fn video_extension(&self) -> &'static str {
@@ -863,9 +1016,10 @@ mod tests {
     use std::fs;
 
     use atom_backends::{
-        AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDefinition,
-        DeployBackend, DeployBackendRegistry, DestinationCapability, DestinationDescriptor,
-        ToolRunner,
+        AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDebugSession,
+        BackendDefinition, DebugFrame, DebugSessionRequest, DebugSessionResponse,
+        DebugSessionState, DebugThread, DeployBackend, DeployBackendRegistry,
+        DestinationCapability, DestinationDescriptor, ToolRunner,
     };
     use atom_manifest::{NormalizedManifest, testing::fixture_manifest};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -873,7 +1027,8 @@ mod tests {
 
     use super::{
         EvaluationPlan, EvaluationStep, InteractionRequest, ScreenInfo, UiBounds, UiNode,
-        UiSnapshot, load_evaluation_plan, require_plan_capabilities, video_artifact_name,
+        UiSnapshot, load_evaluation_plan, require_debugger_profile, require_plan_capabilities,
+        video_artifact_name,
     };
 
     #[derive(Default)]
@@ -995,6 +1150,7 @@ mod tests {
     #[derive(Default)]
     struct FixtureSession {
         snapshots: VecDeque<UiSnapshot>,
+        debug_session: FixtureDebugSession,
     }
 
     impl BackendAppSession for FixtureSession {
@@ -1073,6 +1229,71 @@ mod tests {
         fn shutdown_video(&mut self) -> atom_ffi::AtomResult<()> {
             Ok(())
         }
+
+        fn debug_session(&mut self) -> atom_ffi::AtomResult<Option<&mut dyn BackendDebugSession>> {
+            Ok(Some(&mut self.debug_session))
+        }
+    }
+
+    struct FixtureDebugSession {
+        state: DebugSessionState,
+    }
+
+    impl Default for FixtureDebugSession {
+        fn default() -> Self {
+            Self {
+                state: DebugSessionState::Unknown,
+            }
+        }
+    }
+
+    impl BackendDebugSession for FixtureDebugSession {
+        fn execute(
+            &mut self,
+            request: DebugSessionRequest,
+        ) -> atom_ffi::AtomResult<DebugSessionResponse> {
+            match request {
+                DebugSessionRequest::Attach => {
+                    self.state = DebugSessionState::Running;
+                    Ok(DebugSessionResponse::Attached { state: self.state })
+                }
+                DebugSessionRequest::InspectState => {
+                    Ok(DebugSessionResponse::State { state: self.state })
+                }
+                DebugSessionRequest::WaitForStop { .. } => {
+                    self.state = DebugSessionState::Stopped;
+                    Ok(DebugSessionResponse::Stopped { state: self.state })
+                }
+                DebugSessionRequest::Pause => {
+                    self.state = DebugSessionState::Stopped;
+                    Ok(DebugSessionResponse::Paused)
+                }
+                DebugSessionRequest::Resume => {
+                    self.state = DebugSessionState::Running;
+                    Ok(DebugSessionResponse::Resumed)
+                }
+                DebugSessionRequest::ListThreads => Ok(DebugSessionResponse::Threads {
+                    threads: vec![DebugThread {
+                        id: "thread-1".to_owned(),
+                        name: Some("main".to_owned()),
+                        selected: true,
+                    }],
+                }),
+                DebugSessionRequest::ListFrames { thread_id } => {
+                    let thread_id = thread_id.unwrap_or_else(|| "thread-1".to_owned());
+                    Ok(DebugSessionResponse::Frames {
+                        thread_id,
+                        frames: vec![DebugFrame {
+                            index: 0,
+                            function: "fixture::main".to_owned(),
+                            source_path: Some("src/main.rs".to_owned()),
+                            line: Some(42),
+                            column: Some(7),
+                        }],
+                    })
+                }
+            }
+        }
     }
 
     fn runnable_manifest(root: &Utf8PathBuf) -> NormalizedManifest {
@@ -1119,10 +1340,43 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8");
         let plan_path = root.join("plan.json");
-        fs::write(&plan_path, "{ \"steps\": [ { \"kind\": \"launch\" } ] }").expect("write");
+        fs::write(
+            &plan_path,
+            r#"{
+  "build_profile": "debugger",
+  "steps": [
+    { "kind": "debug_attach", "name": "attach.json" },
+    { "kind": "debug_backtrace" }
+  ]
+}"#,
+        )
+        .expect("write");
 
         let plan = load_evaluation_plan(&plan_path).expect("plan should load");
-        assert_eq!(plan.steps, vec![EvaluationStep::Launch]);
+        assert_eq!(plan.build_profile, AppSessionBuildProfile::Debugger);
+        assert_eq!(
+            plan.steps,
+            vec![
+                EvaluationStep::DebugAttach {
+                    name: Some("attach.json".to_owned()),
+                },
+                EvaluationStep::DebugBacktrace {
+                    name: None,
+                    thread_id: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn debugger_steps_require_debugger_build_profile() {
+        let error = require_debugger_profile(&EvaluationPlan {
+            build_profile: AppSessionBuildProfile::Standard,
+            steps: vec![EvaluationStep::DebugPause { name: None }],
+        })
+        .expect_err("debugger step should require debugger build profile");
+
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
     }
 
     #[test]
@@ -1154,5 +1408,55 @@ mod tests {
         assert_eq!(output.manifest.destination.backend_id, "fixture");
         assert!(artifacts_dir.join("steps.json").exists());
         assert!(artifacts_dir.join("manifest.json").exists());
+    }
+
+    #[test]
+    fn evaluate_run_writes_debugger_artifacts() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8");
+        let manifest = runnable_manifest(&root);
+        let plan_path = root.join("plan.json");
+        fs::write(
+            &plan_path,
+            r#"{
+  "build_profile": "debugger",
+  "steps": [
+    { "kind": "debug_attach" },
+    { "kind": "debug_pause" },
+    { "kind": "debug_threads", "name": "threads.json" },
+    { "kind": "debug_backtrace" },
+    { "kind": "debug_resume" }
+  ]
+}"#,
+        )
+        .expect("write");
+        let artifacts_dir = root.join("artifacts");
+        let mut registry = DeployBackendRegistry::new();
+        registry
+            .register(Box::new(FixtureBackend))
+            .expect("fixture backend should register");
+        let mut runner = FakeToolRunner;
+
+        let output = super::evaluate_run(
+            &root,
+            &manifest,
+            &registry,
+            "fixture",
+            "fixture-1",
+            &plan_path,
+            &artifacts_dir,
+            &mut runner,
+        )
+        .expect("debugger evaluation should run");
+
+        assert!(artifacts_dir.join("00-debug_attach.json").exists());
+        assert!(artifacts_dir.join("01-debug_pause.json").exists());
+        assert!(artifacts_dir.join("threads.json").exists());
+        assert!(artifacts_dir.join("03-debug_backtrace.json").exists());
+        assert!(artifacts_dir.join("04-debug_resume.json").exists());
+        assert_eq!(
+            output.manifest.steps[2].artifacts,
+            vec!["threads.json".to_owned()]
+        );
     }
 }

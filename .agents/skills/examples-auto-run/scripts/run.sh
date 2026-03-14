@@ -13,6 +13,7 @@ run_atom() {
 }
 
 mode=${1:-smoke}
+shift || true
 
 detect_generated_root() {
   for candidate in cng-output generated; do
@@ -41,11 +42,19 @@ case "$mode" in
     fi
     ;;
   evaluate)
-    destination=${2:?destination id required}
-    artifacts_dir=${3:?artifacts dir required}
-    plan=${4:-$DEFAULT_PLAN}
+    platform=ios
+    case "${1:-}" in
+      ios|android)
+        platform=$1
+        shift
+        ;;
+    esac
+    destination=${1:?destination id required}
+    artifacts_dir=${2:?artifacts dir required}
+    plan=${3:-$DEFAULT_PLAN}
     run_atom prebuild --target "$EXAMPLE_TARGET"
     run_atom evaluate run \
+      --platform "$platform" \
       --target "$EXAMPLE_TARGET" \
       --destination "$destination" \
       --plan "$plan" \
