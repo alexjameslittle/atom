@@ -14,7 +14,9 @@ This expects `mise` to already be installed, then installs the pinned toolchain 
 [../mise.toml](../mise.toml) and configures Git to use the tracked hooks in
 [../.githooks](../.githooks). On macOS hosts with Homebrew available, bootstrap also installs the
 `idb` companion (`idb_companion`) from `facebook/fb` and installs the `fb-idb` CLI into the Homebrew
-prefix so the `idb` command is available on `PATH`.
+prefix so the `idb` command is available on `PATH`. Bootstrap also installs the pinned
+`agent-device` CLI globally through the repo-managed Node.js toolchain so iOS semantic automation
+and physical-device inspection commands have a consistent entrypoint on `PATH`.
 
 ## Local Guardrails
 

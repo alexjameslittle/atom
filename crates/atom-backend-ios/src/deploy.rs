@@ -20,6 +20,8 @@ use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
 
+use crate::agent_device;
+
 const BACKEND_ID: &str = "ios";
 const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -55,9 +57,16 @@ struct IosAppLaunch {
     app_slug: String,
 }
 
-struct VideoCapture {
-    output_path: Utf8PathBuf,
-    child: Child,
+enum VideoCapture {
+    AgentDevice {
+        output_path: Utf8PathBuf,
+        destination_id: String,
+        session_name: String,
+    },
+    Idb {
+        output_path: Utf8PathBuf,
+        child: Child,
+    },
 }
 
 struct IosAppSession<'a> {
@@ -67,6 +76,7 @@ struct IosAppSession<'a> {
     destination_id: String,
     session_options: AppSessionOptions,
     launch: Option<IosAppLaunch>,
+    agent_device_session: Option<String>,
     video_capture: Option<VideoCapture>,
 }
 
@@ -120,9 +130,10 @@ impl DeployBackend for IosDeployBackend {
         repo_root: &Utf8Path,
         runner: &mut dyn ToolRunner,
     ) -> AtomResult<Vec<DestinationDescriptor>> {
+        let agent_device_available = agent_device::is_available(repo_root, runner);
         Ok(list_ios_destinations(repo_root, runner)?
             .into_iter()
-            .map(destination_descriptor_from_ios)
+            .map(|destination| destination_descriptor_from_ios(destination, agent_device_available))
             .collect())
     }
 
@@ -168,6 +179,7 @@ impl DeployBackend for IosDeployBackend {
             destination_id: destination_id.to_owned(),
             session_options: options,
             launch: None,
+            agent_device_session: None,
             video_capture: None,
         }))
     }
@@ -182,6 +194,24 @@ impl IosAppSession<'_> {
             )
         })
     }
+
+    fn agent_device_session_name(&mut self) -> AtomResult<String> {
+        if let Some(session_name) = &self.agent_device_session {
+            return Ok(session_name.clone());
+        }
+        let bundle_id =
+            self.manifest.ios.bundle_id.as_deref().ok_or_else(|| {
+                AtomError::new(AtomErrorCode::InternalBug, "missing iOS bundle id")
+            })?;
+        let session_name = format!(
+            "atom-{}-{}-{}",
+            sanitize_session_segment(bundle_id),
+            sanitize_session_segment(&self.destination_id),
+            timestamp_suffix(),
+        );
+        self.agent_device_session = Some(session_name.clone());
+        Ok(session_name)
+    }
 }
 
 impl BackendAppSession for IosAppSession<'_> {
@@ -191,6 +221,41 @@ impl BackendAppSession for IosAppSession<'_> {
 
     fn ensure_launched(&mut self) -> AtomResult<()> {
         if self.launch.is_some() {
+            return Ok(());
+        }
+        let Some(destination) = list_ios_destinations(self.repo_root, self.runner)?
+            .into_iter()
+            .find(|destination| destination.id == self.destination_id)
+        else {
+            return Err(AtomError::with_path(
+                AtomErrorCode::AutomationUnavailable,
+                format!("unknown destination id: {}", self.destination_id),
+                &self.destination_id,
+            ));
+        };
+        if agent_device::is_available(self.repo_root, self.runner) {
+            let session_name = self.agent_device_session_name()?;
+            if self.session_options.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
+                && let Some(launch) = attach_ios_app_with_agent_device(
+                    self.repo_root,
+                    self.manifest,
+                    &destination,
+                    &session_name,
+                    self.runner,
+                )?
+            {
+                self.launch = Some(launch);
+                return Ok(());
+            }
+            let launch = launch_ios_app_with_agent_device(
+                self.repo_root,
+                self.manifest,
+                &destination,
+                &session_name,
+                self.session_options.build_profile,
+                self.runner,
+            )?;
+            self.launch = Some(launch);
             return Ok(());
         }
         if self.session_options.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
@@ -204,16 +269,6 @@ impl BackendAppSession for IosAppSession<'_> {
             self.launch = Some(launch);
             return Ok(());
         }
-        let Some(destination) = list_ios_destinations(self.repo_root, self.runner)?
-            .into_iter()
-            .find(|destination| destination.id == self.destination_id)
-        else {
-            return Err(AtomError::with_path(
-                AtomErrorCode::AutomationUnavailable,
-                format!("unknown destination id: {}", self.destination_id),
-                &self.destination_id,
-            ));
-        };
         let launch = launch_ios_app(
             self.repo_root,
             self.manifest,
@@ -234,6 +289,15 @@ impl BackendAppSession for IosAppSession<'_> {
 
     fn interact(&mut self, request: InteractionRequest) -> AtomResult<InteractionResult> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            return agent_device::interact_with_agent_device(
+                self.repo_root,
+                &self.destination_id,
+                session_name,
+                self.runner,
+                request,
+            );
+        }
         interact_with_idb(self.repo_root, &self.destination_id, self.runner, request)
     }
 
@@ -247,6 +311,16 @@ impl BackendAppSession for IosAppSession<'_> {
 
     fn capture_screenshot(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            write_parent_dir(output_path)?;
+            return agent_device::capture_screenshot(
+                self.repo_root,
+                &self.destination_id,
+                session_name,
+                output_path,
+                self.runner,
+            );
+        }
         let launch = self.active_launch()?;
         capture_screenshot_for_launch(self.repo_root, &launch, output_path, self.runner)
     }
@@ -259,12 +333,47 @@ impl BackendAppSession for IosAppSession<'_> {
 
     fn capture_video(&mut self, output_path: &Utf8Path, seconds: u64) -> AtomResult<()> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            write_parent_dir(output_path)?;
+            agent_device::start_video_capture(
+                self.repo_root,
+                &self.destination_id,
+                session_name,
+                output_path,
+                self.runner,
+            )?;
+            thread::sleep(Duration::from_secs(seconds));
+            agent_device::stop_video_capture(
+                self.repo_root,
+                &self.destination_id,
+                session_name,
+                self.runner,
+            )?;
+            ensure_video_artifact(output_path)?;
+            return Ok(());
+        }
         let launch = self.active_launch()?;
         capture_video_for_launch(self.repo_root, &launch, output_path, seconds)
     }
 
     fn start_video(&mut self, output_path: &Utf8Path) -> AtomResult<()> {
         self.ensure_launched()?;
+        if let Some(session_name) = self.agent_device_session.as_deref() {
+            write_parent_dir(output_path)?;
+            agent_device::start_video_capture(
+                self.repo_root,
+                &self.destination_id,
+                session_name,
+                output_path,
+                self.runner,
+            )?;
+            self.video_capture = Some(VideoCapture::AgentDevice {
+                output_path: output_path.to_owned(),
+                destination_id: self.destination_id.clone(),
+                session_name: session_name.to_owned(),
+            });
+            return Ok(());
+        }
         let launch = self.active_launch()?;
         self.video_capture = Some(start_video_capture(self.repo_root, &launch, output_path)?);
         Ok(())
@@ -277,7 +386,23 @@ impl BackendAppSession for IosAppSession<'_> {
                 "video recording has not been started",
             )
         })?;
-        stop_video_capture(self.repo_root, video)
+        match video {
+            VideoCapture::AgentDevice {
+                output_path,
+                destination_id,
+                session_name,
+            } => {
+                agent_device::stop_video_capture(
+                    self.repo_root,
+                    &destination_id,
+                    &session_name,
+                    self.runner,
+                )?;
+                ensure_video_artifact(&output_path)?;
+                Ok(output_path)
+            }
+            idb @ VideoCapture::Idb { .. } => stop_video_capture(self.repo_root, idb),
+        }
     }
 
     fn shutdown_video(&mut self) -> AtomResult<()> {
@@ -288,7 +413,26 @@ impl BackendAppSession for IosAppSession<'_> {
     }
 }
 
-fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDescriptor {
+impl Drop for IosAppSession<'_> {
+    fn drop(&mut self) {
+        if self.video_capture.is_some() {
+            let _ = self.shutdown_video();
+        }
+        if let Some(session_name) = self.agent_device_session.take() {
+            let _ = agent_device::close_session(
+                self.repo_root,
+                &self.destination_id,
+                &session_name,
+                self.runner,
+            );
+        }
+    }
+}
+
+fn destination_descriptor_from_ios(
+    destination: IosDestination,
+    agent_device_available: bool,
+) -> DestinationDescriptor {
     let display_name = destination.display_label();
     let id = destination.id.clone();
     let kind = match destination.kind {
@@ -299,6 +443,14 @@ fn destination_descriptor_from_ios(destination: IosDestination) -> DestinationDe
         IosDestinationKind::Simulator => vec![
             DestinationCapability::Launch,
             DestinationCapability::Logs,
+            DestinationCapability::Screenshot,
+            DestinationCapability::Video,
+            DestinationCapability::InspectUi,
+            DestinationCapability::Interact,
+            DestinationCapability::Evaluate,
+        ],
+        IosDestinationKind::Device if agent_device_available => vec![
+            DestinationCapability::Launch,
             DestinationCapability::Screenshot,
             DestinationCapability::Video,
             DestinationCapability::InspectUi,
@@ -584,8 +736,41 @@ fn list_ios_destinations(
         "idb",
         &["list-targets", "--json"],
     )?)?;
+    if agent_device::is_available(repo_root, runner) {
+        merge_agent_device_destinations(&mut destinations, repo_root, runner)?;
+    }
     sort_ios_destinations(&mut destinations);
     Ok(destinations)
+}
+
+fn merge_agent_device_destinations(
+    destinations: &mut Vec<IosDestination>,
+    repo_root: &Utf8Path,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<()> {
+    for destination in agent_device::list_destinations(repo_root, runner)? {
+        if destinations
+            .iter()
+            .any(|existing| existing.id == destination.id)
+        {
+            continue;
+        }
+        let kind = match destination.kind {
+            agent_device::AgentDeviceDestinationKind::Simulator => IosDestinationKind::Simulator,
+            agent_device::AgentDeviceDestinationKind::Device => IosDestinationKind::Device,
+        };
+        destinations.push(IosDestination {
+            kind,
+            id: destination.id,
+            alternate_id: None,
+            name: destination.name,
+            state: destination.state,
+            runtime: None,
+            architecture: None,
+            is_available: true,
+        });
+    }
+    Ok(())
 }
 
 fn select_booted_ios_destination(destinations: &[IosDestination]) -> Option<IosDestination> {
@@ -900,6 +1085,34 @@ fn launch_ios_app(
     build_profile: AppSessionBuildProfile,
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<IosAppLaunch> {
+    let launch = install_ios_app(repo_root, manifest, destination, build_profile, runner)?;
+    let _ = run_idb(
+        runner,
+        repo_root,
+        &launch.destination_id,
+        &["terminate".to_owned(), launch.bundle_id.clone()],
+    );
+    run_idb(
+        runner,
+        repo_root,
+        &launch.destination_id,
+        &[
+            "launch".to_owned(),
+            "-f".to_owned(),
+            launch.bundle_id.clone(),
+        ],
+    )?;
+
+    Ok(launch)
+}
+
+fn install_ios_app(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &IosDestination,
+    build_profile: AppSessionBuildProfile,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<IosAppLaunch> {
     let artifacts = build_ios_artifacts(repo_root, manifest, destination, build_profile, runner)?;
     let bundle_id = manifest
         .ios
@@ -920,18 +1133,6 @@ fn launch_ios_app(
             artifacts.installable_app.as_str().to_owned(),
         ],
     )?;
-    let _ = run_idb(
-        runner,
-        repo_root,
-        &destination_id,
-        &["terminate".to_owned(), bundle_id.clone()],
-    );
-    run_idb(
-        runner,
-        repo_root,
-        &destination_id,
-        &["launch".to_owned(), "-f".to_owned(), bundle_id.clone()],
-    )?;
 
     Ok(IosAppLaunch {
         destination_id,
@@ -939,6 +1140,40 @@ fn launch_ios_app(
         app_name: manifest.app.name.clone(),
         app_slug: manifest.app.slug.clone(),
     })
+}
+
+fn launch_ios_app_with_agent_device(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &IosDestination,
+    session_name: &str,
+    build_profile: AppSessionBuildProfile,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<IosAppLaunch> {
+    let launch = install_ios_app(repo_root, manifest, destination, build_profile, runner)?;
+    let _ = run_idb(
+        runner,
+        repo_root,
+        &launch.destination_id,
+        &["terminate".to_owned(), launch.bundle_id.clone()],
+    );
+    let _ = agent_device::close_session(repo_root, &launch.destination_id, session_name, runner);
+    agent_device::open_app(
+        repo_root,
+        &launch.destination_id,
+        session_name,
+        &launch.bundle_id,
+        runner,
+    )?;
+    wait_for_launch_ready_with_agent_device(
+        repo_root,
+        &launch.destination_id,
+        session_name,
+        &launch.app_name,
+        &launch.app_slug,
+        runner,
+    )?;
+    Ok(launch)
 }
 
 fn attach_ios_app(
@@ -964,6 +1199,41 @@ fn attach_ios_app(
     }))
 }
 
+fn attach_ios_app_with_agent_device(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &IosDestination,
+    session_name: &str,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<Option<IosAppLaunch>> {
+    let Some(bundle_id) = manifest.ios.bundle_id.clone() else {
+        return Ok(None);
+    };
+    let destination_id = match destination.kind {
+        IosDestinationKind::Simulator => prepare_ios_simulator(repo_root, runner, destination)?,
+        IosDestinationKind::Device => destination.id.clone(),
+    };
+    if agent_device::open_app(repo_root, &destination_id, session_name, &bundle_id, runner).is_err()
+    {
+        let _ = agent_device::close_session(repo_root, &destination_id, session_name, runner);
+        return Ok(None);
+    }
+    wait_for_launch_ready_with_agent_device(
+        repo_root,
+        &destination_id,
+        session_name,
+        &manifest.app.name,
+        &manifest.app.slug,
+        runner,
+    )?;
+    Ok(Some(IosAppLaunch {
+        destination_id,
+        bundle_id,
+        app_name: manifest.app.name.clone(),
+        app_slug: manifest.app.slug.clone(),
+    }))
+}
+
 fn wait_for_launch_ready(
     repo_root: &Utf8Path,
     destination_id: &str,
@@ -975,6 +1245,34 @@ fn wait_for_launch_ready(
     while Instant::now() < deadline {
         if let Ok(snapshot) = inspect_ui_with_idb(repo_root, destination_id, runner)
             && snapshot_matches_ios_app(&snapshot, app_name, app_slug)
+            && snapshot_is_launch_ready(&snapshot)
+        {
+            return Ok(());
+        }
+        thread::sleep(APP_LAUNCH_READY_POLL_INTERVAL);
+    }
+    Err(AtomError::new(
+        AtomErrorCode::AutomationUnavailable,
+        "app did not become responsive after launch",
+    ))
+}
+
+fn wait_for_launch_ready_with_agent_device(
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    session_name: &str,
+    app_name: &str,
+    app_slug: &str,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<()> {
+    let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(snapshot) = agent_device::inspect_ui_with_agent_device(
+            repo_root,
+            destination_id,
+            session_name,
+            runner,
+        ) && snapshot_matches_ios_app(&snapshot, app_name, app_slug)
             && snapshot_is_launch_ready(&snapshot)
         {
             return Ok(());
@@ -1189,7 +1487,7 @@ fn idb_node_from_value(entry: &Value, index: usize) -> Option<UiNode> {
     })
 }
 
-fn resolve_interaction_point(
+pub(crate) fn resolve_interaction_point(
     snapshot: &UiSnapshot,
     target_id: Option<&str>,
     x: Option<f64>,
@@ -1506,7 +1804,7 @@ fn start_video_capture(
 ) -> AtomResult<VideoCapture> {
     write_parent_dir(output_path)?;
     let child = spawn_idb_video(repo_root, &launch.destination_id, output_path)?;
-    Ok(VideoCapture {
+    Ok(VideoCapture::Idb {
         output_path: output_path.to_owned(),
         child,
     })
@@ -1532,10 +1830,20 @@ fn spawn_idb_video(
 }
 
 fn stop_video_capture(repo_root: &Utf8Path, video: VideoCapture) -> AtomResult<Utf8PathBuf> {
-    let mut child = video.child;
-    stop_recording_process(repo_root, &mut child)?;
-    ensure_video_artifact(&video.output_path)?;
-    Ok(video.output_path)
+    match video {
+        VideoCapture::AgentDevice { .. } => Err(AtomError::new(
+            AtomErrorCode::InternalBug,
+            "agent-device video capture should be stopped through the active app session",
+        )),
+        VideoCapture::Idb {
+            output_path,
+            mut child,
+        } => {
+            stop_recording_process(repo_root, &mut child)?;
+            ensure_video_artifact(&output_path)?;
+            Ok(output_path)
+        }
+    }
 }
 
 fn stop_recording_process(repo_root: &Utf8Path, child: &mut Child) -> AtomResult<()> {
@@ -1630,12 +1938,25 @@ fn write_parent_dir(path: &Utf8Path) -> AtomResult<()> {
     })
 }
 
-fn timestamp_suffix() -> String {
+pub(crate) fn timestamp_suffix() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
         .to_string()
+}
+
+fn sanitize_session_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1663,16 +1984,19 @@ mod tests {
 
     #[test]
     fn simulator_descriptors_expose_automation_capabilities() {
-        let descriptor = destination_descriptor_from_ios(IosDestination {
-            kind: IosDestinationKind::Simulator,
-            id: "SIM-1".to_owned(),
-            alternate_id: None,
-            name: "Fixture Sim".to_owned(),
-            state: "Booted".to_owned(),
-            runtime: Some("17.0".to_owned()),
-            architecture: Some("arm64".to_owned()),
-            is_available: true,
-        });
+        let descriptor = destination_descriptor_from_ios(
+            IosDestination {
+                kind: IosDestinationKind::Simulator,
+                id: "SIM-1".to_owned(),
+                alternate_id: None,
+                name: "Fixture Sim".to_owned(),
+                state: "Booted".to_owned(),
+                runtime: Some("17.0".to_owned()),
+                architecture: Some("arm64".to_owned()),
+                is_available: true,
+            },
+            false,
+        );
 
         assert_eq!(descriptor.platform, "ios");
         assert_eq!(descriptor.backend_id, BACKEND_ID);
@@ -1695,21 +2019,69 @@ mod tests {
     }
 
     #[test]
-    fn device_descriptors_limit_capabilities_to_launch() {
-        let descriptor = destination_descriptor_from_ios(IosDestination {
-            kind: IosDestinationKind::Device,
-            id: "DEV-1".to_owned(),
-            alternate_id: None,
-            name: "Fixture Phone".to_owned(),
-            state: "Ready".to_owned(),
-            runtime: None,
-            architecture: None,
-            is_available: true,
-        });
+    fn device_descriptors_limit_capabilities_without_agent_device() {
+        let descriptor = destination_descriptor_from_ios(
+            IosDestination {
+                kind: IosDestinationKind::Device,
+                id: "DEV-1".to_owned(),
+                alternate_id: None,
+                name: "Fixture Phone".to_owned(),
+                state: "Ready".to_owned(),
+                runtime: None,
+                architecture: None,
+                is_available: true,
+            },
+            false,
+        );
 
         assert_eq!(descriptor.platform, "ios");
         assert_eq!(descriptor.kind, "device");
         assert_eq!(descriptor.capabilities, vec![DestinationCapability::Launch]);
+    }
+
+    #[test]
+    fn device_descriptors_expose_agent_device_capabilities_when_available() {
+        let descriptor = destination_descriptor_from_ios(
+            IosDestination {
+                kind: IosDestinationKind::Device,
+                id: "DEV-1".to_owned(),
+                alternate_id: None,
+                name: "Fixture Phone".to_owned(),
+                state: "Ready".to_owned(),
+                runtime: None,
+                architecture: None,
+                is_available: true,
+            },
+            true,
+        );
+
+        assert_eq!(descriptor.platform, "ios");
+        assert_eq!(descriptor.kind, "device");
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Screenshot)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Video)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::InspectUi)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Interact)
+        );
+        assert!(
+            descriptor
+                .capabilities
+                .contains(&DestinationCapability::Evaluate)
+        );
     }
 
     #[test]

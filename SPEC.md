@@ -1164,12 +1164,12 @@ Rules:
 - Video capture SHOULD be startable before the first interaction step and stoppable after the last
   required step so one artifact can prove the full interaction flow.
 - iOS simulator screenshot capture MAY fall back to `xcrun simctl io <udid> screenshot` when the
-  semantic `idb` backend is unavailable for image encoding. This fallback does not change the
+  primary semantic iOS backend is unavailable for image encoding. This fallback does not change the
   requirement that semantic inspection and interaction stay framework-owned.
 - The primary automation backend MUST be semantic, not pixel-only.
-- iOS automation MUST use a framework-owned `idb`-backed semantic backend. Implementations MAY
-  satisfy this through XCTest-compatible primitives under the hood, but coordinate-only `simctl`
-  helpers are insufficient as the primary conformance path.
+- iOS automation MUST use a framework-owned semantic backend built on `agent-device`. `idb` MAY
+  remain in use for deployment, install/launch, log collection, or other lower-level iOS transport
+  needs, but coordinate-only `simctl` helpers are insufficient as the primary conformance path.
 - Android automation MUST use a framework-owned UI Automator-based backend. Implementations MAY
   combine UI hierarchy inspection with `adb shell input` gestures so long as the framework, not the
   app-under-test, owns the automation backend.
@@ -1282,8 +1282,9 @@ consumes Atom via `bzlmod`.
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the video to the requested output path
-- iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because `idb video` emits
-  a QuickTime movie container even when the caller provides an `.mp4` suffix
+- iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because the iOS video
+  capture path emits a QuickTime-compatible movie container even when the caller provides an `.mp4`
+  suffix
 
 `atom evidence logs --platform <platform>`:
 
