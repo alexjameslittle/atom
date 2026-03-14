@@ -4,9 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, ScreenInfo, SessionLaunchBehavior, ToolRunner, UiBounds, UiNode, UiSnapshot,
+    BackendAutomationSession, BackendDefinition, BackendDoctorReport, DeployBackend,
+    DeployBackendRegistry, DestinationCapability, DestinationDescriptor, DoctorSystem,
+    InteractionRequest, InteractionResult, LaunchMode, ScreenInfo, SessionLaunchBehavior,
+    ToolRunner, UiBounds, UiNode, UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
@@ -17,6 +18,8 @@ use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::NormalizedManifest;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::Value;
+
+use crate::doctor::collect_doctor_report;
 
 const BACKEND_ID: &str = "ios";
 const APP_LAUNCH_READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -105,6 +108,10 @@ impl BackendDefinition for IosDeployBackend {
 impl DeployBackend for IosDeployBackend {
     fn is_enabled(&self, manifest: &NormalizedManifest) -> bool {
         manifest.ios.enabled
+    }
+
+    fn doctor(&self, repo_root: &Utf8Path, system: &dyn DoctorSystem) -> BackendDoctorReport {
+        collect_doctor_report(repo_root, system)
     }
 
     fn list_destinations(

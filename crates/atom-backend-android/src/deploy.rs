@@ -4,9 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    BackendAutomationSession, BackendDefinition, DeployBackend, DeployBackendRegistry,
-    DestinationCapability, DestinationDescriptor, InteractionRequest, InteractionResult,
-    LaunchMode, SessionLaunchBehavior, ToolRunner, UiSnapshot,
+    BackendAutomationSession, BackendDefinition, BackendDoctorReport, DeployBackend,
+    DeployBackendRegistry, DestinationCapability, DestinationDescriptor, DoctorSystem,
+    InteractionRequest, InteractionResult, LaunchMode, SessionLaunchBehavior, ToolRunner,
+    UiSnapshot,
 };
 use atom_deploy::devices::{choose_from_menu, should_prompt_interactively};
 use atom_deploy::progress::run_step;
@@ -20,6 +21,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use crate::android_uiautomator::{
     inspect_ui_with_android_uiautomator, interact_with_android_uiautomator,
 };
+use crate::doctor::collect_doctor_report;
 
 const BACKEND_ID: &str = "android";
 const APP_PID_WAIT_ATTEMPTS: usize = 30;
@@ -115,6 +117,10 @@ impl BackendDefinition for AndroidDeployBackend {
 impl DeployBackend for AndroidDeployBackend {
     fn is_enabled(&self, manifest: &NormalizedManifest) -> bool {
         manifest.android.enabled
+    }
+
+    fn doctor(&self, repo_root: &Utf8Path, system: &dyn DoctorSystem) -> BackendDoctorReport {
+        collect_doctor_report(repo_root, system)
     }
 
     fn list_destinations(
