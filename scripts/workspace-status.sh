@@ -99,6 +99,11 @@ if [ -z "${rules_android_ndk_version:-}" ]; then
   rules_android_ndk_version="unknown"
 fi
 
+platforms_version=$(read_module_dep_version platforms)
+if [ -z "${platforms_version:-}" ]; then
+  platforms_version="unknown"
+fi
+
 rules_apple_version=$(read_module_dep_version rules_apple)
 if [ -z "${rules_apple_version:-}" ]; then
   rules_apple_version="unknown"
@@ -126,6 +131,7 @@ printf 'STABLE_ATOM_RULES_JAVA_VERSION %s\n' "$rules_java_version"
 printf 'STABLE_ATOM_RULES_KOTLIN_VERSION %s\n' "$rules_kotlin_version"
 printf 'STABLE_ATOM_RULES_ANDROID_VERSION %s\n' "$rules_android_version"
 printf 'STABLE_ATOM_RULES_ANDROID_NDK_VERSION %s\n' "$rules_android_ndk_version"
+printf 'STABLE_ATOM_PLATFORMS_VERSION %s\n' "$platforms_version"
 printf 'STABLE_ATOM_RULES_APPLE_VERSION %s\n' "$rules_apple_version"
 printf 'STABLE_ATOM_RULES_SWIFT_VERSION %s\n' "$rules_swift_version"
 printf 'STABLE_ATOM_JAVA_RUNTIME_VERSION %s\n' "$java_runtime_version"

@@ -64,13 +64,56 @@ fn android_sdk_check(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> DoctorC
                     format!("{device_count} devices available"),
                 )
             } else {
+                avd_check(repo_root, system, &android_home)
+            }
+        }
+    }
+}
+
+fn avd_check(repo_root: &Utf8Path, system: &dyn DoctorSystem, android_home: &str) -> DoctorCheck {
+    match system.run_command(repo_root, "emulator", &["-list-avds"]) {
+        CommandInvocation::Missing => DoctorCheck::issue(
+            "android_sdk",
+            "Android SDK",
+            DoctorSeverity::Platform,
+            "0 devices or AVDs available",
+            vec![
+                format!("ANDROID_HOME is set to {android_home}"),
+                "Add $ANDROID_HOME/emulator to PATH or run: scripts/setup-android-sdk.sh"
+                    .to_owned(),
+            ],
+        ),
+        CommandInvocation::Failed(error) => DoctorCheck::issue(
+            "android_sdk",
+            "Android SDK",
+            DoctorSeverity::Platform,
+            "emulator query failed",
+            vec![format!("Failed to start emulator: {error}")],
+        ),
+        CommandInvocation::Output(output) if output.status != 0 => DoctorCheck::issue(
+            "android_sdk",
+            "Android SDK",
+            DoctorSeverity::Platform,
+            "emulator query failed",
+            vec![combined_command_output(&output)],
+        ),
+        CommandInvocation::Output(output) => {
+            let avd_count = count_avds(&output.stdout);
+            if avd_count > 0 {
+                DoctorCheck::ok(
+                    "android_sdk",
+                    "Android SDK",
+                    DoctorSeverity::Platform,
+                    format!("{avd_count} AVDs available"),
+                )
+            } else {
                 DoctorCheck::issue(
                     "android_sdk",
                     "Android SDK",
                     DoctorSeverity::Platform,
-                    "0 devices available",
+                    "0 devices or AVDs available",
                     vec![
-                        "Start an Android emulator or connect a device, then re-run atom doctor."
+                        "Create or start an Android emulator, or connect a device, then re-run atom doctor."
                             .to_owned(),
                     ],
                 )
@@ -148,6 +191,14 @@ fn count_adb_devices(output: &str) -> usize {
         .count()
 }
 
+fn count_avds(output: &str) -> usize {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .count()
+}
+
 fn looks_like_missing_java(detail: &str) -> bool {
     detail.contains("Unable to locate a Java Runtime")
         || detail.contains("No Java runtime present")
@@ -163,7 +214,7 @@ mod tests {
     };
     use camino::Utf8Path;
 
-    use super::{collect_doctor_report, count_adb_devices};
+    use super::{collect_doctor_report, count_adb_devices, count_avds};
 
     #[derive(Default)]
     struct FakeDoctorSystem {
@@ -254,5 +305,31 @@ mod tests {
         let adb_output = "List of devices attached\nemulator-5554 device product:sdk_gphone64_arm64\nusb-serial offline transport_id:1\n";
 
         assert_eq!(count_adb_devices(adb_output), 1);
+    }
+
+    #[test]
+    fn configured_avd_reports_android_platform_ready_without_booted_device() {
+        let system = FakeDoctorSystem::default()
+            .with_env("ANDROID_HOME", "/Users/test/Library/Android/sdk")
+            .with_output(
+                "adb",
+                &["devices", "-l"],
+                "List of devices attached\n\n",
+                "",
+            )
+            .with_output("emulator", &["-list-avds"], "atom_35\n", "")
+            .with_output("javac", &["--version"], "javac 21.0.2\n", "");
+
+        let report = collect_doctor_report(Utf8Path::new("/repo"), &system);
+
+        assert!(report.ready);
+        assert_eq!(report.checks[0].summary, "1 AVDs available");
+    }
+
+    #[test]
+    fn avd_parser_ignores_blank_lines() {
+        let avd_output = "\natom_35\n\npixel_tablet\n";
+
+        assert_eq!(count_avds(avd_output), 2);
     }
 }
