@@ -52,4 +52,5 @@ format_multirun(
 alias(
     name = "atom",
     actual = "//crates/atom-cli:atom",
+    visibility = ["//visibility:public"],
 )

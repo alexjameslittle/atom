@@ -3,6 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 rust_library(
     name = "atom-cli-lib",
     srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(["src/templates/**"]),
     crate_name = "atom_cli",
     crate_root = "src/lib.rs",
     edition = "2024",
@@ -21,6 +22,7 @@ rust_library(
         "//crates/atom-modules",
         "@crates//:camino",
         "@crates//:clap",
+        "@crates//:minijinja",
         "@crates//:serde",
         "@crates//:serde_json",
     ],
