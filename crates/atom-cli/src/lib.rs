@@ -1,3 +1,5 @@
+mod doctor;
+
 use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
@@ -27,6 +29,7 @@ use atom_manifest::load_manifest;
 use atom_modules::resolve_modules;
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use doctor::DoctorArgs;
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
@@ -38,6 +41,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    Doctor(DoctorArgs),
     Prebuild(PrebuildArgs),
     Run(RunArgs),
     Stop(StopArgs),
@@ -301,6 +305,7 @@ where
 
 fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<CommandOutput> {
     match &cli.command {
+        Commands::Doctor(args) => execute_doctor(cwd, args),
         Commands::Prebuild(args) => execute_prebuild(cwd, args),
         Commands::Run(args) => execute_run(cwd, args, runner),
         Commands::Stop(args) => execute_stop(cwd, args, runner),
@@ -312,6 +317,11 @@ fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResul
         Commands::Interact(args) => execute_interact(cwd, args, runner),
         Commands::Evaluate(args) => execute_evaluate(cwd, args, runner),
     }
+}
+
+fn execute_doctor(cwd: &Utf8Path, args: &DoctorArgs) -> AtomResult<CommandOutput> {
+    let repo_root = resolve_workspace_root(cwd)?;
+    doctor::execute(&repo_root, args)
 }
 
 fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOutput> {
@@ -915,6 +925,11 @@ mod tests {
             "//examples/hello-world/apps/hello_atom:hello_atom",
             "--detach",
         ]);
+    }
+
+    #[test]
+    fn doctor_command_accepts_json_flag() {
+        parse_cli(&["atom", "doctor", "--json"]);
     }
 
     #[test]

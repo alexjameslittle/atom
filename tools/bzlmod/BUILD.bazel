@@ -1,0 +1,4 @@
+exports_files([
+    "BUILD.ndk_root.empty.tpl",
+    "android_ndk_repository_extension.bzl",
+])

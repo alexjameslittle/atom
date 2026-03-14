@@ -24,6 +24,7 @@ prefix so the `idb` command is available on `PATH`.
 
 The verification harness runs:
 
+- `bazelisk run //:atom -- doctor`
 - `bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation //...` (clippy via
   `aspect_rules_lint`)
 - `bazelisk run //:format.check` (rustfmt, ktfmt, swiftformat, buildifier, prettier via
@@ -32,6 +33,10 @@ The verification harness runs:
 - `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
 - `shellcheck`
 - `actionlint`
+
+`atom doctor` is the fast environment diagnostic entrypoint. It reports pinned Bazel/Rust toolchain
+status, Xcode/iOS simulator readiness, Android SDK/device readiness, and Java availability. Missing
+Android tooling remains a warning so iOS-only hosts can stay green.
 
 ## GitHub Guardrails
 
