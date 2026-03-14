@@ -29,7 +29,7 @@ jobs:
       - build-atom-macos-arm64
     steps:
       - name: Download atom artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: ${{ env.ATOM_ARTIFACT_NAME }}
           path: dist
@@ -59,14 +59,33 @@ jobs:
           sed -n '1,20p' /tmp/atom-help.txt
 
       - name: Publish prerelease
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          prerelease: true
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            release/${{ env.ATOM_BINARY_NAME }}
-            release/${{ env.ATOM_BINARY_NAME }}.sha256
-            release/${{ env.ATOM_BINARY_NAME }}.tar.gz
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          assets=(
+            "release/${ATOM_BINARY_NAME}"
+            "release/${ATOM_BINARY_NAME}.sha256"
+            "release/${ATOM_BINARY_NAME}.tar.gz"
+          )
+
+          for asset in "${assets[@]}"; do
+            [[ -f "${asset}" ]] || {
+              echo "Missing release asset: ${asset}" >&2
+              exit 1
+            }
+          done
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --prerelease
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+              --title "${GITHUB_REF_NAME}" \
+              --prerelease \
+              --generate-notes
+          fi
