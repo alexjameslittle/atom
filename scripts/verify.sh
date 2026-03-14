@@ -31,16 +31,16 @@ lint() {
   check_for_unverified_packages
   sh scripts/check-generic-backend-leaks.sh
   # shellcheck disable=SC2086
-  bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going $VERIFY_PACKAGES
-  bazelisk run //:format.check
-  shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh .agents/skills/*/scripts/*.sh ./install.sh tools/install/*.sh
-  actionlint
+  mise exec -- bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going $VERIFY_PACKAGES
+  mise exec -- bazelisk run //:format.check
+  mise exec -- shellcheck .githooks/pre-commit .githooks/pre-push .mise/tasks/* scripts/*.sh .agents/skills/*/scripts/*.sh ./install.sh tools/install/*.sh
+  mise exec -- actionlint
 }
 
 test_suite() {
   # shellcheck disable=SC2086
-  bazelisk test $VERIFY_PACKAGES
-  bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
+  mise exec -- bazelisk test $VERIFY_PACKAGES
+  mise exec -- bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
   sh scripts/verify-scaffold-project.sh
 }
 
@@ -48,18 +48,18 @@ EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
 
 generate_example_app() {
   # Generate BUILD files for the example app (non-dry-run).
-  bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+  mise exec -- bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
 }
 
 build_ios_app() {
   # Build iOS app (simulator architecture).
-  bazelisk build //cng-output/ios/hello-atom:app --ios_multi_cpus=sim_arm64
+  mise exec -- bazelisk build //cng-output/ios/hello-atom:app --ios_multi_cpus=sim_arm64
 }
 
 build_android_app() {
   # Build Android app (requires ANDROID_HOME).
   if [ -n "${ANDROID_HOME:-}" ]; then
-    bazelisk build //cng-output/android/hello-atom:app --android_platforms=//platforms:arm64-v8a
+    mise exec -- bazelisk build //cng-output/android/hello-atom:app --android_platforms=//platforms:arm64-v8a
   else
     echo "ANDROID_HOME not set, skipping Android build"
   fi

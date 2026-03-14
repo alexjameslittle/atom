@@ -23,7 +23,7 @@ This skill is **mandatory** when a change touches any of:
 
 ## Steps
 
-1. Run `scripts/run.sh`.
+1. Run `mise exec -- ./.agents/skills/code-verification/scripts/run.sh`.
 2. If any step fails, report the failing step and its output.
 3. If the change touches destination discovery, evidence capture, interaction, evaluation, or the
    hello-world demo surface or plain-app proof path, follow this skill with
@@ -35,16 +35,16 @@ This skill is **mandatory** when a change touches any of:
 
 ## What it checks
 
-| Step                | Command                                  | Purpose                                                       |
-| ------------------- | ---------------------------------------- | ------------------------------------------------------------- |
-| Backend neutrality  | `scripts/check-generic-backend-leaks.sh` | Prevents concrete first-party backend leaks in generic crates |
-| Unverified packages | `check_for_unverified_packages`          | Ensures new BUILD dirs are in VERIFY_PACKAGES                 |
-| Lint                | `bazelisk build --config=lint ...`       | Clippy and lint rules                                         |
-| Format              | `bazelisk run //:format.check`           | Rustfmt via Bazel                                             |
-| Shell lint          | `shellcheck`                             | Shell script correctness                                      |
-| Action lint         | `actionlint`                             | GitHub Actions correctness                                    |
-| Tests               | `bazelisk test`                          | Unit and integration tests                                    |
-| Smoke prebuild      | `atom prebuild --dry-run`                | CNG generation doesn't crash                                  |
+| Step                | Command                                                   | Purpose                                                       |
+| ------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
+| Backend neutrality  | `scripts/check-generic-backend-leaks.sh`                  | Prevents concrete first-party backend leaks in generic crates |
+| Unverified packages | `check_for_unverified_packages`                           | Ensures new BUILD dirs are in VERIFY_PACKAGES                 |
+| Lint                | `mise exec -- bazelisk build --config=lint ...`           | Clippy and lint rules                                         |
+| Format              | `mise exec -- bazelisk run //:format.check`               | Rustfmt via Bazel                                             |
+| Shell lint          | `mise exec -- shellcheck`                                 | Shell script correctness                                      |
+| Action lint         | `mise exec -- actionlint`                                 | GitHub Actions correctness                                    |
+| Tests               | `mise exec -- bazelisk test ...`                          | Unit and integration tests                                    |
+| Smoke prebuild      | `mise exec -- bazelisk run //:atom -- prebuild --dry-run` | CNG generation doesn't crash                                  |
 
 ## Model vs. script split
 
