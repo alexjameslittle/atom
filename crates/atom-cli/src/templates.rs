@@ -40,6 +40,11 @@ fn env() -> Environment<'static> {
     )
     .expect("project/.gitignore template");
     env.add_template(
+        "project/platforms/BUILD.bazel",
+        include_str!("templates/project/platforms/BUILD.bazel.j2"),
+    )
+    .expect("project/platforms/BUILD.bazel template");
+    env.add_template(
         "project/apps/app/BUILD.bazel",
         include_str!("templates/project/apps/app/BUILD.bazel.j2"),
     )

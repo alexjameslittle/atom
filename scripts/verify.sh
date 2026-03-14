@@ -41,6 +41,7 @@ test_suite() {
   # shellcheck disable=SC2086
   bazelisk test $VERIFY_PACKAGES
   bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
+  sh scripts/verify-scaffold-project.sh
 }
 
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"

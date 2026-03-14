@@ -34,6 +34,8 @@ The verification harness runs:
   `aspect_rules_lint`)
 - `bazelisk test //...`
 - `bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run`
+- `sh scripts/verify-scaffold-project.sh` (builds the CLI binary, scaffolds a temp project, points
+  it at the checkout under test, and verifies the dry-run plan includes iOS + Android outputs)
 - `shellcheck`
 - `actionlint`
 
@@ -49,7 +51,7 @@ same toolchain setup action.
 The verification matrix currently runs:
 
 - **lint** (Linux): clippy, format check, shellcheck, actionlint
-- **test (linux)**: host tests, prebuild dry-run
+- **test (linux)**: host tests, example prebuild dry-run, scaffolded-project CLI dry-run
 - **build example apps (android)** (Linux): prebuild plus Android example app build
 - **build atom macOS arm64 binary** (macOS): Bazel build plus standalone CLI artifact upload
 - **GitHub Release** (macOS on `v*` tags): reuses the standalone CLI build and publishes prerelease

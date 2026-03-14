@@ -1229,10 +1229,13 @@ invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
 - MUST fail with `CLI_USAGE_ERROR` when `<name>` is omitted outside an interactive terminal
 - MUST fail with `CLI_USAGE_ERROR` when the target directory already exists
 - MUST create `MODULE.bazel`, `.bazelversion`, `.bazelrc`, `mise.toml`, `BUILD.bazel`, `README.md`,
-  `.gitignore`, `apps/<name>/BUILD.bazel`, and `apps/<name>/src/lib.rs`
-- MUST scaffold `MODULE.bazel` with `bazel_dep(name = "atom", version = "<framework version>")` and
-  a `git_override(...)` pointing at the Atom Git repository until BCR publication exists
+  `.gitignore`, `platforms/BUILD.bazel`, `apps/<name>/BUILD.bazel`, and `apps/<name>/src/lib.rs`
+- MUST scaffold `MODULE.bazel` with `bazel_dep(name = "atom", version = "<framework version>")`,
+  `bazel_dep(name = "platforms", version = "<platforms version>")`, and a `git_override(...)`
+  pointing at the Atom Git repository until BCR publication exists
 - MUST scaffold `.bazelversion` from the framework's pinned Bazel version
+- MUST scaffold `platforms/BUILD.bazel` with a public `//platforms:arm64-v8a` platform target so
+  generated Android hosts can build with `--android_platforms=//platforms:arm64-v8a`
 - MUST scaffold `apps/<name>/BUILD.bazel` with a minimal `atom_app(...)` target that depends on
   `@atom//crates/atom-runtime`, derives a human-readable app name from the crate identifier, and
   uses `com.example.<name>` as the default iOS and Android application identifier
@@ -1247,8 +1250,8 @@ invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
 
 `atom doctor`:
 
-- MUST probe Bazel/Bazelisk, Rust, mise, Xcode, iOS simulators, Android SDK/device availability, and
-  Java independently
+- MUST probe Bazel/Bazelisk, Rust, mise, Xcode, iOS simulators, Android SDK plus connected device or
+  configured AVD availability, and Java independently
 - MUST continue running remaining probes after any one check fails
 - MUST compare Bazel against `.bazelversion` and Rust against the pinned `mise.toml` tool version
 - MUST emit actionable remediation text for every failing check

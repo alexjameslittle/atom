@@ -519,6 +519,11 @@ mod tests {
             "generated/android/fixture/src/main/kotlin/build/atom/fixture/AtomApplication.kt",
         ))
         .expect("application");
+        let bindings =
+            fs::read_to_string(root.join(
+                "generated/android/fixture/src/main/kotlin/build/atom/fixture/AtomBindings.kt",
+            ))
+            .expect("bindings");
 
         assert!(build_file.contains("android_binary("));
         assert!(build_file.contains("custom_package = \"build.atom.fixture\""));
@@ -528,6 +533,7 @@ mod tests {
         assert!(manifest_xml.contains("android:targetSdkVersion=\"35\""));
         assert!(bridge.contains("fixture::atom_runtime_config()"));
         assert!(app.contains("class AtomApplication : Application()"));
+        assert!(bindings.contains("val modules: List<String> = listOf("));
     }
 
     #[test]

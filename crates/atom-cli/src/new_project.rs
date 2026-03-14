@@ -10,9 +10,9 @@ use crate::templates;
 use crate::{
     ATOM_APPLE_SUPPORT_VERSION, ATOM_BUILD_BAZEL_VERSION, ATOM_FRAMEWORK_VERSION,
     ATOM_JAVA_RUNTIME_VERSION, ATOM_MISE_BAZELISK_VERSION, ATOM_MISE_JAVA_VERSION,
-    ATOM_MISE_RUST_TOOLCHAIN_VERSION, ATOM_RULES_ANDROID_NDK_VERSION, ATOM_RULES_ANDROID_VERSION,
-    ATOM_RULES_APPLE_VERSION, ATOM_RULES_JAVA_VERSION, ATOM_RULES_KOTLIN_VERSION,
-    ATOM_RULES_RUST_VERSION, ATOM_RULES_SWIFT_VERSION,
+    ATOM_MISE_RUST_TOOLCHAIN_VERSION, ATOM_PLATFORMS_VERSION, ATOM_RULES_ANDROID_NDK_VERSION,
+    ATOM_RULES_ANDROID_VERSION, ATOM_RULES_APPLE_VERSION, ATOM_RULES_JAVA_VERSION,
+    ATOM_RULES_KOTLIN_VERSION, ATOM_RULES_RUST_VERSION, ATOM_RULES_SWIFT_VERSION,
 };
 
 const FRAMEWORK_GIT_REMOTE: &str = "https://github.com/alexjameslittle/atom.git";
@@ -38,6 +38,7 @@ const WORKSPACE_SCAFFOLD_FILES: &[(&str, &str)] = &[
     ("BUILD.bazel", "project/BUILD.bazel"),
     ("README.md", "project/README.md"),
     (".gitignore", "project/.gitignore"),
+    ("platforms/BUILD.bazel", "project/platforms/BUILD.bazel"),
 ];
 
 const APP_SCAFFOLD_FILES: &[(&str, &str)] = &[
@@ -343,6 +344,7 @@ pub(crate) fn scaffold_project(
         rules_kotlin_version => ATOM_RULES_KOTLIN_VERSION,
         rules_android_version => ATOM_RULES_ANDROID_VERSION,
         rules_android_ndk_version => ATOM_RULES_ANDROID_NDK_VERSION,
+        platforms_version => ATOM_PLATFORMS_VERSION,
         rules_apple_version => ATOM_RULES_APPLE_VERSION,
         java_runtime_version => ATOM_JAVA_RUNTIME_VERSION,
         rules_rust_version => ATOM_RULES_RUST_VERSION,
@@ -539,6 +541,7 @@ mod tests {
         assert!(module_bazel.contains("module_name = \"atom\""));
         assert!(module_bazel.contains("name = \"rules_apple\""));
         assert!(module_bazel.contains("name = \"rules_swift\""));
+        assert!(module_bazel.contains("name = \"platforms\""));
         assert!(module_bazel.contains("package = \"camino\""));
         assert!(module_bazel.contains("version = \"=1.2.2\""));
         assert!(module_bazel.contains("extra_target_triples = ["));
@@ -557,6 +560,12 @@ mod tests {
             std::fs::read_to_string(project_root.join("apps/my_app/src/lib.rs")).expect("lib");
         assert!(app_lib.contains("use atom_runtime::RuntimeConfig;"));
         assert!(app_lib.contains("RuntimeConfig::builder().build()"));
+
+        let platforms_build =
+            std::fs::read_to_string(project_root.join("platforms/BUILD.bazel")).expect("platforms");
+        assert!(platforms_build.contains("name = \"arm64-v8a\""));
+        assert!(platforms_build.contains("@platforms//os:android"));
+        assert!(platforms_build.contains("@platforms//cpu:arm64"));
     }
 
     #[test]

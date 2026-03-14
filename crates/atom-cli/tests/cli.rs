@@ -69,6 +69,7 @@ fn new_creates_a_minimal_bootable_project_scaffold() {
     assert!(project_root.join("BUILD.bazel").exists());
     assert!(project_root.join("README.md").exists());
     assert!(project_root.join(".gitignore").exists());
+    assert!(project_root.join("platforms/BUILD.bazel").exists());
     assert!(project_root.join("apps/my_app/BUILD.bazel").exists());
     assert!(project_root.join("apps/my_app/src/lib.rs").exists());
     assert!(!project_root.join("MODULE.bazel.lock").exists());
@@ -81,10 +82,17 @@ fn new_creates_a_minimal_bootable_project_scaffold() {
     assert!(module_bazel.contains("package = \"camino\""));
     assert!(module_bazel.contains("name = \"rules_apple\""));
     assert!(module_bazel.contains("name = \"rules_swift\""));
+    assert!(module_bazel.contains("name = \"platforms\""));
     assert!(module_bazel.contains("android_sdk_repository_extension"));
 
     let build_bazel = fs::read_to_string(project_root.join("BUILD.bazel")).expect("build file");
     assert!(build_bazel.contains("actual = \"@atom//:atom\""));
+
+    let platforms_build =
+        fs::read_to_string(project_root.join("platforms/BUILD.bazel")).expect("platforms");
+    assert!(platforms_build.contains("name = \"arm64-v8a\""));
+    assert!(platforms_build.contains("@platforms//os:android"));
+    assert!(platforms_build.contains("@platforms//cpu:arm64"));
 
     let app_build = fs::read_to_string(project_root.join("apps/my_app/BUILD.bazel")).expect("app");
     assert!(app_build.contains("load(\"@atom//bzl/atom:defs.bzl\", \"atom_app\")"));
