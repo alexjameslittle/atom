@@ -1,3 +1,5 @@
+startup --max_idle_secs=300
+
 build --java_runtime_version=remotejdk_21
 build --workspace_status_command=./scripts/workspace-status.sh
 

@@ -22,7 +22,7 @@ hooks:
     git clone --depth 1 https://github.com/alexjameslittle/atom .
     scripts/bootstrap.sh && scripts/setup-buildbuddy.sh
   before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
+    bazelisk shutdown
 agent:
   max_concurrent_agents: 10
   max_turns: 20
