@@ -32,6 +32,8 @@ codex:
     --model gpt-5.4 app-server
   approval_policy: never
   thread_sandbox: danger-full-access
+  turn_sandbox_policy:
+    type: dangerFullAccess
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
