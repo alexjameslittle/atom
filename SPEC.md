@@ -1072,24 +1072,23 @@ build-install-launch cycle, not just invoke `bazel run`.
 iOS deployment sequence:
 
 1. `bazel build //<build.generated_root>/ios/<slug>:app` to produce the `.app` bundle.
-2. Boot the requested or default iOS simulator with `idb boot <udid>` when targeting a simulator, or
-   reuse the connected device target when targeting hardware.
-3. `idb install --udid <destination> <path-to-.app>` to install.
-4. `idb launch -f --udid <destination> <bundle_id>` to launch.
-5. When `--detach` is not set, `idb launch -f -w --udid <destination> <bundle_id>` MAY be used to
-   keep the CLI attached and stream the app process output until interruption or exit.
+2. Ensure the requested or default simulator or device is ready through `agent-device boot`.
+3. `agent-device reinstall <bundle_id> <path-to-.app>` to install.
+4. `agent-device open <bundle_id>` to launch.
+5. When `--detach` is not set, Atom MAY start `agent-device` log capture and keep the CLI attached
+   by streaming the session log artifact until interruption or exit.
 
 Android deployment sequence:
 
 1. `bazel build //<build.generated_root>/android/<slug>:app` to produce the APK.
-2. `adb install -r <path-to-.apk>` to install on the running emulator or connected device.
-3. `adb shell am start -W -n <application_id>/.MainActivity` to launch and wait for Activity Manager
-   completion.
+2. Ensure the requested emulator or connected device is ready through `agent-device boot`.
+3. `agent-device reinstall <application_id> <path-to-.apk>` to install.
+4. `agent-device open <application_id> --activity <application_id>/.MainActivity` to launch.
 
 Rules:
 
-- Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required platform tools (`idb`, `adb`)
-  are not available.
+- Both commands MUST fail with `EXTERNAL_TOOL_FAILED` if the required automation tooling
+  (`agent-device` plus the underlying platform tools it wraps) is not available.
 - Both commands MUST stream build output to stderr.
 - `atom run --platform <platform> --detach` MUST launch the selected app, wait until the app is
   automation-ready for follow-on inspection or evidence capture, and then return without waiting on
@@ -1163,16 +1162,16 @@ Rules:
 - Artifact-producing commands MUST allow caller-selected repo-relative or absolute output paths.
 - Video capture SHOULD be startable before the first interaction step and stoppable after the last
   required step so one artifact can prove the full interaction flow.
-- iOS simulator screenshot capture MAY fall back to `xcrun simctl io <udid> screenshot` when the
-  semantic `idb` backend is unavailable for image encoding. This fallback does not change the
-  requirement that semantic inspection and interaction stay framework-owned.
 - The primary automation backend MUST be semantic, not pixel-only.
-- iOS automation MUST use a framework-owned `idb`-backed semantic backend. Implementations MAY
-  satisfy this through XCTest-compatible primitives under the hood, but coordinate-only `simctl`
-  helpers are insufficient as the primary conformance path.
-- Android automation MUST use a framework-owned UI Automator-based backend. Implementations MAY
-  combine UI hierarchy inspection with `adb shell input` gestures so long as the framework, not the
-  app-under-test, owns the automation backend.
+- iOS automation MUST use a framework-owned `agent-device` semantic backend. Implementations MAY
+  satisfy this through Apple-native primitives under the hood, but coordinate-only `simctl` helpers
+  are insufficient as the primary conformance path.
+- Android automation MUST use the same framework-owned `agent-device` backend. Implementations MAY
+  rely on UI Automator and Android platform tools under the hood so long as the framework, not the
+  app-under-test, owns the automation backend contract.
+- Implementations SHOULD scope `agent-device` daemon state to a repo-local directory such as
+  `cng-output/agent-device-state` so automation sessions do not leak across unrelated workspaces or
+  stale shell environments.
 - Coordinate-targeted actions MAY be supported, but semantic element targeting SHOULD be the default
   path exposed to agents.
 
@@ -1282,8 +1281,8 @@ consumes Atom via `bzlmod`.
 - SHOULD attach to an already-running foreground app for the selected target when the backend can
   identify it, and only perform a fresh launch when no matching app session can be reused
 - MUST write the video to the requested output path
-- iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because `idb video` emits
-  a QuickTime movie container even when the caller provides an `.mp4` suffix
+- iOS proof bundles and example plans SHOULD prefer `.mov` artifact names because the iOS-side
+  capture stack emits a QuickTime movie container even when the caller provides an `.mp4` suffix
 
 `atom evidence logs --platform <platform>`:
 
@@ -1642,8 +1641,8 @@ specified in a separate renderer spec if and when that work begins.
 
 - **Should Xcode projects be emitted directly, or derived from Bazel later?** Neither for the
   minimum conformance profile. The generated `ios_application` target is built and deployed via
-  Bazel and `idb`. Xcode project generation via `rules_xcodeproj` MAY be added as a convenience in a
-  later phase.
+  Bazel and the framework-owned `agent-device` automation seam. Xcode project generation via
+  `rules_xcodeproj` MAY be added as a convenience in a later phase.
 - **Should the runtime artifact be `staticlib`, `cdylib`, or both?** Both. iOS uses `staticlib`
   linked into the Swift binary. Android uses `cdylib` (shared library) loaded via JNI
   `System.loadLibrary()`. See Section 9.8.

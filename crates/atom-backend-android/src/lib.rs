@@ -1,3 +1,4 @@
+mod agent_device;
 mod android_uiautomator;
 mod cng;
 mod deploy;

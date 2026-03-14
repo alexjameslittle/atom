@@ -1,3 +1,4 @@
+mod agent_device;
 mod cng;
 mod deploy;
 mod templates;
