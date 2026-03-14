@@ -29,7 +29,8 @@ can be added on top once the runtime, CNG, and native-module system are stable.
 
 The target developer experience is:
 
-1. Run `atom new <name>` to scaffold the Bazel workspace and a bootable app crate.
+1. Run `atom new [name]` to scaffold the Bazel workspace and a bootable app crate, with interactive
+   prompts when the name is omitted.
 2. Edit the generated app crate in Rust.
 3. Refine app config in `atom_app(...)`.
 4. Add `atom_module(...)` and `atom_native_module(...)` targets to the app.
@@ -797,7 +798,7 @@ When neither `ios` nor `android` is set in the plugin config, it contributes not
 
 Deliverables:
 
-- `atom new <name>`
+- `atom new [name]`
 - `atom run --platform ios`
 - `atom run --platform android`
 - `atom run --platform ios --detach`
