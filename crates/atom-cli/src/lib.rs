@@ -1,3 +1,5 @@
+mod new_project;
+
 use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
@@ -29,6 +31,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+use crate::new_project::scaffold_project;
+
 #[derive(Debug, Parser)]
 #[command(name = "atom")]
 struct Cli {
@@ -38,6 +42,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    New(NewArgs),
     Prebuild(PrebuildArgs),
     Run(RunArgs),
     Stop(StopArgs),
@@ -48,6 +53,11 @@ enum Commands {
     Inspect(InspectArgs),
     Interact(InteractArgs),
     Evaluate(EvaluateArgs),
+}
+
+#[derive(Debug, Args)]
+struct NewArgs {
+    name: String,
 }
 
 #[derive(Debug, Args)]
@@ -301,6 +311,7 @@ where
 
 fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<CommandOutput> {
     match &cli.command {
+        Commands::New(args) => execute_new(cwd, args),
         Commands::Prebuild(args) => execute_prebuild(cwd, args),
         Commands::Run(args) => execute_run(cwd, args, runner),
         Commands::Stop(args) => execute_stop(cwd, args, runner),
@@ -312,6 +323,11 @@ fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResul
         Commands::Interact(args) => execute_interact(cwd, args, runner),
         Commands::Evaluate(args) => execute_evaluate(cwd, args, runner),
     }
+}
+
+fn execute_new(cwd: &Utf8Path, args: &NewArgs) -> AtomResult<CommandOutput> {
+    let project_root = scaffold_project(cwd, &args.name)?;
+    Ok(text_output(format!("{project_root}\n")))
 }
 
 fn execute_prebuild(cwd: &Utf8Path, args: &PrebuildArgs) -> AtomResult<CommandOutput> {
@@ -863,6 +879,11 @@ mod tests {
         let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let error = run_from_args(["atom", "unknown"], &cwd).expect_err("invalid command");
         assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn new_command_accepts_a_project_name() {
+        parse_cli(&["atom", "new", "my_app"]);
     }
 
     #[test]

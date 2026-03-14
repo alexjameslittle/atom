@@ -107,6 +107,20 @@ Required build-system rules:
   builds.
 - The build layer MUST include the FlatBuffers compiler and the Rust `flatbuffers` crate.
 
+Required consumer scaffold rules:
+
+- `atom new <name>` MUST create a new project directory named `<name>`.
+- `<name>` MUST be validated as a lowercase Rust crate identifier using only ASCII letters, digits,
+  and underscores.
+- The generated project root MUST include `MODULE.bazel`, `.bazelversion`, `.bazelrc`, `mise.toml`,
+  `BUILD.bazel`, `README.md`, and `.gitignore`.
+- The generated `MODULE.bazel` MUST declare `bazel_dep(name = "atom", version = "0.1.0")`, configure
+  `crate_universe`, and add a temporary `git_override(...)` for the Atom repository until the module
+  is published in BCR.
+- The generated `BUILD.bazel` MUST expose `//:atom` as an alias to `@atom//:atom`.
+- The generated `mise.toml` MUST pin the same `bazel`, `bazelisk`, `rust`, and `java` versions as
+  the framework repository.
+
 Required pinned Bazel modules for the initial implementation:
 
 - `bazel_skylib = 1.9.0`
@@ -1175,6 +1189,7 @@ Rules:
 
 Required commands:
 
+- `atom new <name>`
 - `atom prebuild`
 - `atom prebuild --dry-run`
 - `atom run --platform ios`
@@ -1207,8 +1222,16 @@ Required commands:
 
 ### 10.3 Output Rules
 
-All CLI commands MUST fail with `CLI_USAGE_ERROR` when invoked outside a Bazel workspace that
-consumes Atom via `bzlmod`.
+All CLI commands except `atom new` MUST fail with `CLI_USAGE_ERROR` when invoked outside a Bazel
+workspace that consumes Atom via `bzlmod`.
+
+`atom new <name>`:
+
+- MUST create a new project directory under the current working directory
+- MUST reject names that are not valid lowercase Rust crate identifiers
+- MUST fail with `CLI_USAGE_ERROR` when the target directory already exists
+- MUST embed scaffold template contents in the CLI binary rather than reading template files from
+  disk at runtime
 
 `atom prebuild --dry-run`:
 

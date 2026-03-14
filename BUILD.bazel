@@ -6,7 +6,11 @@ load("@rules_java//java:defs.bzl", "java_binary")
 npm_link_all_packages()
 
 exports_files([
+    ".bazelrc",
+    ".bazelversion",
     "clippy.toml",
+    "MODULE.bazel",
+    "mise.toml",
     "rustfmt.toml",
 ])
 
@@ -51,4 +55,5 @@ format_multirun(
 alias(
     name = "atom",
     actual = "//crates/atom-cli:atom",
+    visibility = ["//visibility:public"],
 )

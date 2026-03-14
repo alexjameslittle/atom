@@ -3,6 +3,12 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 rust_library(
     name = "atom-cli-lib",
     srcs = glob(["src/**/*.rs"]),
+    compile_data = [
+        "//:.bazelrc",
+        "//:.bazelversion",
+        "//:MODULE.bazel",
+        "//:mise.toml",
+    ],
     crate_name = "atom_cli",
     crate_root = "src/lib.rs",
     edition = "2024",
