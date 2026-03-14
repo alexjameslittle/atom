@@ -1,22 +1,17 @@
 use std::env;
 
-use atom_runtime::{ModuleMethodRegistration, ModuleRegistration};
-use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
+use atom_ffi::AtomResult;
+use atom_runtime::{ModuleRegistration, PluginContext};
 
-pub const METHOD_GET: &str = "get";
 pub const MODULE_ID: &str = "device_info";
 
-#[must_use]
-pub fn module_id() -> &'static str {
-    MODULE_ID
-}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetDeviceInfoRequest {}
 
-#[must_use]
-pub fn encode_get_device_info_request() -> Vec<u8> {
-    let mut builder = FlatBufferBuilder::new();
-    let root = create_get_device_info_request(&mut builder);
-    builder.finish(root, None);
-    builder.finished_data().to_vec()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetDeviceInfoResponse {
+    pub model: String,
+    pub os: String,
 }
 
 #[must_use]
@@ -29,59 +24,45 @@ pub fn runtime_module() -> ModuleRegistration {
             Ok(())
         }),
         shutdown_fn: None,
-        methods: vec![ModuleMethodRegistration::new(
-            METHOD_GET,
-            |_ctx, _request| {
-                Ok(encode_get_device_info_response(
-                    "atom-runtime",
-                    &format!("{}-{}", env::consts::OS, env::consts::ARCH),
-                ))
-            },
-        )],
     }
 }
 
-fn encode_get_device_info_response(model: &str, os: &str) -> Vec<u8> {
-    let mut builder = FlatBufferBuilder::new();
-    let model = builder.create_string(model);
-    let os = builder.create_string(os);
-    let root = create_get_device_info_response(&mut builder, model, os);
-    builder.finish(root, None);
-    builder.finished_data().to_vec()
-}
-
-fn create_get_device_info_request(
-    builder: &mut FlatBufferBuilder<'_>,
-) -> WIPOffset<TableFinishedWIPOffset> {
-    let table = builder.start_table();
-    builder.end_table(table)
-}
-
-fn create_get_device_info_response<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    model: WIPOffset<&'a str>,
-    os: WIPOffset<&'a str>,
-) -> WIPOffset<TableFinishedWIPOffset> {
-    let table = builder.start_table();
-    builder.push_slot_always::<WIPOffset<_>>(4, model);
-    builder.push_slot_always::<WIPOffset<_>>(6, os);
-    builder.end_table(table)
+/// Public Rust API for the module. Generated bridge code and runtime plugins
+/// call this directly instead of routing through the runtime kernel.
+///
+/// # Errors
+///
+/// This example implementation is infallible, but real modules may return
+/// `AtomError` values through `AtomResult`.
+pub fn get(
+    _ctx: &PluginContext,
+    _request: GetDeviceInfoRequest,
+) -> AtomResult<GetDeviceInfoResponse> {
+    Ok(GetDeviceInfoResponse {
+        model: "atom-runtime".to_owned(),
+        os: format!("{}-{}", env::consts::OS, env::consts::ARCH),
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{METHOD_GET, MODULE_ID, encode_get_device_info_request, runtime_module};
+    use atom_runtime::RuntimeConfig;
+
+    use super::{GetDeviceInfoRequest, MODULE_ID, get, runtime_module};
 
     #[test]
-    fn request_encoding_produces_flatbuffer_bytes() {
-        assert!(encode_get_device_info_request().len() > 4);
+    fn direct_rust_api_returns_device_info() {
+        let handle = atom_runtime::init_runtime(RuntimeConfig::default()).expect("runtime init");
+        let ctx = atom_runtime::running_plugin_context(handle).expect("running context");
+        let response = get(&ctx, GetDeviceInfoRequest {}).expect("response");
+        assert_eq!(response.model, "atom-runtime");
+        assert!(!response.os.is_empty());
+        atom_runtime::shutdown_runtime(handle);
     }
 
     #[test]
-    fn runtime_module_registers_get_method() {
+    fn runtime_module_sets_up_lifecycle_registration() {
         let module = runtime_module();
         assert_eq!(module.id, MODULE_ID);
-        assert_eq!(module.methods.len(), 1);
-        assert_eq!(module.methods[0].name, METHOD_GET);
     }
 }

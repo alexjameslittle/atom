@@ -562,13 +562,14 @@ Deliverables:
 - Event and effect model
 - Async runtime integration
 - Structured logging
-- Runtime-side module call plumbing
+- Public runtime APIs consumable by module crates
 - Runtime plugin host API
 
 Exit criteria:
 
 - The example app boots inside the runtime kernel on both platforms
-- The example app performs real state changes, async work, and module calls on both platforms
+- The example app performs real state changes, async work, and direct module crate calls on both
+  platforms
 - The runtime exposes one stable execution model for apps and plugins without requiring a renderer
 
 ### Phase 4B: Runtime plugin SDK and registration

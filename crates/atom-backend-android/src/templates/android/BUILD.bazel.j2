@@ -18,7 +18,11 @@ rust_shared_library(
     deps = [
         "@atom//crates/atom-ffi",
         "@atom//crates/atom-runtime",
+        "@crates//:flatbuffers",
         "{{ entry_crate_label }}",
+{% for label in rust_module_labels %}
+        "{{ label }}",
+{% endfor %}
     ],
 )
 

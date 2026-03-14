@@ -344,6 +344,7 @@ The Bazel-generated metadata document MUST include these top-level keys:
 - `kind`
 - `target_label`
 - `id`
+- `rust_crate_name`
 - `atom_api_level`
 - `min_atom_version`
 - `ios_min_deployment_target`
@@ -366,6 +367,7 @@ The normalized module manifest MUST support these fields:
 
 - `kind: "atom_module" | "atom_native_module"`
 - `id: String`
+- `rust_crate_name: Option<String>`
 - `atom_api_level: u32`
 - `min_atom_version: Option<String>`
 - `ios_min_deployment_target: Option<String>`
@@ -394,6 +396,7 @@ Schema source of truth rules:
   the metadata.
 - `.fbs` files are the only source of truth for the wire contract.
 - Each module MUST declare one or more FlatBuffers schema files in `schema_files`.
+- Rust-authored modules MUST declare `rust_crate_name`, and native-only modules MUST NOT.
 - `atom_api_level` MUST be an integer matching the framework-supported API level for the current
   build.
 - `min_atom_version`, when present, MUST be a semver lower bound satisfied by the current framework
@@ -406,9 +409,10 @@ Schema source of truth rules:
 - Rule inputs for `schema_files`, `ios_srcs`, and `android_srcs` MAY be package-relative, but the
   emitted metadata MUST normalize them to repo-relative paths.
 - Existing FlatBuffers schemas MAY be reused unchanged by listing them in `schema_files`.
-- Rust request and response types used at the ABI boundary MUST be generated from `.fbs`.
-- Handwritten Rust structs and enums MAY exist as implementation details, but they MUST NOT define
-  or evolve the wire contract.
+- Rust-backed modules MAY expose handwritten Rust request and response types or other ergonomic Rust
+  APIs for in-runtime use.
+- `.fbs` remains the source of truth for the native wire contract, and generated bridge code MUST
+  translate between FlatBuffer payloads and the module crate's Rust API at the FFI boundary.
 - `MethodSpec.request_table` and `MethodSpec.response_table` MUST be fully qualified FlatBuffers
   table names declared by the module's schema files.
 - `depends_on` entries MUST be absolute Bazel labels.
@@ -481,18 +485,18 @@ The runtime state machine MUST use these states:
 
 ### 7.2 Transition Rules
 
-| From                                       | Trigger                             | To             | Required Action                         |
-| ------------------------------------------ | ----------------------------------- | -------------- | --------------------------------------- |
-| `Created`                                  | `atom_app_init` succeeds            | `Initializing` | allocate runtime handle, parse config   |
-| `Initializing`                             | all modules initialize successfully | `Running`      | mark runtime available for module calls |
-| `Initializing`                             | module init fails                   | `Failed`       | emit `MODULE_INIT_FAILED`               |
-| `Running`                                  | host foreground loss                | `Backgrounded` | pause foreground-only work              |
-| `Backgrounded`                             | host foreground gain                | `Running`      | resume foreground-only work             |
-| `Backgrounded`                             | host suspension callback            | `Suspended`    | flush state, stop non-background tasks  |
-| `Suspended`                                | host resume callback                | `Running`      | restore active scheduling               |
-| `Running` or `Backgrounded` or `Suspended` | host terminate callback             | `Terminating`  | begin reverse-order module shutdown     |
-| `Terminating`                              | shutdown completes                  | `Terminated`   | free runtime resources                  |
-| any non-terminal state                     | unrecoverable bridge/runtime error  | `Failed`       | freeze further transitions              |
+| From                                       | Trigger                             | To             | Required Action                               |
+| ------------------------------------------ | ----------------------------------- | -------------- | --------------------------------------------- |
+| `Created`                                  | `atom_app_init` succeeds            | `Initializing` | allocate runtime handle, parse config         |
+| `Initializing`                             | all modules initialize successfully | `Running`      | mark runtime available for public module APIs |
+| `Initializing`                             | module init fails                   | `Failed`       | emit `MODULE_INIT_FAILED`                     |
+| `Running`                                  | host foreground loss                | `Backgrounded` | pause foreground-only work                    |
+| `Backgrounded`                             | host foreground gain                | `Running`      | resume foreground-only work                   |
+| `Backgrounded`                             | host suspension callback            | `Suspended`    | flush state, stop non-background tasks        |
+| `Suspended`                                | host resume callback                | `Running`      | restore active scheduling                     |
+| `Running` or `Backgrounded` or `Suspended` | host terminate callback             | `Terminating`  | begin reverse-order module shutdown           |
+| `Terminating`                              | shutdown completes                  | `Terminated`   | free runtime resources                        |
+| any non-terminal state                     | unrecoverable bridge/runtime error  | `Failed`       | freeze further transitions                    |
 
 ### 7.3 Module Initialization Order
 
@@ -539,11 +543,11 @@ function start_runtime(normalized_manifest, resolved_modules):
 - The runtime kernel MUST remain the single authority for lifecycle transitions, effect completion,
   and dispatch ordering even when higher-level state-management libraries layer on top of it.
 - The runtime plugin context SHOULD expose kernel-owned hooks for shared state writes, event
-  recording, effect recording, async task execution, and runtime module calls.
+  recording, effect recording, and async task execution.
 - Runtime plugins MAY use an `on_running`-style callback after the runtime reaches `Running` to
-  begin work that requires module-call availability.
-- Runtime module methods registered through app-owned runtime config MUST only be callable while the
-  runtime is in the `Running` state.
+  begin work that requires public module APIs backed by the runtime.
+- `atom-runtime` MUST expose a public handle-based access path such as `running_plugin_context()` so
+  generated/native glue can invoke Rust module crate APIs only while the runtime is `Running`.
 - `atom-runtime` MUST expose only destination-agnostic plugin host types. Its public plugin API MUST
   NOT mention iOS, Android, simulator, emulator, device, route-stack, or renderer-specific types.
 - Apps MUST opt into runtime plugins in app code by constructing the runtime configuration passed to
@@ -644,6 +648,8 @@ Export naming rules:
 - generated export names MUST use the form `atom_<module_id>_<method_name>`
 - `<module_id>` and `<method_name>` MUST use the normalized manifest identifiers
 - export name collisions MUST fail generation with `CNG_CONFLICT`
+- generated exports MUST resolve the active runtime handle for the app and fail with
+  `RUNTIME_TRANSITION_INVALID` if startup has not completed
 
 ### 8.4 Memory Ownership Rules
 
@@ -658,18 +664,25 @@ Export naming rules:
 
 ### 8.5 Wire Format
 
-Runtime module calls MUST use CNG-generated FlatBuffers, not JSON.
+Native-host module calls MUST use CNG-generated FlatBuffers, not JSON.
+
+Inside Rust, module access MUST stay typed:
+
+- runtime plugins and other Rust code call module crate APIs directly
+- generated per-method exports deserialize the incoming FlatBuffer request, obtain a running
+  `PluginContext` from `atom-runtime`, call the module crate's Rust API directly, and serialize the
+  Rust response back to FlatBuffer bytes for the host
 
 CNG MUST emit:
 
 - `generated/schema/atom.fbs`
 - `generated/schema/modules/<module_id>/...` for each declared module schema file
 
-The build layer MUST generate Rust bindings for the runtime side and Swift/Kotlin bindings for
-native hosts from the aggregate schema plus all module-owned schema files.
+The build layer MUST generate Swift/Kotlin bindings for native hosts from the aggregate schema plus
+all module-owned schema files.
 
-Those generated bindings MUST define the Rust request and response types used by generated
-per-method exports and by module implementation code.
+The build layer MUST also generate or render the Rust bridge encode/decode code needed by per-method
+exports to map FlatBuffer payloads onto the module crate's Rust API.
 
 The `input_flatbuffer` payload MUST be the method-specific request table, not a generic wrapper
 envelope.
@@ -703,8 +716,8 @@ table GetDeviceInfoResponse {
 }
 ```
 
-The generated Rust module API MAY remain fully typed and ergonomic. The FlatBuffer boundary exists
-to keep the host/runtime transport compact and deterministic.
+The generated Rust bridge MUST keep the FlatBuffer boundary at the native FFI edge only. The Rust
+module API inside the runtime MUST remain typed and ergonomic.
 
 Successful responses from generated per-method exports MUST be method-specific FlatBuffer response
 buffers.
@@ -1521,14 +1534,15 @@ Required behavior:
 - module init in resolved order
 - runtime lifecycle follows Section 7.2
 - invalid transitions return `RUNTIME_TRANSITION_INVALID`
-- the runtime exposes kernel-owned state/event/effect inspection and runtime-side module call
-  plumbing for Rust-backed modules
+- the runtime exposes kernel-owned state/event/effect inspection plus a public running-context API
+  that generated/native glue can use to call Rust-backed module crates directly
 
 Conformance example:
 
 - Input: canonical app startup plus lifecycle sequence `init -> background -> resume -> terminate`
 - Expected output: the runtime records shared state updates, completes at least one async task,
-  successfully performs a `device_info.get` module call while `Running`, and transitions through
+  generated bridge code can obtain a running context and call `device_info::get(...)` successfully
+  while `Running`, and the runtime transitions through
   `Created -> Initializing -> Running -> Backgrounded -> Running -> Terminating -> Terminated`
 
 ### 11.6 Phase 4B: Runtime Plugin SDK and Registration

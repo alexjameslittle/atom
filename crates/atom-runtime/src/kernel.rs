@@ -85,15 +85,6 @@ impl Runtime {
                     format!("module '{}' init failed: {err}", module.id),
                 ));
             }
-            for method in &module.methods {
-                runtime
-                    .host
-                    .register_module_method(&module.id, &method.name, Arc::clone(&method.handler))
-                    .inspect_err(|_error| {
-                        runtime.state = RuntimeState::Failed;
-                        runtime.host.set_lifecycle(RuntimeState::Failed);
-                    })?;
-            }
             runtime.module_ids.push(module.id);
             runtime.module_shutdown_fns.push(module.shutdown_fn);
         }
@@ -139,6 +130,10 @@ impl Runtime {
 
     pub(crate) fn snapshot(&self) -> RuntimeSnapshot {
         self.host.snapshot()
+    }
+
+    pub(crate) fn context(&self) -> PluginContext<'static> {
+        self.ctx.clone()
     }
 
     pub(crate) fn handle_event(&mut self, event: AtomLifecycleEvent) -> AtomResult<()> {
@@ -202,7 +197,7 @@ mod tests {
 
     use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
 
-    use crate::config::{ModuleMethodRegistration, ModuleRegistration, RuntimeConfig};
+    use crate::config::{ModuleRegistration, RuntimeConfig};
     use crate::plugin::{PluginContext, RuntimePlugin};
     use crate::state::RuntimeState;
     use crate::store::{RuntimeEffect, RuntimeEvent};
@@ -237,7 +232,6 @@ mod tests {
                         Ok(())
                     }),
                     shutdown_fn: None,
-                    methods: Vec::new(),
                 },
                 ModuleRegistration {
                     id: "first".to_owned(),
@@ -247,7 +241,6 @@ mod tests {
                         Ok(())
                     }),
                     shutdown_fn: None,
-                    methods: Vec::new(),
                 },
             ],
         };
@@ -265,7 +258,6 @@ mod tests {
                 init_order: 0,
                 init_fn: Box::new(|_| Err(AtomError::new(AtomErrorCode::ModuleInitFailed, "boom"))),
                 shutdown_fn: None,
-                methods: Vec::new(),
             }],
         };
 
@@ -288,7 +280,6 @@ mod tests {
                     shutdown_fn: Some(Box::new(move || {
                         *sc.lock().unwrap() = true;
                     })),
-                    methods: Vec::new(),
                 },
                 ModuleRegistration {
                     id: "bad".to_owned(),
@@ -297,7 +288,6 @@ mod tests {
                         Err(AtomError::new(AtomErrorCode::ModuleInitFailed, "boom"))
                     }),
                     shutdown_fn: None,
-                    methods: Vec::new(),
                 },
             ],
         };
@@ -325,7 +315,6 @@ mod tests {
                     shutdown_fn: Some(Box::new(move || {
                         o1.lock().unwrap().push("first");
                     })),
-                    methods: Vec::new(),
                 },
                 ModuleRegistration {
                     id: "second".to_owned(),
@@ -334,7 +323,6 @@ mod tests {
                     shutdown_fn: Some(Box::new(move || {
                         o2.lock().unwrap().push("second");
                     })),
-                    methods: Vec::new(),
                 },
             ],
         };
@@ -381,7 +369,6 @@ mod tests {
                 shutdown_fn: Some(Box::new(move || {
                     *sc.lock().unwrap() = true;
                 })),
-                methods: Vec::new(),
             }],
         };
 
@@ -468,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn running_hook_can_update_state_run_tasks_and_call_modules() {
+    fn running_hook_can_update_state_and_run_tasks() {
         struct ProbePlugin;
 
         impl RuntimePlugin for ProbePlugin {
@@ -483,23 +470,14 @@ mod tests {
                     tokio::task::yield_now().await;
                     Ok(())
                 })?;
-                let response = ctx.call_module("device_info", "get", b"request")?;
-                ctx.set_state("module.response_len", response.len().to_string());
+                ctx.set_state("app.ready", "true");
                 Ok(())
             }
         }
 
         let config = RuntimeConfig {
             plugins: vec![Box::new(ProbePlugin)],
-            modules: vec![ModuleRegistration {
-                id: "device_info".to_owned(),
-                init_order: 0,
-                init_fn: Box::new(|_| Ok(())),
-                shutdown_fn: None,
-                methods: vec![ModuleMethodRegistration::new("get", |_ctx, request| {
-                    Ok(request.to_vec())
-                })],
-            }],
+            modules: Vec::new(),
         };
 
         let rt = Runtime::start(1, config).expect("should start");
@@ -511,11 +489,8 @@ mod tests {
             Some("running"),
         );
         assert_eq!(
-            snapshot
-                .values
-                .get("module.response_len")
-                .map(String::as_str),
-            Some("7"),
+            snapshot.values.get("app.ready").map(String::as_str),
+            Some("true"),
         );
         assert!(snapshot
             .events
@@ -531,6 +506,5 @@ mod tests {
             RuntimeEffect::TaskStarted { ref plugin_id, ref task_name }
                 if plugin_id == "probe" && task_name == "yield"
         )));
-        assert_eq!(snapshot.module_calls.len(), 1);
     }
 }

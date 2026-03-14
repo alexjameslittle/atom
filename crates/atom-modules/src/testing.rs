@@ -14,6 +14,7 @@ pub fn fixture_resolved_module(repo_root: &Utf8Path) -> ResolvedModule {
             kind: ModuleKind::Rust,
             target_label: "//modules/fixture:fixture".to_owned(),
             id: "fixture_module".to_owned(),
+            rust_crate_name: Some("fixture".to_owned()),
             atom_api_level: 1,
             min_atom_version: Some("0.1.0".to_owned()),
             ios_min_deployment_target: None,

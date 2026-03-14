@@ -48,19 +48,6 @@ impl PluginContext<'_> {
 
     /// # Errors
     ///
-    /// Returns an error if the runtime is not yet `Running`, or if the
-    /// requested module method has not been registered in the runtime config.
-    pub fn call_module(
-        &self,
-        module_id: &str,
-        method: &str,
-        request: &[u8],
-    ) -> AtomResult<Vec<u8>> {
-        self.host.call_module(self, module_id, method, request)
-    }
-
-    /// # Errors
-    ///
     /// Returns an error if the runtime is not yet `Running`, or if the task
     /// future resolves to an `AtomError`.
     pub fn run_task<F, T>(&self, plugin_id: &str, task_name: &str, future: F) -> AtomResult<T>
@@ -95,7 +82,7 @@ pub trait RuntimePlugin: Send + Sync {
         Ok(())
     }
 
-    /// Called once the runtime reaches the `Running` state and module calls are available.
+    /// Called once the runtime reaches the `Running` state and public runtime APIs are available.
     ///
     /// # Errors
     ///
