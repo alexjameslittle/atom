@@ -29,10 +29,17 @@ jobs:
       - build-atom-macos-arm64
     steps:
       - name: Download atom artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ env.ATOM_ARTIFACT_NAME }}
-          path: dist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+          gh run download "${GITHUB_RUN_ID}" \
+            --name "${ATOM_ARTIFACT_NAME}" \
+            --dir dist
 
       - name: Prepare release assets
         shell: bash
@@ -62,6 +69,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -87,5 +95,6 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
               --title "${GITHUB_REF_NAME}" \
               --prerelease \
+              --verify-tag \
               --generate-notes
           fi
