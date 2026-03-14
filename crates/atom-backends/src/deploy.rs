@@ -168,6 +168,34 @@ pub struct InteractionResult {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EvaluationStep {
     Launch,
+    DebugAttach {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugWaitForStop {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    DebugPause {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugResume {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugThreads {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DebugBacktrace {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        thread_id: Option<String>,
+    },
     WaitForUi {
         #[serde(default)]
         target_id: Option<String>,
@@ -333,11 +361,16 @@ pub struct DebugFrame {
 pub enum DebugSessionRequest {
     Attach,
     InspectState,
-    WaitForStop { timeout_ms: u64 },
+    WaitForStop {
+        timeout_ms: u64,
+    },
     Pause,
     Resume,
     ListThreads,
-    ListFrames { thread_id: String },
+    ListFrames {
+        #[serde(default)]
+        thread_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,8 +435,8 @@ pub trait BackendAppSession {
 
     fn shutdown_video(&mut self) -> AtomResult<()>;
 
-    fn debug_session(&mut self) -> Option<&mut dyn BackendDebugSession> {
-        None
+    fn debug_session(&mut self) -> AtomResult<Option<&mut dyn BackendDebugSession>> {
+        Ok(None)
     }
 }
 

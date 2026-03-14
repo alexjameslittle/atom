@@ -22,10 +22,10 @@ Use this skill when:
 
 1. Resolve a destination id first with
    `[$destination-discovery](../destination-discovery/SKILL.md)`.
-2. If you need to prepare app state before ad hoc automation, prefer `atom run ios|android --detach`
-   instead of holding a live log-streaming session open. Detached launch returns only after the app
-   is inspectable. Use `atom stop ios|android` for cleanup only when the workflow intentionally
-   launched a disposable session.
+2. If you need to prepare app state before ad hoc automation, prefer
+   `atom run --platform <platform> --detach` instead of holding a live log-streaming session open.
+   Detached launch returns only after the app is inspectable. Use `atom stop --platform <platform>`
+   for cleanup only when the workflow intentionally launched a disposable session.
 3. Run `scripts/run.sh tap`, `long-press`, `swipe`, `drag`, or `type-text` for one-step actions.
    These ad hoc commands should reuse the current foreground app state when the selected target is
    already running.

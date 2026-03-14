@@ -11,33 +11,50 @@ run_atom() {
 }
 
 mode=${1:-}
+shift || true
 
 case "$mode" in
   screenshot)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom evidence screenshot --target "$target" --destination "$destination" --output "$output"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    output=${2:?output path required}
+    target=${3:-$EXAMPLE_TARGET}
+    run_atom evidence screenshot --platform "$platform" --target "$target" --destination "$destination" --output "$output"
     ;;
   logs)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    seconds=${4:-60}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom evidence logs --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    output=${2:?output path required}
+    seconds=${3:-60}
+    target=${4:-$EXAMPLE_TARGET}
+    run_atom evidence logs --platform "$platform" --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
     ;;
   video)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    seconds=${4:-5}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom evidence video --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    output=${2:?output path required}
+    seconds=${3:-5}
+    target=${4:-$EXAMPLE_TARGET}
+    run_atom evidence video --platform "$platform" --target "$target" --destination "$destination" --output "$output" --seconds "$seconds"
     ;;
   inspect-ui)
-    destination=${2:?destination id required}
-    output=${3:?output path required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom inspect ui --target "$target" --destination "$destination" --output "$output"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    output=${2:?output path required}
+    target=${3:-$EXAMPLE_TARGET}
+    run_atom inspect ui --platform "$platform" --target "$target" --destination "$destination" --output "$output"
     ;;
   *)
     echo "unknown mode: $mode" >&2

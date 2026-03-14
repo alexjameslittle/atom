@@ -97,6 +97,7 @@ bazelisk run //:atom -- stop --platform ios --target //examples/hello-world/apps
 bazelisk run //:atom -- stop --platform android --target //examples/hello-world/apps/hello_atom:hello_atom --destination avd:atom_35
 bazelisk run //:atom -- inspect ui --platform ios --target //examples/hello-world/apps/hello_atom:hello_atom --destination SIM-123 --output /tmp/hello-atom-ui.json
 bazelisk run //:atom -- evaluate run --platform ios --target //examples/hello-world/apps/hello_atom:hello_atom --destination SIM-123 --plan examples/hello-world/evaluation/demo_surface_plan.json --artifacts-dir /tmp/hello-atom-eval
+bazelisk run //:atom -- evaluate run --platform ios --target //examples/hello-world/apps/hello_atom:hello_atom --destination SIM-123 --plan examples/hello-world/evaluation/demo_surface_debugger_plan.json --artifacts-dir /tmp/hello-atom-debug-eval
 ```
 
 When `--destination` is omitted and the command is running in an interactive terminal, Atom now
@@ -115,3 +116,8 @@ shutting down the simulator/emulator.
 
 For standalone video capture, prefer `.mov` output paths on iOS and `.mp4` output paths on Android.
 Proof bundles normalize their own artifact names automatically.
+
+Debugger-oriented evaluation plans stay on the same `atom evaluate run` command surface. Set
+`"build_profile": "debugger"` in the plan and start with `debug_attach` so Atom can install a
+debuggable simulator app, launch it under LLDB, capture pause/resume state transitions, and emit
+thread/backtrace JSON artifacts into the proof bundle.

@@ -12,47 +12,72 @@ run_atom() {
 }
 
 mode=${1:-}
+shift || true
 
 case "$mode" in
   tap)
-    destination=${2:?destination id required}
-    target_id=${3:?target id required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom interact tap --target "$target" --destination "$destination" --target-id "$target_id"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    target_id=${2:?target id required}
+    target=${3:-$EXAMPLE_TARGET}
+    run_atom interact tap --platform "$platform" --target "$target" --destination "$destination" --target-id "$target_id"
     ;;
   long-press)
-    destination=${2:?destination id required}
-    target_id=${3:?target id required}
-    target=${4:-$EXAMPLE_TARGET}
-    run_atom interact long-press --target "$target" --destination "$destination" --target-id "$target_id"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    target_id=${2:?target id required}
+    target=${3:-$EXAMPLE_TARGET}
+    run_atom interact long-press --platform "$platform" --target "$target" --destination "$destination" --target-id "$target_id"
     ;;
   swipe)
-    destination=${2:?destination id required}
-    x=${3:?x required}
-    y=${4:?y required}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom interact swipe --target "$target" --destination "$destination" --x "$x" --y "$y"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    x=${2:?x required}
+    y=${3:?y required}
+    target=${4:-$EXAMPLE_TARGET}
+    run_atom interact swipe --platform "$platform" --target "$target" --destination "$destination" --x "$x" --y "$y"
     ;;
   drag)
-    destination=${2:?destination id required}
-    x=${3:?x required}
-    y=${4:?y required}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom interact drag --target "$target" --destination "$destination" --x "$x" --y "$y"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    x=${2:?x required}
+    y=${3:?y required}
+    target=${4:-$EXAMPLE_TARGET}
+    run_atom interact drag --platform "$platform" --target "$target" --destination "$destination" --x "$x" --y "$y"
     ;;
   type-text)
-    destination=${2:?destination id required}
-    target_id=${3:?target id required}
-    text=${4:?text required}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom interact type-text --target "$target" --destination "$destination" --target-id "$target_id" --text "$text"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    target_id=${2:?target id required}
+    text=${3:?text required}
+    target=${4:-$EXAMPLE_TARGET}
+    run_atom interact type-text --platform "$platform" --target "$target" --destination "$destination" --target-id "$target_id" --text "$text"
     ;;
   evaluate)
-    destination=${2:?destination id required}
-    artifacts_dir=${3:?artifacts dir required}
-    plan=${4:-$DEFAULT_PLAN}
-    target=${5:-$EXAMPLE_TARGET}
-    run_atom evaluate run --target "$target" --destination "$destination" --plan "$plan" --artifacts-dir "$artifacts_dir"
+    platform=ios
+    case "${1:-}" in
+      ios|android) platform=$1; shift ;;
+    esac
+    destination=${1:?destination id required}
+    artifacts_dir=${2:?artifacts dir required}
+    plan=${3:-$DEFAULT_PLAN}
+    target=${4:-$EXAMPLE_TARGET}
+    run_atom evaluate run --platform "$platform" --target "$target" --destination "$destination" --plan "$plan" --artifacts-dir "$artifacts_dir"
     ;;
   example-plan)
     printf '%s\n' "$DEFAULT_PLAN"

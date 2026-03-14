@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn debug_session_wire_payloads_use_stable_snake_case_tags() {
         let request = DebugSessionRequest::ListFrames {
-            thread_id: "thread-1".to_owned(),
+            thread_id: Some("thread-1".to_owned()),
         };
         let response = DebugSessionResponse::Frames {
             thread_id: "thread-1".to_owned(),
