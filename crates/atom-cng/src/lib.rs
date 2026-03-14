@@ -1,3 +1,4 @@
+mod bridge;
 mod emit;
 mod templates;
 
@@ -19,6 +20,7 @@ use serde_json::Value;
 
 pub use crate::emit::emit_host_tree;
 pub use crate::emit::write_file as write_generated_file;
+pub use bridge::render_rust_module_exports;
 
 pub type ConfigPluginFactory = fn(&ConfigPluginRequest) -> AtomResult<Box<dyn ConfigPlugin>>;
 

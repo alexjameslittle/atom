@@ -141,6 +141,19 @@ impl Runtime {
         self.host.snapshot()
     }
 
+    pub(crate) fn call_module<Request, Response>(
+        &self,
+        module_id: &str,
+        method: &str,
+        request: Request,
+    ) -> AtomResult<Response>
+    where
+        Request: Send + 'static,
+        Response: Send + 'static,
+    {
+        self.host.call_module(&self.ctx, module_id, method, request)
+    }
+
     pub(crate) fn handle_event(&mut self, event: AtomLifecycleEvent) -> AtomResult<()> {
         let new_state = validate_transition(self.state, event)?;
         self.state = new_state;
@@ -198,6 +211,7 @@ impl Runtime {
 
 #[cfg(test)]
 mod tests {
+    use std::any::type_name;
     use std::sync::{Arc, Mutex};
 
     use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
@@ -211,6 +225,16 @@ mod tests {
 
     fn empty_config() -> RuntimeConfig {
         RuntimeConfig::default()
+    }
+
+    #[derive(Clone)]
+    struct ProbeRequest {
+        message: String,
+    }
+
+    #[derive(Clone)]
+    struct ProbeResponse {
+        message: String,
     }
 
     #[test]
@@ -483,8 +507,14 @@ mod tests {
                     tokio::task::yield_now().await;
                     Ok(())
                 })?;
-                let response = ctx.call_module("device_info", "get", b"request")?;
-                ctx.set_state("module.response_len", response.len().to_string());
+                let response: ProbeResponse = ctx.call_module(
+                    "device_info",
+                    "get",
+                    ProbeRequest {
+                        message: "request".to_owned(),
+                    },
+                )?;
+                ctx.set_state("module.response", response.message);
                 Ok(())
             }
         }
@@ -496,9 +526,14 @@ mod tests {
                 init_order: 0,
                 init_fn: Box::new(|_| Ok(())),
                 shutdown_fn: None,
-                methods: vec![ModuleMethodRegistration::new("get", |_ctx, request| {
-                    Ok(request.to_vec())
-                })],
+                methods: vec![ModuleMethodRegistration::new(
+                    "get",
+                    |_ctx, request: ProbeRequest| {
+                        Ok(ProbeResponse {
+                            message: request.message,
+                        })
+                    },
+                )],
             }],
         };
 
@@ -511,11 +546,8 @@ mod tests {
             Some("running"),
         );
         assert_eq!(
-            snapshot
-                .values
-                .get("module.response_len")
-                .map(String::as_str),
-            Some("7"),
+            snapshot.values.get("module.response").map(String::as_str),
+            Some("request"),
         );
         assert!(snapshot
             .events
@@ -532,5 +564,13 @@ mod tests {
                 if plugin_id == "probe" && task_name == "yield"
         )));
         assert_eq!(snapshot.module_calls.len(), 1);
+        assert_eq!(
+            snapshot.module_calls[0].request_type,
+            type_name::<ProbeRequest>()
+        );
+        assert_eq!(
+            snapshot.module_calls[0].response_type,
+            type_name::<ProbeResponse>()
+        );
     }
 }

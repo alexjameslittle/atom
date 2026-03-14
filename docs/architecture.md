@@ -83,11 +83,13 @@ Dependency direction should move one way:
   - App-owned runtime config assembly through `atom_runtime_config()` in the app crate
   - Tokio `current_thread` async runtime available via `PluginContext`
   - `PluginContext` APIs for shared state writes, event/effect recording, async task execution, and
-    runtime module calls
+    typed runtime module calls
   - Structured logging via `tracing` at lifecycle transitions
   - Handle-based registry for FFI access from generated native hosts
   - `ensure_running()` gate plus runtime-side module method registration/call plumbing for
     Rust-backed modules
+  - FlatBuffer decode/encode for Rust-backed module methods stays in generated bridge code rather
+    than inside runtime modules or plugins
 - `atom-navigation`
   - First-party runtime plugin crate that owns a route stack through the public `RuntimePlugin`
     contract
@@ -110,9 +112,10 @@ Dependency direction should move one way:
    and host-tree emission through the shared CNG contracts.
 8. `atom-deploy` resolves destinations, proof plans, and backend sessions through registered backend
    contracts when needed.
-9. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
-   kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
-   Rust-backed runtime module registrations, enter through that app-owned configuration path.
+9. Generated runtime bridge code links the app crate, calls `atom_runtime_config()` without
+   kernel-side plugin discovery, and owns the FlatBuffer encode/decode path for Rust-backed module
+   exports. Any first-party or third-party plugin crates, along with any Rust-backed runtime module
+   registrations, enter through that app-owned configuration path.
 
 ## Boundaries To Preserve
 

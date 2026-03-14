@@ -88,6 +88,33 @@ pub fn current_snapshot(handle: AtomRuntimeHandle) -> Option<RuntimeSnapshot> {
         .and_then(|runtimes| runtimes.get(&handle).map(Runtime::snapshot))
 }
 
+/// Call a registered runtime module method with typed Rust request/response
+/// values.
+///
+/// # Errors
+///
+/// Returns an error if the handle is unknown, the runtime is not `Running`, or
+/// the requested method is missing.
+pub fn call_module<Request, Response>(
+    handle: AtomRuntimeHandle,
+    module_id: &str,
+    method: &str,
+    request: Request,
+) -> AtomResult<Response>
+where
+    Request: Send + 'static,
+    Response: Send + 'static,
+{
+    let runtimes = lock_runtimes()?;
+    let runtime = runtimes.get(&handle).ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::BridgeInvalidArgument,
+            format!("unknown runtime handle: {handle}"),
+        )
+    })?;
+    runtime.call_module(module_id, method, request)
+}
+
 /// Gate function for CNG-generated per-method exports. Returns `Ok(())` if the
 /// runtime is in the `Running` state, or an error otherwise.
 ///
@@ -124,8 +151,8 @@ mod tests {
     use crate::state::RuntimeState;
 
     use super::{
-        current_snapshot, current_state, ensure_running, handle_lifecycle, init_runtime,
-        shutdown_runtime,
+        call_module, current_snapshot, current_state, ensure_running, handle_lifecycle,
+        init_runtime, shutdown_runtime,
     };
 
     #[test]
@@ -175,5 +202,12 @@ mod tests {
         );
 
         shutdown_runtime(handle);
+    }
+
+    #[test]
+    fn call_module_rejects_unknown_runtime_handle() {
+        let error = call_module::<(), ()>(999, "device_info", "get", ())
+            .expect_err("unknown handles should fail");
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::BridgeInvalidArgument);
     }
 }

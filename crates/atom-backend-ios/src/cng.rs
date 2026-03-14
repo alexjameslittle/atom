@@ -2,7 +2,7 @@ use atom_backends::{
     BackendContribution, BackendDefinition, BackendPlan, GenerationBackend,
     GenerationBackendRegistry, GenerationPlan,
 };
-use atom_cng::write_generated_file;
+use atom_cng::{render_rust_module_exports, write_generated_file};
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::{
     AppConfig, BuildConfig, ConfigPluginRequest, IosConfig, NormalizedManifest, metadata_target,
@@ -128,12 +128,18 @@ fn render_ios_build_file(
         .iter()
         .map(|m| metadata_target(&m.request.target_label, "_ios_srcs"))
         .collect::<AtomResult<_>>()?;
+    let rust_module_labels: Vec<&str> = modules
+        .iter()
+        .filter(|module| module.manifest.kind == atom_modules::ModuleKind::Rust)
+        .map(|module| module.request.target_label.as_str())
+        .collect();
     render_template(
         "ios/BUILD.bazel",
         context! {
             support_module => swift_support_module_name(app),
             entry_crate_label => &app.entry_crate_label,
             module_labels,
+            rust_module_labels,
             bundle_id => ios.bundle_id.as_deref().unwrap_or_default(),
             deployment_target => ios.deployment_target.as_deref().unwrap_or_default(),
             extra_resources,
@@ -154,11 +160,17 @@ fn render_ios_runtime_header() -> AtomResult<String> {
     Ok(static_template("ios/atom_runtime.h")?.to_owned())
 }
 
-fn render_ios_runtime_bridge(app: &AppConfig) -> AtomResult<String> {
+fn render_ios_runtime_bridge(
+    repo_root: &Utf8Path,
+    app: &AppConfig,
+    modules: &[ResolvedModule],
+) -> AtomResult<String> {
+    let module_exports = render_rust_module_exports(repo_root, modules)?;
     render_template(
         "ios/atom_runtime_app_bridge.rs",
         context! {
             entry_crate_name => &app.entry_crate_name,
+            module_exports,
         },
     )
 }
@@ -404,7 +416,7 @@ fn emit_ios_host_tree(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult
         &repo_root
             .join(&ios.plan.generated_root)
             .join("atom_runtime_app_bridge.rs"),
-        &render_ios_runtime_bridge(&plan.manifest.app)?,
+        &render_ios_runtime_bridge(repo_root, &plan.manifest.app, &plan.modules)?,
     )?;
     write_generated_file(
         &repo_root

@@ -344,6 +344,7 @@ The Bazel-generated metadata document MUST include these top-level keys:
 - `kind`
 - `target_label`
 - `id`
+- `rust_crate_name`
 - `atom_api_level`
 - `min_atom_version`
 - `ios_min_deployment_target`
@@ -366,6 +367,7 @@ The normalized module manifest MUST support these fields:
 
 - `kind: "atom_module" | "atom_native_module"`
 - `id: String`
+- `rust_crate_name: Option<String>`
 - `atom_api_level: u32`
 - `min_atom_version: Option<String>`
 - `ios_min_deployment_target: Option<String>`
@@ -394,6 +396,7 @@ Schema source of truth rules:
   the metadata.
 - `.fbs` files are the only source of truth for the wire contract.
 - Each module MUST declare one or more FlatBuffers schema files in `schema_files`.
+- Rust-authored modules MUST declare `rust_crate_name`, and native-only modules MUST NOT.
 - `atom_api_level` MUST be an integer matching the framework-supported API level for the current
   build.
 - `min_atom_version`, when present, MUST be a semver lower bound satisfied by the current framework
@@ -406,9 +409,9 @@ Schema source of truth rules:
 - Rule inputs for `schema_files`, `ios_srcs`, and `android_srcs` MAY be package-relative, but the
   emitted metadata MUST normalize them to repo-relative paths.
 - Existing FlatBuffers schemas MAY be reused unchanged by listing them in `schema_files`.
-- Rust request and response types used at the ABI boundary MUST be generated from `.fbs`.
-- Handwritten Rust structs and enums MAY exist as implementation details, but they MUST NOT define
-  or evolve the wire contract.
+- Rust-backed modules MUST expose typed Rust request and response types for the in-runtime API.
+- `.fbs` remains the source of truth for the native wire contract, and generated bridge code MUST
+  translate between FlatBuffer payloads and those Rust request/response types at the FFI boundary.
 - `MethodSpec.request_table` and `MethodSpec.response_table` MUST be fully qualified FlatBuffers
   table names declared by the module's schema files.
 - `depends_on` entries MUST be absolute Bazel labels.
@@ -544,6 +547,9 @@ function start_runtime(normalized_manifest, resolved_modules):
   begin work that requires module-call availability.
 - Runtime module methods registered through app-owned runtime config MUST only be callable while the
   runtime is in the `Running` state.
+- `PluginContext::call_module(...)` MUST accept and return typed Rust request/response values. Rust
+  plugins, modules, and the runtime MUST NOT serialize FlatBuffers across their shared Rust
+  boundary.
 - `atom-runtime` MUST expose only destination-agnostic plugin host types. Its public plugin API MUST
   NOT mention iOS, Android, simulator, emulator, device, route-stack, or renderer-specific types.
 - Apps MUST opt into runtime plugins in app code by constructing the runtime configuration passed to
@@ -644,6 +650,8 @@ Export naming rules:
 - generated export names MUST use the form `atom_<module_id>_<method_name>`
 - `<module_id>` and `<method_name>` MUST use the normalized manifest identifiers
 - export name collisions MUST fail generation with `CNG_CONFLICT`
+- generated exports MUST dispatch through the currently initialized runtime instance for the app and
+  MUST fail with `RUNTIME_TRANSITION_INVALID` if startup has not completed
 
 ### 8.4 Memory Ownership Rules
 
@@ -658,18 +666,25 @@ Export naming rules:
 
 ### 8.5 Wire Format
 
-Runtime module calls MUST use CNG-generated FlatBuffers, not JSON.
+Native-host module calls MUST use CNG-generated FlatBuffers, not JSON.
+
+Inside Rust, module calls MUST stay typed:
+
+- Rust plugins and runtime code call module methods with typed Rust request and response values.
+- Generated per-method exports deserialize the incoming FlatBuffer request into the module's Rust
+  request type, call the runtime through the typed Rust API, and serialize the Rust response back to
+  FlatBuffer bytes for the host.
 
 CNG MUST emit:
 
 - `generated/schema/atom.fbs`
 - `generated/schema/modules/<module_id>/...` for each declared module schema file
 
-The build layer MUST generate Rust bindings for the runtime side and Swift/Kotlin bindings for
-native hosts from the aggregate schema plus all module-owned schema files.
+The build layer MUST generate Swift/Kotlin bindings for native hosts from the aggregate schema plus
+all module-owned schema files.
 
-Those generated bindings MUST define the Rust request and response types used by generated
-per-method exports and by module implementation code.
+The build layer MUST also generate the Rust bridge encode/decode code needed by per-method exports
+to map FlatBuffer payloads at the FFI edge onto the module-owned Rust request and response types.
 
 The `input_flatbuffer` payload MUST be the method-specific request table, not a generic wrapper
 envelope.
@@ -703,8 +718,8 @@ table GetDeviceInfoResponse {
 }
 ```
 
-The generated Rust module API MAY remain fully typed and ergonomic. The FlatBuffer boundary exists
-to keep the host/runtime transport compact and deterministic.
+The generated Rust bridge MUST keep the FlatBuffer boundary at the native FFI edge only. The Rust
+module API inside the runtime MUST remain typed and ergonomic.
 
 Successful responses from generated per-method exports MUST be method-specific FlatBuffer response
 buffers.

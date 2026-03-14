@@ -11,7 +11,7 @@ pub use config::{
 };
 pub use plugin::{PluginContext, RuntimePlugin};
 pub use registry::{
-    current_snapshot, current_state, ensure_running, handle_lifecycle, init_runtime,
+    call_module, current_snapshot, current_state, ensure_running, handle_lifecycle, init_runtime,
     shutdown_runtime,
 };
 pub use state::RuntimeState;

@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -5,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
 
-use crate::config::ModuleMethodHandler;
+use crate::config::{ErasedModuleValue, ModuleMethodHandler};
 use crate::state::RuntimeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,7 +28,7 @@ pub enum RuntimeEvent {
     ModuleCallCompleted {
         module_id: String,
         method: String,
-        response_len: usize,
+        response_type: String,
     },
 }
 
@@ -59,7 +60,7 @@ pub enum RuntimeEffect {
     ModuleCall {
         module_id: String,
         method: String,
-        request_len: usize,
+        request_type: String,
     },
 }
 
@@ -80,8 +81,8 @@ pub struct ModuleCallRecord {
     pub sequence: u64,
     pub module_id: String,
     pub method: String,
-    pub request_len: usize,
-    pub response_len: usize,
+    pub request_type: String,
+    pub response_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,13 +177,17 @@ impl RuntimeHost {
         Ok(())
     }
 
-    pub(crate) fn call_module(
+    pub(crate) fn call_module<Request, Response>(
         &self,
         ctx: &crate::plugin::PluginContext,
         module_id: &str,
         method: &str,
-        request: &[u8],
-    ) -> AtomResult<Vec<u8>> {
+        request: Request,
+    ) -> AtomResult<Response>
+    where
+        Request: Send + 'static,
+        Response: Send + 'static,
+    {
         if self.snapshot().lifecycle != RuntimeState::Running {
             return Err(AtomError::new(
                 AtomErrorCode::RuntimeTransitionInvalid,
@@ -190,10 +195,11 @@ impl RuntimeHost {
             ));
         }
 
+        let request_type = type_name::<Request>().to_owned();
         self.emit_effect(RuntimeEffect::ModuleCall {
             module_id: module_id.to_owned(),
             method: method.to_owned(),
-            request_len: request.len(),
+            request_type: request_type.clone(),
         });
 
         let key = (module_id.to_owned(), method.to_owned());
@@ -207,7 +213,46 @@ impl RuntimeHost {
                 )
             })?;
 
-        let response = handler(ctx, request)?;
+        if handler.request_type_name() != type_name::<Request>() {
+            return Err(AtomError::new(
+                AtomErrorCode::BridgeInvalidArgument,
+                format!(
+                    "runtime module request type mismatch for {}.{}: expected {}, got {}",
+                    module_id,
+                    method,
+                    handler.request_type_name(),
+                    type_name::<Request>()
+                ),
+            ));
+        }
+        if handler.response_type_name() != type_name::<Response>() {
+            return Err(AtomError::new(
+                AtomErrorCode::BridgeInvalidArgument,
+                format!(
+                    "runtime module response type mismatch for {}.{}: expected {}, got {}",
+                    module_id,
+                    method,
+                    handler.response_type_name(),
+                    type_name::<Response>()
+                ),
+            ));
+        }
+
+        let response = handler.call(ctx, ErasedModuleValue::new(request))?;
+        let actual_response_type = response.type_name().to_owned();
+        let response = response.downcast::<Response>().map_err(|_| {
+            AtomError::new(
+                AtomErrorCode::InternalBug,
+                format!(
+                    "runtime module response type mismatch for {}.{}: expected {}, got {}",
+                    module_id,
+                    method,
+                    type_name::<Response>(),
+                    actual_response_type
+                ),
+            )
+        })?;
+
         let sequence = self.next_sequence();
         let mut snapshot = lock_snapshot(&self.snapshot);
         snapshot.events.push(RuntimeEventRecord {
@@ -215,15 +260,15 @@ impl RuntimeHost {
             event: RuntimeEvent::ModuleCallCompleted {
                 module_id: module_id.to_owned(),
                 method: method.to_owned(),
-                response_len: response.len(),
+                response_type: actual_response_type.clone(),
             },
         });
         snapshot.module_calls.push(ModuleCallRecord {
             sequence,
             module_id: module_id.to_owned(),
             method: method.to_owned(),
-            request_len: request.len(),
-            response_len: response.len(),
+            request_type,
+            response_type: actual_response_type,
         });
         drop(snapshot);
 

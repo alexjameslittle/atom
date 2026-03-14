@@ -50,12 +50,16 @@ impl PluginContext<'_> {
     ///
     /// Returns an error if the runtime is not yet `Running`, or if the
     /// requested module method has not been registered in the runtime config.
-    pub fn call_module(
+    pub fn call_module<Request, Response>(
         &self,
         module_id: &str,
         method: &str,
-        request: &[u8],
-    ) -> AtomResult<Vec<u8>> {
+        request: Request,
+    ) -> AtomResult<Response>
+    where
+        Request: Send + 'static,
+        Response: Send + 'static,
+    {
         self.host.call_module(self, module_id, method, request)
     }
 

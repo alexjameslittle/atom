@@ -1,9 +1,43 @@
 use std::ptr;
+use std::sync::{LazyLock, Mutex};
 
 use atom_ffi::{
-    AtomError, AtomErrorCode, AtomLifecycleEvent, AtomOwnedBuffer, AtomRuntimeHandle, AtomSlice,
-    write_error_buffer,
+    AtomError, AtomErrorCode, AtomLifecycleEvent, AtomOwnedBuffer, AtomResult,
+    AtomRuntimeHandle, AtomSlice, write_error_buffer,
 };
+
+static ACTIVE_RUNTIME_HANDLE: LazyLock<Mutex<Option<AtomRuntimeHandle>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+fn set_active_runtime_handle(handle: AtomRuntimeHandle) {
+    if let Ok(mut active_handle) = ACTIVE_RUNTIME_HANDLE.lock() {
+        *active_handle = Some(handle);
+    }
+}
+
+fn clear_active_runtime_handle(handle: AtomRuntimeHandle) {
+    if let Ok(mut active_handle) = ACTIVE_RUNTIME_HANDLE.lock()
+        && active_handle.as_ref() == Some(&handle)
+    {
+        *active_handle = None;
+    }
+}
+
+fn active_runtime_handle() -> AtomResult<AtomRuntimeHandle> {
+    let active_handle = ACTIVE_RUNTIME_HANDLE.lock().map_err(|_| {
+        AtomError::new(
+            AtomErrorCode::InternalBug,
+            "active runtime handle mutex poisoned",
+        )
+    })?;
+
+    active_handle.as_ref().copied().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::RuntimeTransitionInvalid,
+            "atom_app_init must succeed before calling runtime module exports",
+        )
+    })
+}
 
 /// # Safety
 ///
@@ -26,6 +60,7 @@ pub unsafe extern "C" fn atom_app_init(
 
     match atom_runtime::init_runtime({{ entry_crate_name }}::atom_runtime_config()) {
         Ok(handle) => {
+            set_active_runtime_handle(handle);
             unsafe {
                 ptr::write(out_handle, handle);
             }
@@ -79,6 +114,7 @@ pub unsafe extern "C" fn atom_app_handle_lifecycle(
 #[unsafe(no_mangle)]
 pub extern "C" fn atom_app_shutdown(handle: AtomRuntimeHandle) {
     atom_runtime::shutdown_runtime(handle);
+    clear_active_runtime_handle(handle);
 }
 
 /// # Safety
@@ -88,3 +124,5 @@ pub extern "C" fn atom_app_shutdown(handle: AtomRuntimeHandle) {
 pub unsafe extern "C" fn atom_buffer_free(buffer: AtomOwnedBuffer) {
     let _ = unsafe { buffer.into_vec() };
 }
+
+{{ module_exports }}

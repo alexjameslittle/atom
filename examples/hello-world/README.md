@@ -65,10 +65,13 @@ the example `plugins/lifecycle_logger` crate uses the shared `PluginContext` API
 
 - write runtime state
 - run an async warmup task once the runtime reaches `Running`
-- call the `device_info.get` module method through the runtime
+- call the `device_info.get` module method through the runtime with typed Rust
+  `GetDeviceInfoRequest` / `GetDeviceInfoResponse` values
 
 That keeps the proof of state changes, async work, and module calls inside the same public runtime
-API surface used by first-party and third-party plugins.
+API surface used by first-party and third-party plugins. The generated iOS/Android bridge keeps
+FlatBuffer serialization at the native FFI edge, so the Rust plugin and module code never touch raw
+FlatBuffer bytes directly.
 
 Run it from the repository root:
 

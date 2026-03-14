@@ -1,6 +1,6 @@
 use atom_ffi::{AtomLifecycleEvent, AtomResult};
 use atom_runtime::{PluginContext, RuntimeEvent, RuntimePlugin, RuntimeState};
-use device_info::{METHOD_GET, MODULE_ID, encode_get_device_info_request};
+use device_info::{GetDeviceInfoRequest, GetDeviceInfoResponse, METHOD_GET, MODULE_ID};
 
 pub struct LifecycleLoggerPlugin;
 
@@ -39,15 +39,16 @@ impl RuntimePlugin for LifecycleLoggerPlugin {
         })?;
         ctx.set_state("plugins.lifecycle_logger.async", "completed");
 
-        let response = ctx.call_module(MODULE_ID, METHOD_GET, &encode_get_device_info_request())?;
+        let response: GetDeviceInfoResponse =
+            ctx.call_module(MODULE_ID, METHOD_GET, GetDeviceInfoRequest {})?;
         ctx.set_state(
-            "plugins.lifecycle_logger.device_info_bytes",
-            response.len().to_string(),
+            "plugins.lifecycle_logger.device_info_model",
+            response.model.clone(),
         );
         ctx.dispatch_event(RuntimeEvent::plugin(
             self.id(),
             "running",
-            Some(format!("device_info_bytes={}", response.len())),
+            Some(format!("device_info_model={}", response.model)),
         ));
 
         let snapshot = ctx.snapshot();
