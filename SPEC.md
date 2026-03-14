@@ -1152,7 +1152,7 @@ Rules:
   bounds, label or text, role or class, visibility, and enabled state when the platform backend can
   supply them.
 - Evaluation runs MUST be able to emit a step transcript and an artifact manifest that references
-  logs, screenshots, videos, and UI snapshots captured during the run.
+  logs, screenshots, videos, UI snapshots, and debugger JSON artifacts captured during the run.
 - Evaluation plans MAY request a `build_profile` of `standard` or `debugger`; omitted plans MUST
   default to `standard` for backward compatibility.
 - `debugger` evaluation builds MUST reuse the same `atom evaluate run` workflow rather than require
@@ -1320,6 +1320,9 @@ consumes Atom via `bzlmod`.
   separate public evaluate or launch command
 - MUST allow the plan to request launch, waits, screenshots, video, log capture, UI inspection, and
   interactions
+- When `build_profile` is `debugger`, MUST allow the plan to request debugger attach, stop waits,
+  pause/resume, thread inspection, and backtrace inspection through additive step kinds on
+  destinations that support debugger control
 - A `launch` step MUST not report success until the selected app process is running and the
   evaluation backend can obtain an initial UI snapshot from that launched app
 - On iOS, launch readiness MUST verify the focused foreground app identity before a UI snapshot is
@@ -1354,6 +1357,9 @@ Evaluation contract rules:
 - An evaluation plan MUST support, at minimum, these step kinds: `launch`, `wait_for_ui`, `tap`,
   `long_press`, `swipe`, `drag`, `type_text`, `screenshot`, `inspect_ui`, `start_video`,
   `stop_video`, and `collect_logs`.
+- When `build_profile` is `debugger`, evaluation plans MUST additionally support `debug_attach`,
+  `debug_wait_for_stop`, `debug_pause`, `debug_resume`, `debug_threads`, and `debug_backtrace` on
+  destinations whose backend reports debugger control for evaluation.
 - Machine-readable evaluation plans MUST treat `build_profile` as additive metadata and MUST default
   absent values to `standard`.
 - Interaction and wait steps MUST accept either a semantic target descriptor or an explicit

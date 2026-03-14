@@ -1,10 +1,12 @@
 use std::fs;
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use atom_backends::{
-    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDefinition, DeployBackend,
+    AppSessionBuildProfile, AppSessionOptions, BackendAppSession, BackendDebugSession,
+    BackendDefinition, DebugSessionRequest, DebugSessionResponse, DeployBackend,
     DeployBackendRegistry, DestinationCapability, DestinationDescriptor, InteractionRequest,
     InteractionResult, LaunchMode, ScreenInfo, SessionLaunchBehavior, ToolRunner, UiBounds, UiNode,
     UiSnapshot,
@@ -26,6 +28,7 @@ const APP_LAUNCH_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const SCREENSHOT_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const SCREENSHOT_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const VIDEO_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const DEBUG_SESSION_HELPER: &str = include_str!("debug_session_helper.py");
 
 struct IosDeployBackend;
 
@@ -60,6 +63,19 @@ struct VideoCapture {
     child: Child,
 }
 
+struct PythonDebugHelper {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+    stderr: BufReader<ChildStderr>,
+}
+
+struct IosDebugSession {
+    launch: IosAppLaunch,
+    helper: PythonDebugHelper,
+    attached: bool,
+}
+
 struct IosAppSession<'a> {
     repo_root: &'a Utf8Path,
     manifest: &'a NormalizedManifest,
@@ -68,6 +84,7 @@ struct IosAppSession<'a> {
     session_options: AppSessionOptions,
     launch: Option<IosAppLaunch>,
     video_capture: Option<VideoCapture>,
+    debug_session: Option<IosDebugSession>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +186,7 @@ impl DeployBackend for IosDeployBackend {
             session_options: options,
             launch: None,
             video_capture: None,
+            debug_session: None,
         }))
     }
 }
@@ -182,6 +200,69 @@ impl IosAppSession<'_> {
             )
         })
     }
+
+    fn sync_debug_launch(&mut self) -> bool {
+        if self.launch.is_some() {
+            return true;
+        }
+        if let Some(debug_session) = self.debug_session.as_ref()
+            && debug_session.is_attached()
+        {
+            self.launch = Some(debug_session.launch.clone());
+            return true;
+        }
+        false
+    }
+
+    fn prepare_debug_session(&mut self) -> AtomResult<&mut IosDebugSession> {
+        if self.session_options.build_profile != AppSessionBuildProfile::Debugger {
+            return Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "iOS debugger control requires an evaluation plan with build_profile \"debugger\"",
+            ));
+        }
+        if self.launch.is_some() && self.debug_session.is_none() {
+            return Err(AtomError::new(
+                AtomErrorCode::AutomationUnavailable,
+                "iOS debugger attach must run before the normal launch step in debugger evaluation plans",
+            ));
+        }
+        if self.debug_session.is_none() {
+            let Some(destination) = list_ios_destinations(self.repo_root, self.runner)?
+                .into_iter()
+                .find(|destination| destination.id == self.destination_id)
+            else {
+                return Err(AtomError::with_path(
+                    AtomErrorCode::AutomationUnavailable,
+                    format!("unknown destination id: {}", self.destination_id),
+                    &self.destination_id,
+                ));
+            };
+            if destination.kind != IosDestinationKind::Simulator {
+                return Err(AtomError::new(
+                    AtomErrorCode::AutomationUnavailable,
+                    "iOS debugger evaluation currently supports simulator destinations only",
+                ));
+            }
+
+            let (launch, dsym_bundle) = prepare_ios_debugger_launch(
+                self.repo_root,
+                self.manifest,
+                &destination,
+                self.runner,
+            )?;
+            let helper = spawn_debug_helper(self.repo_root, &launch, dsym_bundle.as_deref())?;
+            self.debug_session = Some(IosDebugSession {
+                launch,
+                helper,
+                attached: false,
+            });
+        }
+        Ok(self
+            .debug_session
+            .as_mut()
+            .expect("debug session should exist after preparation"))
+    }
 }
 
 impl BackendAppSession for IosAppSession<'_> {
@@ -190,7 +271,7 @@ impl BackendAppSession for IosAppSession<'_> {
     }
 
     fn ensure_launched(&mut self) -> AtomResult<()> {
-        if self.launch.is_some() {
+        if self.sync_debug_launch() {
             return Ok(());
         }
         if self.session_options.launch_behavior == SessionLaunchBehavior::AttachOrLaunch
@@ -285,6 +366,10 @@ impl BackendAppSession for IosAppSession<'_> {
             let _ = self.stop_video()?;
         }
         Ok(())
+    }
+
+    fn debug_session(&mut self) -> AtomResult<Option<&mut dyn BackendDebugSession>> {
+        Ok(Some(self.prepare_debug_session()?))
     }
 }
 
@@ -911,27 +996,14 @@ fn launch_ios_app(
         IosDestinationKind::Simulator => prepare_ios_simulator(repo_root, runner, destination)?,
         IosDestinationKind::Device => destination.id.clone(),
     };
-    run_idb(
+    install_ios_app(
         runner,
         repo_root,
         &destination_id,
-        &[
-            "install".to_owned(),
-            artifacts.installable_app.as_str().to_owned(),
-        ],
+        &artifacts.installable_app,
+        build_profile == AppSessionBuildProfile::Debugger,
     )?;
-    let _ = run_idb(
-        runner,
-        repo_root,
-        &destination_id,
-        &["terminate".to_owned(), bundle_id.clone()],
-    );
-    run_idb(
-        runner,
-        repo_root,
-        &destination_id,
-        &["launch".to_owned(), "-f".to_owned(), bundle_id.clone()],
-    )?;
+    launch_installed_ios_app(runner, repo_root, &destination_id, &bundle_id)?;
 
     Ok(IosAppLaunch {
         destination_id,
@@ -939,6 +1011,91 @@ fn launch_ios_app(
         app_name: manifest.app.name.clone(),
         app_slug: manifest.app.slug.clone(),
     })
+}
+
+fn prepare_ios_debugger_launch(
+    repo_root: &Utf8Path,
+    manifest: &NormalizedManifest,
+    destination: &IosDestination,
+    runner: &mut dyn ToolRunner,
+) -> AtomResult<(IosAppLaunch, Option<Utf8PathBuf>)> {
+    let artifacts = build_ios_artifacts(
+        repo_root,
+        manifest,
+        destination,
+        AppSessionBuildProfile::Debugger,
+        runner,
+    )?;
+    let bundle_id = manifest
+        .ios
+        .bundle_id
+        .clone()
+        .ok_or_else(|| AtomError::new(AtomErrorCode::InternalBug, "missing iOS bundle id"))?;
+
+    let destination_id = prepare_ios_simulator(repo_root, runner, destination)?;
+    install_ios_app(
+        runner,
+        repo_root,
+        &destination_id,
+        &artifacts.installable_app,
+        true,
+    )?;
+    let _ = run_idb(
+        runner,
+        repo_root,
+        &destination_id,
+        &["terminate".to_owned(), bundle_id.clone()],
+    );
+
+    Ok((
+        IosAppLaunch {
+            destination_id,
+            bundle_id,
+            app_name: manifest.app.name.clone(),
+            app_slug: manifest.app.slug.clone(),
+        },
+        artifacts.dsym_bundle,
+    ))
+}
+
+fn install_ios_app(
+    runner: &mut dyn ToolRunner,
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    installable_app: &Utf8Path,
+    make_debuggable: bool,
+) -> AtomResult<()> {
+    let subcommand = ios_install_subcommand(installable_app, make_debuggable);
+    run_idb(runner, repo_root, destination_id, &subcommand)
+}
+
+fn ios_install_subcommand(installable_app: &Utf8Path, make_debuggable: bool) -> Vec<String> {
+    let mut subcommand = vec!["install".to_owned()];
+    if make_debuggable {
+        subcommand.push("--make-debuggable".to_owned());
+    }
+    subcommand.push(installable_app.as_str().to_owned());
+    subcommand
+}
+
+fn launch_installed_ios_app(
+    runner: &mut dyn ToolRunner,
+    repo_root: &Utf8Path,
+    destination_id: &str,
+    bundle_id: &str,
+) -> AtomResult<()> {
+    let _ = run_idb(
+        runner,
+        repo_root,
+        destination_id,
+        &["terminate".to_owned(), bundle_id.to_owned()],
+    );
+    run_idb(
+        runner,
+        repo_root,
+        destination_id,
+        &["launch".to_owned(), "-f".to_owned(), bundle_id.to_owned()],
+    )
 }
 
 fn attach_ios_app(
@@ -985,6 +1142,231 @@ fn wait_for_launch_ready(
         AtomErrorCode::AutomationUnavailable,
         "app did not become responsive after launch",
     ))
+}
+
+impl IosDebugSession {
+    fn is_attached(&self) -> bool {
+        self.attached
+    }
+}
+
+impl BackendDebugSession for IosDebugSession {
+    fn execute(&mut self, request: DebugSessionRequest) -> AtomResult<DebugSessionResponse> {
+        let response = self.helper.request(&request)?;
+        if matches!(request, DebugSessionRequest::Attach) {
+            self.attached = true;
+        }
+        Ok(response)
+    }
+}
+
+impl Drop for IosDebugSession {
+    fn drop(&mut self) {
+        let _ = self.helper.shutdown();
+    }
+}
+
+impl PythonDebugHelper {
+    fn request(&mut self, request: &DebugSessionRequest) -> AtomResult<DebugSessionResponse> {
+        let payload = serde_json::to_string(request).map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::InternalBug,
+                format!("failed to encode iOS debugger request: {error}"),
+            )
+        })?;
+
+        let stdin = self.stdin.as_mut().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "iOS debugger helper stdin closed unexpectedly",
+            )
+        })?;
+        stdin.write_all(payload.as_bytes()).map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to send iOS debugger request: {error}"),
+            )
+        })?;
+        stdin.write_all(b"\n").map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to send iOS debugger request delimiter: {error}"),
+            )
+        })?;
+        stdin.flush().map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to flush iOS debugger request: {error}"),
+            )
+        })?;
+
+        let mut line = String::new();
+        let read = self.stdout.read_line(&mut line).map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to read iOS debugger response: {error}"),
+            )
+        })?;
+        if read == 0 {
+            return Err(self.helper_exit_error());
+        }
+
+        let value: Value = serde_json::from_str(line.trim_end()).map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to parse iOS debugger response: {error}"),
+            )
+        })?;
+        if !value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            let message = value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown iOS debugger failure");
+            return Err(AtomError::new(
+                helper_error_code(value.get("code").and_then(Value::as_str)),
+                format!("iOS debugger request failed: {message}"),
+            ));
+        }
+
+        let response = value.get("response").cloned().ok_or_else(|| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                "iOS debugger helper did not return a response payload",
+            )
+        })?;
+        serde_json::from_value(response).map_err(|error| {
+            AtomError::new(
+                AtomErrorCode::ExternalToolFailed,
+                format!("failed to decode iOS debugger response: {error}"),
+            )
+        })
+    }
+
+    fn shutdown(&mut self) -> AtomResult<()> {
+        let _ = self.stdin.take();
+        if wait_for_child_exit(&mut self.child, Duration::from_secs(1))? {
+            return Ok(());
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        Ok(())
+    }
+
+    fn helper_exit_error(&mut self) -> AtomError {
+        let mut stderr = String::new();
+        let _ = self.stderr.read_to_string(&mut stderr);
+        let status = self.child.try_wait().ok().flatten();
+        let status_fragment = status
+            .map(|status| format!(" (status: {status})"))
+            .unwrap_or_default();
+        let stderr = stderr.trim();
+        let suffix = if stderr.is_empty() {
+            String::new()
+        } else {
+            format!(": {stderr}")
+        };
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("iOS debugger helper exited unexpectedly{status_fragment}{suffix}"),
+        )
+    }
+}
+
+fn helper_error_code(value: Option<&str>) -> AtomErrorCode {
+    match value {
+        Some("automation_unavailable") => AtomErrorCode::AutomationUnavailable,
+        _ => AtomErrorCode::ExternalToolFailed,
+    }
+}
+
+fn spawn_debug_helper(
+    repo_root: &Utf8Path,
+    launch: &IosAppLaunch,
+    dsym_bundle: Option<&Utf8Path>,
+) -> AtomResult<PythonDebugHelper> {
+    let mut command = Command::new("python3");
+    command
+        .arg("-u")
+        .arg("-c")
+        .arg(DEBUG_SESSION_HELPER)
+        .arg("--repo-root")
+        .arg(repo_root.as_str())
+        .arg("--destination-id")
+        .arg(&launch.destination_id)
+        .arg("--bundle-id")
+        .arg(&launch.bundle_id)
+        .current_dir(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PYTHONPATH", lldb_pythonpath()?);
+    if let Some(dsym_bundle) = dsym_bundle {
+        command.arg("--dsym-bundle").arg(dsym_bundle.as_str());
+    }
+
+    let mut child = command.spawn().map_err(|error| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("failed to start iOS debugger helper: {error}"),
+        )
+    })?;
+    let stdin = child.stdin.take().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            "failed to open iOS debugger helper stdin",
+        )
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            "failed to open iOS debugger helper stdout",
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            "failed to open iOS debugger helper stderr",
+        )
+    })?;
+    Ok(PythonDebugHelper {
+        child,
+        stdin: Some(stdin),
+        stdout: BufReader::new(stdout),
+        stderr: BufReader::new(stderr),
+    })
+}
+
+fn lldb_pythonpath() -> AtomResult<String> {
+    let output = Command::new("lldb").arg("-P").output().map_err(|error| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("failed to locate LLDB python support: {error}"),
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("lldb -P failed: {}", stderr.trim()),
+        ));
+    }
+    let path = String::from_utf8(output.stdout).map_err(|error| {
+        AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            format!("lldb -P returned non-UTF-8 output: {error}"),
+        )
+    })?;
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(AtomError::new(
+            AtomErrorCode::ExternalToolFailed,
+            "lldb -P returned an empty python path",
+        ));
+    }
+    Ok(match std::env::var("PYTHONPATH") {
+        Ok(existing) if !existing.is_empty() => format!("{path}:{existing}"),
+        _ => path.to_owned(),
+    })
 }
 
 #[expect(
@@ -1641,10 +2023,11 @@ fn timestamp_suffix() -> String {
 #[cfg(test)]
 mod tests {
     use atom_backends::{AppSessionBuildProfile, DestinationCapability};
+    use camino::Utf8Path;
 
     use super::{
         BACKEND_ID, IosDestination, IosDestinationKind, destination_descriptor_from_ios,
-        ios_bazel_args, parse_idb_targets,
+        ios_bazel_args, ios_install_subcommand, parse_idb_targets,
     };
 
     #[test]
@@ -1738,6 +2121,20 @@ mod tests {
                 "--compilation_mode=dbg".to_owned(),
                 "--apple_generate_dsym".to_owned(),
                 "--output_groups=+dsyms".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn debugger_installs_are_marked_debuggable() {
+        let args = ios_install_subcommand(Utf8Path::new("/tmp/Fixture.app"), true);
+
+        assert_eq!(
+            args,
+            vec![
+                "install".to_owned(),
+                "--make-debuggable".to_owned(),
+                "/tmp/Fixture.app".to_owned(),
             ]
         );
     }

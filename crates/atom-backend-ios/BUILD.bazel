@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 rust_library(
     name = "atom-backend-ios",
     srcs = glob(["src/**/*.rs"]),
-    compile_data = glob(["src/templates/**"]),
+    compile_data = glob(["src/templates/**"]) + ["src/debug_session_helper.py"],
     crate_name = "atom_backend_ios",
     crate_root = "src/lib.rs",
     edition = "2024",
