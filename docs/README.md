@@ -5,6 +5,8 @@ already know the area you are changing.
 
 ## Start Here
 
+- [getting-started.md](getting-started.md): install Atom, create a project, and run it on a
+  simulator.
 - [../AGENTS.md](../AGENTS.md): short repo map and working rules for agents.
 - [architecture.md](architecture.md): crate boundaries, dependency direction, and metadata flow.
 - [harness.md](harness.md): bootstrap, verification, hooks, and CI guardrails.
