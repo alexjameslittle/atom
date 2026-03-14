@@ -6,6 +6,8 @@ rust_library(
     crate_name = "atom_cli",
     crate_root = "src/lib.rs",
     edition = "2024",
+    rustc_env_files = ["build_info.env"],
+    stamp = 1,
     visibility = ["//visibility:public"],
     deps = [
         "//crates/atom-backend-android",

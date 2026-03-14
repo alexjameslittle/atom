@@ -1,8 +1,8 @@
 mod doctor;
-
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use atom_backend_android::{
     register_deploy_backend as register_android_deploy_backend,
@@ -32,8 +32,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use doctor::DoctorArgs;
 use serde::Serialize;
 
+const ATOM_FRAMEWORK_VERSION: &str = env!("ATOM_FRAMEWORK_VERSION");
+const ATOM_RUST_VERSION: &str = env!("ATOM_RUST_VERSION");
+const ATOM_BUILD_BAZEL_VERSION: &str = env!("ATOM_BUILD_BAZEL_VERSION");
+
 #[derive(Debug, Parser)]
-#[command(name = "atom")]
+#[command(name = "atom", disable_version_flag = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -297,10 +301,74 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let cli = Cli::try_parse_from(args)
+    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    if is_version_request(&args) {
+        return Ok(version_output(cwd));
+    }
+
+    let cli = Cli::try_parse_from(&args)
         .map_err(|error| AtomError::new(AtomErrorCode::CliUsageError, error.to_string()))?;
     let mut runner = ProcessRunner;
     execute(&cli, cwd, &mut runner)
+}
+
+fn is_version_request(args: &[OsString]) -> bool {
+    args.len() == 2
+        && matches!(
+            args[1].as_os_str(),
+            flag if flag == OsStr::new("--version") || flag == OsStr::new("-V")
+        )
+}
+
+fn version_output(cwd: &Utf8Path) -> CommandOutput {
+    let bazel_version = resolve_bazel_version_with(cwd, detect_runtime_bazel_version);
+    text_output(format!(
+        "atom {ATOM_FRAMEWORK_VERSION}\nrust {ATOM_RUST_VERSION}\nbazel {bazel_version}\n"
+    ))
+}
+
+fn resolve_bazel_version_with(
+    cwd: &Utf8Path,
+    detect_bazel_version: impl FnOnce() -> Option<String>,
+) -> String {
+    let command_root = resolve_command_root(cwd, workspace_directory().as_deref());
+    read_bazel_version_file(&command_root)
+        .or_else(detect_bazel_version)
+        .unwrap_or_else(|| ATOM_BUILD_BAZEL_VERSION.to_owned())
+}
+
+fn read_bazel_version_file(start: &Utf8Path) -> Option<String> {
+    start.ancestors().find_map(|candidate| {
+        let bazelversion_path = candidate.join(".bazelversion");
+        let contents = fs::read_to_string(&bazelversion_path).ok()?;
+        contents
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn detect_runtime_bazel_version() -> Option<String> {
+    let output = Command::new("bazelisk").arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    extract_version_token(&stdout)
+        .or_else(|| extract_version_token(&stderr))
+        .map(str::to_owned)
+}
+
+fn extract_version_token(output: &str) -> Option<&str> {
+    output.split_whitespace().find(|token| {
+        token
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+    })
 }
 
 fn execute(cli: &Cli, cwd: &Utf8Path, runner: &mut impl ToolRunner) -> AtomResult<CommandOutput> {
@@ -781,7 +849,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Cli, find_workspace_root, preflight_run_backend, resolve_cli_path,
+        ATOM_BUILD_BAZEL_VERSION, ATOM_FRAMEWORK_VERSION, ATOM_RUST_VERSION, Cli,
+        find_workspace_root, preflight_run_backend, resolve_bazel_version_with, resolve_cli_path,
         resolve_workspace_root_with_workspace_dir, run_from_args,
     };
 
@@ -873,6 +942,56 @@ mod tests {
         let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
         let error = run_from_args(["atom", "unknown"], &cwd).expect_err("invalid command");
         assert_eq!(error.code, atom_ffi::AtomErrorCode::CliUsageError);
+    }
+
+    #[test]
+    fn version_flag_succeeds_without_a_workspace() {
+        let directory = tempdir().expect("tempdir");
+        let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        fs::write(cwd.join(".bazelversion"), "8.4.2\n").expect("bazelversion");
+
+        let output = run_from_args(["atom", "--version"], &cwd).expect("version output");
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(
+            stdout,
+            format!("atom {ATOM_FRAMEWORK_VERSION}\nrust {ATOM_RUST_VERSION}\nbazel 8.4.2\n")
+        );
+    }
+
+    #[test]
+    fn version_flag_prefers_the_nearest_bazelversion_file() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let inner = root.join("nested/project");
+        fs::create_dir_all(&inner).expect("inner directory");
+        fs::write(root.join(".bazelversion"), "7.1.0\n").expect("outer bazelversion");
+        fs::write(inner.join(".bazelversion"), "8.4.2\n").expect("inner bazelversion");
+
+        let detected = resolve_bazel_version_with(&inner, || Some(String::from("9.0.0")));
+
+        assert_eq!(detected, "8.4.2");
+    }
+
+    #[test]
+    fn version_flag_falls_back_to_runtime_detection_when_bazelversion_is_missing() {
+        let directory = tempdir().expect("tempdir");
+        let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+
+        let detected = resolve_bazel_version_with(&cwd, || Some(String::from("8.9.0")));
+
+        assert_eq!(detected, "8.9.0");
+    }
+
+    #[test]
+    fn version_flag_falls_back_to_build_bazel_version_when_runtime_detection_is_unavailable() {
+        let directory = tempdir().expect("tempdir");
+        let cwd = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+
+        let detected = resolve_bazel_version_with(&cwd, || None);
+
+        assert_eq!(detected, ATOM_BUILD_BAZEL_VERSION);
     }
 
     #[test]

@@ -1176,6 +1176,7 @@ Rules:
 
 Required commands:
 
+- `atom --version`
 - `atom doctor`
 - `atom prebuild`
 - `atom prebuild --dry-run`
@@ -1210,8 +1211,20 @@ Required commands:
 
 ### 10.3 Output Rules
 
-All CLI commands MUST fail with `CLI_USAGE_ERROR` when invoked outside a Bazel workspace that
-consumes Atom via `bzlmod`.
+All CLI commands except `atom --version` MUST fail with `CLI_USAGE_ERROR` when invoked outside a
+Bazel workspace that consumes Atom via `bzlmod`.
+
+`atom --version`:
+
+- MUST exit `0`
+- MUST write exactly three newline-terminated UTF-8 text lines to stdout in this order:
+  `atom <version>`, `rust <version>`, `bazel <version>`
+- MUST report the Atom framework version from build-time metadata
+- MUST report the Rust compiler version from build-time metadata
+- MUST prefer the nearest `.bazelversion` in the current working directory ancestry when one is
+  present
+- MUST fall back to runtime Bazel version detection when `.bazelversion` is absent
+- MAY fall back to the build-time default Bazel version when runtime detection is unavailable
 
 `atom doctor`:
 
