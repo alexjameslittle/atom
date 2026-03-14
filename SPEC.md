@@ -1211,8 +1211,8 @@ Required commands:
 
 ### 10.3 Output Rules
 
-All CLI commands except `atom new` and `atom --version` MUST fail with `CLI_USAGE_ERROR` when
-invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
+All CLI commands except `atom new`, `atom doctor`, and `atom --version` MUST fail with
+`CLI_USAGE_ERROR` when invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
 
 `atom new [name]`:
 
@@ -1244,7 +1244,8 @@ invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
 - MUST scaffold `apps/<name>/src/lib.rs` with `atom_runtime_config()` returning
   `RuntimeConfig::builder().build()`
 - MUST print a success message that includes a follow-up command of the form
-  `cd <name> && atom run --platform <platform>` using the first selected platform
+  `cd <name> && atom run --platform <platform> --target //apps/<name>:<name>` using the first
+  selected platform
 - MUST embed scaffold template contents in the CLI binary rather than reading template files from
   disk at runtime
 
@@ -1254,6 +1255,8 @@ invoked outside a Bazel workspace that consumes Atom via `bzlmod`.
   configured AVD availability, and Java independently
 - MUST continue running remaining probes after any one check fails
 - MUST compare Bazel against `.bazelversion` and Rust against the pinned `mise.toml` tool version
+  when a workspace is present
+- MUST fall back to the CLI's bundled Bazel and Rust toolchain versions when no workspace is present
 - MUST emit actionable remediation text for every failing check
 - MUST treat missing `mise` as a recommendation, not a critical failure
 - MUST treat iOS/Android readiness gaps as platform warnings, not critical failures

@@ -151,7 +151,7 @@ fn collect_report(
 }
 
 fn bazel_check(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> DoctorCheck {
-    let expected = match read_expected_tool_version(repo_root, system, ".bazelversion", "bazel") {
+    let expected = match expected_bazel_version(repo_root, system) {
         Ok(version) => version,
         Err(message) => {
             return DoctorCheck::issue(
@@ -209,7 +209,7 @@ fn bazel_check(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> DoctorCheck {
 }
 
 fn rust_check(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> DoctorCheck {
-    let expected = match read_expected_mise_version(repo_root, system, "rust") {
+    let expected = match expected_rust_version(repo_root, system) {
         Ok(version) => version,
         Err(message) => {
             return DoctorCheck::issue(
@@ -265,6 +265,28 @@ fn rust_check(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> DoctorCheck {
     }
 }
 
+fn expected_bazel_version(
+    repo_root: &Utf8Path,
+    system: &dyn DoctorSystem,
+) -> Result<String, String> {
+    if has_workspace_marker(repo_root, system) {
+        read_expected_tool_version(repo_root, system, ".bazelversion", "bazel")
+    } else {
+        Ok(crate::ATOM_BUILD_BAZEL_VERSION.to_owned())
+    }
+}
+
+fn expected_rust_version(
+    repo_root: &Utf8Path,
+    system: &dyn DoctorSystem,
+) -> Result<String, String> {
+    if has_workspace_marker(repo_root, system) {
+        read_expected_mise_version(repo_root, system, "rust")
+    } else {
+        Ok(crate::ATOM_MISE_RUST_TOOLCHAIN_VERSION.to_owned())
+    }
+}
+
 fn mise_check(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> DoctorCheck {
     match system.run_command(repo_root, "mise", &["--version"]) {
         CommandInvocation::Missing => DoctorCheck::issue(
@@ -298,6 +320,10 @@ fn mise_check(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> DoctorCheck {
             first_version_token(&output.stdout).unwrap_or_else(|| "installed".to_owned()),
         ),
     }
+}
+
+fn has_workspace_marker(repo_root: &Utf8Path, system: &dyn DoctorSystem) -> bool {
+    system.read_file(&repo_root.join("MODULE.bazel")).is_ok()
 }
 
 fn read_expected_tool_version(
@@ -543,9 +569,14 @@ mod tests {
         Utf8Path::new("/repo")
     }
 
+    fn outside_workspace_root() -> &'static Utf8Path {
+        Utf8Path::new("/outside")
+    }
+
     #[test]
     fn clean_ios_only_host_is_non_critical() {
         let system = FakeDoctorSystem::default()
+            .with_file("/repo/MODULE.bazel", "module(name = \"atom\")\n")
             .with_file("/repo/.bazelversion", "8.4.2\n")
             .with_file("/repo/mise.toml", "[tools]\nrust = \"1.92.0\"\n")
             .with_output(
@@ -604,7 +635,7 @@ mod tests {
                 .expect("doctor should render");
         let stdout = String::from_utf8(output.stdout).expect("utf8");
 
-        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.exit_code, 0, "{stdout}");
         assert!(stdout.contains("1 platform ready: ios"));
         assert!(stdout.contains("2 issues found"));
         assert!(stdout.contains("Set ANDROID_HOME or run: scripts/setup-android-sdk.sh"));
@@ -614,6 +645,7 @@ mod tests {
     #[test]
     fn missing_bazel_is_critical() {
         let system = FakeDoctorSystem::default()
+            .with_file("/repo/MODULE.bazel", "module(name = \"atom\")\n")
             .with_file("/repo/.bazelversion", "8.4.2\n")
             .with_file("/repo/mise.toml", "[tools]\nrust = \"1.92.0\"\n")
             .with_missing("bazelisk", &["version"])
@@ -653,6 +685,7 @@ mod tests {
     #[test]
     fn json_output_is_machine_readable() {
         let system = FakeDoctorSystem::default()
+            .with_file("/repo/MODULE.bazel", "module(name = \"atom\")\n")
             .with_file("/repo/.bazelversion", "8.4.2\n")
             .with_file("/repo/mise.toml", "[tools]\nrust = \"1.92.0\"\n")
             .with_output(
@@ -718,6 +751,7 @@ mod tests {
     #[test]
     fn nonzero_rust_probe_reports_issue() {
         let system = FakeDoctorSystem::default()
+            .with_file("/repo/MODULE.bazel", "module(name = \"atom\")\n")
             .with_file("/repo/.bazelversion", "8.4.2\n")
             .with_file("/repo/mise.toml", "[tools]\nrust = \"1.92.0\"\n")
             .with_output(
@@ -739,5 +773,41 @@ mod tests {
         assert!(stdout.contains("Rust"));
         assert!(stdout.contains("permission denied"));
         assert!(stdout.contains("1 issue found (1 critical)"));
+    }
+
+    #[test]
+    fn outside_workspace_falls_back_to_bundled_tool_versions() {
+        let bazel_version = crate::ATOM_BUILD_BAZEL_VERSION;
+        let rust_version = crate::ATOM_MISE_RUST_TOOLCHAIN_VERSION;
+        let system = FakeDoctorSystem::default()
+            .with_output(
+                "bazelisk",
+                &["version"],
+                &format!("Bazelisk version: v1.28.1\nBuild label: {bazel_version}\n"),
+                "",
+            )
+            .with_output(
+                "rustc",
+                &["--version"],
+                &format!("rustc {rust_version} (hash 2025-12-08)\n"),
+                "",
+            )
+            .with_output("mise", &["--version"], "2025.12.13 macos-arm64\n", "");
+        let registry = registry_with_backends(Vec::new());
+
+        let output = execute_with_system(
+            outside_workspace_root(),
+            &DoctorArgs { json: false },
+            &system,
+            &registry,
+        )
+        .expect("doctor should render");
+        let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+        assert!(stdout.contains("Bazel"));
+        assert!(stdout.contains("Rust"));
+        assert!(!stdout.contains("expected version unavailable"));
+        assert!(!stdout.contains("Restore .bazelversion"));
+        assert!(!stdout.contains("Restore mise.toml"));
     }
 }
