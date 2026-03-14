@@ -47,7 +47,7 @@ fn run_accepts_a_device_flag_after_platform_flag() {
 }
 
 #[test]
-fn new_creates_the_minimal_project_scaffold() {
+fn new_creates_a_minimal_bootable_project_scaffold() {
     let directory = tempdir().expect("tempdir");
     let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
 
@@ -69,22 +69,47 @@ fn new_creates_the_minimal_project_scaffold() {
     assert!(project_root.join("BUILD.bazel").exists());
     assert!(project_root.join("README.md").exists());
     assert!(project_root.join(".gitignore").exists());
+    assert!(project_root.join("apps/my_app/BUILD.bazel").exists());
+    assert!(project_root.join("apps/my_app/src/lib.rs").exists());
     assert!(!project_root.join("MODULE.bazel.lock").exists());
 
     let module_bazel = fs::read_to_string(project_root.join("MODULE.bazel")).expect("module");
     assert!(module_bazel.contains("module_name = \"atom\""));
     assert!(module_bazel.contains("remote = \"https://github.com/alexjameslittle/atom.git\""));
     assert!(module_bazel.contains("branch = \"main\""));
-    assert!(module_bazel.contains("crate.from_specs(name = \"app_crates\")"));
+    assert!(module_bazel.contains("name = \"app_crates\""));
     assert!(module_bazel.contains("package = \"camino\""));
+    assert!(module_bazel.contains("name = \"rules_apple\""));
+    assert!(module_bazel.contains("name = \"rules_swift\""));
+    assert!(module_bazel.contains("android_sdk_repository_extension"));
 
     let build_bazel = fs::read_to_string(project_root.join("BUILD.bazel")).expect("build file");
     assert!(build_bazel.contains("actual = \"@atom//:atom\""));
+
+    let app_build = fs::read_to_string(project_root.join("apps/my_app/BUILD.bazel")).expect("app");
+    assert!(app_build.contains("load(\"@atom//bzl/atom:defs.bzl\", \"atom_app\")"));
+    assert!(app_build.contains("crate_name = \"my_app\""));
+    assert!(app_build.contains("app_name = \"My App\""));
+    assert!(app_build.contains("ios_bundle_id = \"com.example.my_app\""));
+    assert!(app_build.contains("ios_deployment_target = \"18.0\""));
+    assert!(app_build.contains("android_application_id = \"com.example.my_app\""));
+    assert!(app_build.contains("android_min_sdk = 24"));
+    assert!(app_build.contains("android_target_sdk = 35"));
+    assert!(app_build.contains("\"@atom//crates/atom-runtime\""));
+
+    let app_lib = fs::read_to_string(project_root.join("apps/my_app/src/lib.rs")).expect("lib");
+    assert!(app_lib.contains("use atom_runtime::RuntimeConfig;"));
+    assert!(app_lib.contains("pub fn atom_runtime_config() -> RuntimeConfig"));
+    assert!(app_lib.contains("RuntimeConfig::builder().build()"));
 
     let mise_toml = fs::read_to_string(project_root.join("mise.toml")).expect("mise");
     assert!(mise_toml.contains("bazel = \"8.4.2\""));
     assert!(mise_toml.contains("rust = \"1.92.0\""));
     assert!(mise_toml.contains("java = \"temurin-21\""));
+
+    let readme = fs::read_to_string(project_root.join("README.md")).expect("readme");
+    assert!(readme.contains("//apps/my_app:my_app"));
+    assert!(readme.contains("minimal bootable app crate"));
 }
 
 #[test]

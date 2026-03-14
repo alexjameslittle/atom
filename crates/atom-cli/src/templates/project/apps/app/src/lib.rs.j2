@@ -1,0 +1,6 @@
+use atom_runtime::RuntimeConfig;
+
+#[must_use]
+pub fn atom_runtime_config() -> RuntimeConfig {
+    RuntimeConfig::builder().build()
+}

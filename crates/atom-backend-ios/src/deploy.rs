@@ -217,6 +217,7 @@ impl BackendAutomationSession for IosAutomationSession<'_> {
         wait_for_launch_ready(
             self.repo_root,
             &launch.destination_id,
+            &launch.bundle_id,
             &launch.app_name,
             &launch.app_slug,
             self.runner,
@@ -501,6 +502,7 @@ fn install_and_launch_with_idb(
                 wait_for_launch_ready(
                     repo_root,
                     destination_id,
+                    bundle_id,
                     &manifest.app.name,
                     &manifest.app.slug,
                     runner,
@@ -896,9 +898,12 @@ fn attach_ios_app(
         return Ok(None);
     };
     let snapshot = inspect_ui_with_idb(repo_root, destination_id, runner)?;
-    if !snapshot_matches_ios_app(&snapshot, &manifest.app.name, &manifest.app.slug)
-        || !snapshot_is_launch_ready(&snapshot)
-    {
+    let is_named_snapshot =
+        snapshot_matches_ios_app(&snapshot, &manifest.app.name, &manifest.app.slug)
+            && snapshot_is_launch_ready(&snapshot);
+    let is_running_blank_shell = snapshot_is_blank_app_shell(&snapshot)
+        && ios_app_is_running(repo_root, runner, destination_id, &bundle_id)?;
+    if !is_named_snapshot && !is_running_blank_shell {
         return Ok(None);
     }
     Ok(Some(IosAppLaunch {
@@ -912,17 +917,21 @@ fn attach_ios_app(
 fn wait_for_launch_ready(
     repo_root: &Utf8Path,
     destination_id: &str,
+    bundle_id: &str,
     app_name: &str,
     app_slug: &str,
     runner: &mut dyn ToolRunner,
 ) -> AtomResult<()> {
     let deadline = Instant::now() + APP_LAUNCH_READY_TIMEOUT;
     while Instant::now() < deadline {
-        if let Ok(snapshot) = inspect_ui_with_idb(repo_root, destination_id, runner)
-            && snapshot_matches_ios_app(&snapshot, app_name, app_slug)
-            && snapshot_is_launch_ready(&snapshot)
-        {
-            return Ok(());
+        if let Ok(snapshot) = inspect_ui_with_idb(repo_root, destination_id, runner) {
+            let is_named_snapshot = snapshot_matches_ios_app(&snapshot, app_name, app_slug)
+                && snapshot_is_launch_ready(&snapshot);
+            let is_running_blank_shell = snapshot_is_blank_app_shell(&snapshot)
+                && ios_app_is_running(repo_root, runner, destination_id, bundle_id)?;
+            if is_named_snapshot || is_running_blank_shell {
+                return Ok(());
+            }
         }
         thread::sleep(APP_LAUNCH_READY_POLL_INTERVAL);
     }
@@ -1241,6 +1250,15 @@ fn snapshot_is_launch_ready(snapshot: &UiSnapshot) -> bool {
             && (node.bounds.width > 1.0 || node.bounds.height > 1.0)
             && (!node.label.is_empty() || !node.text.is_empty())
     })
+}
+
+fn snapshot_is_blank_app_shell(snapshot: &UiSnapshot) -> bool {
+    !snapshot.nodes.is_empty()
+        && snapshot.nodes.iter().all(|node| {
+            node.role.eq_ignore_ascii_case("application")
+                && node.label.trim().is_empty()
+                && node.text.trim().is_empty()
+        })
 }
 
 fn capture_screenshot_for_launch(
@@ -1585,12 +1603,36 @@ fn timestamp_suffix() -> String {
 
 #[cfg(test)]
 mod tests {
-    use atom_backends::DestinationCapability;
+    use atom_backends::{DestinationCapability, ScreenInfo, UiBounds, UiNode, UiSnapshot};
 
     use super::{
         BACKEND_ID, IosDestination, IosDestinationKind, destination_descriptor_from_ios,
-        parse_idb_targets,
+        parse_idb_targets, snapshot_is_blank_app_shell,
     };
+
+    fn application_only_snapshot(label: &str, text: &str) -> UiSnapshot {
+        UiSnapshot {
+            screen: ScreenInfo {
+                width: 1.0,
+                height: 1.0,
+            },
+            nodes: vec![UiNode {
+                id: "app".to_owned(),
+                role: "application".to_owned(),
+                label: label.to_owned(),
+                text: text.to_owned(),
+                visible: true,
+                enabled: true,
+                bounds: UiBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                },
+            }],
+            screenshot_path: None,
+        }
+    }
 
     #[test]
     fn parses_idb_targets_into_backend_destinations() {
@@ -1655,5 +1697,19 @@ mod tests {
         assert_eq!(descriptor.platform, "ios");
         assert_eq!(descriptor.kind, "device");
         assert_eq!(descriptor.capabilities, vec![DestinationCapability::Launch]);
+    }
+
+    #[test]
+    fn blank_app_shell_snapshot_is_detected() {
+        assert!(snapshot_is_blank_app_shell(&application_only_snapshot(
+            "", ""
+        )));
+    }
+
+    #[test]
+    fn named_application_snapshot_is_not_treated_as_blank_shell() {
+        assert!(!snapshot_is_blank_app_shell(&application_only_snapshot(
+            "My App", "My App",
+        )));
     }
 }

@@ -74,6 +74,41 @@ if [ -z "${rules_rust_version:-}" ]; then
   rules_rust_version="unknown"
 fi
 
+apple_support_version=$(read_module_dep_version apple_support)
+if [ -z "${apple_support_version:-}" ]; then
+  apple_support_version="unknown"
+fi
+
+rules_java_version=$(read_module_dep_version rules_java)
+if [ -z "${rules_java_version:-}" ]; then
+  rules_java_version="unknown"
+fi
+
+rules_kotlin_version=$(read_module_dep_version rules_kotlin)
+if [ -z "${rules_kotlin_version:-}" ]; then
+  rules_kotlin_version="unknown"
+fi
+
+rules_android_version=$(read_module_dep_version rules_android)
+if [ -z "${rules_android_version:-}" ]; then
+  rules_android_version="unknown"
+fi
+
+rules_android_ndk_version=$(read_module_dep_version rules_android_ndk)
+if [ -z "${rules_android_ndk_version:-}" ]; then
+  rules_android_ndk_version="unknown"
+fi
+
+rules_apple_version=$(read_module_dep_version rules_apple)
+if [ -z "${rules_apple_version:-}" ]; then
+  rules_apple_version="unknown"
+fi
+
+rules_swift_version=$(read_module_dep_version rules_swift)
+if [ -z "${rules_swift_version:-}" ]; then
+  rules_swift_version="unknown"
+fi
+
 java_runtime_version=$(read_bazelrc_setting "build --java_runtime_version=")
 if [ -z "${java_runtime_version:-}" ]; then
   java_runtime_version="unknown"
@@ -86,4 +121,11 @@ printf 'STABLE_ATOM_MISE_BAZELISK_VERSION %s\n' "$bazelisk_version"
 printf 'STABLE_ATOM_MISE_RUST_TOOLCHAIN_VERSION %s\n' "$rust_toolchain_version"
 printf 'STABLE_ATOM_MISE_JAVA_VERSION %s\n' "$java_version"
 printf 'STABLE_ATOM_RULES_RUST_VERSION %s\n' "$rules_rust_version"
+printf 'STABLE_ATOM_APPLE_SUPPORT_VERSION %s\n' "$apple_support_version"
+printf 'STABLE_ATOM_RULES_JAVA_VERSION %s\n' "$rules_java_version"
+printf 'STABLE_ATOM_RULES_KOTLIN_VERSION %s\n' "$rules_kotlin_version"
+printf 'STABLE_ATOM_RULES_ANDROID_VERSION %s\n' "$rules_android_version"
+printf 'STABLE_ATOM_RULES_ANDROID_NDK_VERSION %s\n' "$rules_android_ndk_version"
+printf 'STABLE_ATOM_RULES_APPLE_VERSION %s\n' "$rules_apple_version"
+printf 'STABLE_ATOM_RULES_SWIFT_VERSION %s\n' "$rules_swift_version"
 printf 'STABLE_ATOM_JAVA_RUNTIME_VERSION %s\n' "$java_runtime_version"

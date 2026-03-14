@@ -485,13 +485,18 @@ mod tests {
                 .expect("bridge");
         let scene = fs::read_to_string(root.join("generated/ios/fixture/SceneDelegate.swift"))
             .expect("scene");
+        let bindings = fs::read_to_string(root.join("generated/ios/fixture/AtomBindings.swift"))
+            .expect("bindings");
 
         assert!(build_file.contains("ios_application("));
         assert!(build_file.contains("bundle_id = \"build.atom.fixture\""));
         assert!(build_file.contains("minimum_os_version = \"17.0\""));
+        assert!(build_file.contains("\"@atom//crates/atom-runtime\""));
+        assert!(build_file.contains("\"@atom//crates/atom-ffi\""));
         assert!(plist.contains("<key>CFBundleIdentifier</key>"));
         assert!(plist.contains("<string>build.atom.fixture</string>"));
         assert!(bridge.contains("fixture::atom_runtime_config()"));
+        assert!(bindings.contains("public static let modules: [String] = ["));
         assert!(scene.contains("AtomHostRootViewProvider"));
     }
 

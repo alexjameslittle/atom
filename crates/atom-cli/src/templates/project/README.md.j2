@@ -5,8 +5,9 @@ This repository was scaffolded with `atom new`.
 ## Commands
 
 ```sh
-bazelisk build //...
-bazelisk run //:atom -- --help
+bazelisk run //:atom -- prebuild --target //apps/{{ project_name }}:{{ project_name }} --dry-run
+bazelisk run //:atom -- run --platform ios --target //apps/{{ project_name }}:{{ project_name }}
+bazelisk run //:atom -- run --platform android --target //apps/{{ project_name }}:{{ project_name }}
 ```
 
-This scaffold creates the Bazel workspace wrapper only. Add an app crate and `atom_app(...)` target next.
+This scaffold includes a minimal bootable app crate in `apps/{{ project_name }}`.
