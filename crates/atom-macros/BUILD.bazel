@@ -1,0 +1,33 @@
+load("@rules_rust//rust:defs.bzl", "rust_proc_macro", "rust_test")
+
+rust_proc_macro(
+    name = "atom-macros",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "atom_macros",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:proc-macro2",
+        "@crates//:quote",
+        "@crates//:syn",
+    ],
+)
+
+rust_test(
+    name = "atom-macros-test",
+    crate = ":atom-macros",
+)
+
+rust_test(
+    name = "atom-macros-integration-test",
+    srcs = ["tests/integration.rs"],
+    crate_root = "tests/integration.rs",
+    edition = "2024",
+    proc_macro_deps = [":atom-macros"],
+    deps = [
+        "//crates/atom-ffi",
+        "//crates/atom-runtime",
+        "@crates//:flatbuffers",
+    ],
+)

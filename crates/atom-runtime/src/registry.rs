@@ -89,13 +89,42 @@ pub fn current_snapshot(handle: AtomRuntimeHandle) -> Option<RuntimeSnapshot> {
 }
 
 /// Gate function for CNG-generated per-method exports. Returns `Ok(())` if the
-/// runtime is in the `Running` state, or an error otherwise.
+/// process has at least one runtime in the `Running` state, or an error
+/// otherwise.
 ///
 /// # Errors
 ///
-/// Returns an error if the handle is unknown, the registry is poisoned, or the
-/// runtime is not in the `Running` state.
-pub fn ensure_running(handle: AtomRuntimeHandle) -> AtomResult<()> {
+/// Returns an error if no runtime has been initialized, the registry is
+/// poisoned, or every initialized runtime is outside the `Running` state.
+pub fn ensure_running() -> AtomResult<()> {
+    let runtimes = lock_runtimes()?;
+    if runtimes.is_empty() {
+        return Err(AtomError::new(
+            AtomErrorCode::BridgeInitFailed,
+            "atom export requires an initialized runtime",
+        ));
+    }
+
+    if runtimes
+        .values()
+        .any(|runtime| runtime.state() == RuntimeState::Running)
+    {
+        return Ok(());
+    }
+
+    let states = runtimes
+        .values()
+        .map(|runtime| format!("{:?}", runtime.state()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AtomError::new(
+        AtomErrorCode::RuntimeTransitionInvalid,
+        format!("no initialized runtime is Running (active states: {states})"),
+    ))
+}
+
+#[cfg(test)]
+fn ensure_running_handle(handle: AtomRuntimeHandle) -> AtomResult<()> {
     let runtimes = lock_runtimes()?;
     let runtime = runtimes.get(&handle).ok_or_else(|| {
         AtomError::new(
@@ -118,33 +147,49 @@ pub fn ensure_running(handle: AtomRuntimeHandle) -> AtomResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use atom_ffi::AtomLifecycleEvent;
+    use std::sync::{LazyLock, Mutex};
+
+    use atom_ffi::{AtomErrorCode, AtomLifecycleEvent};
 
     use crate::config::RuntimeConfig;
     use crate::state::RuntimeState;
 
     use super::{
-        current_snapshot, current_state, ensure_running, handle_lifecycle, init_runtime,
-        shutdown_runtime,
+        current_snapshot, current_state, ensure_running, ensure_running_handle, handle_lifecycle,
+        init_runtime, shutdown_runtime,
     };
+
+    static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn ensure_running_ok_when_running() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let handle = init_runtime(RuntimeConfig::default()).expect("init");
-        ensure_running(handle).expect("should be running");
+        ensure_running().expect("should be running");
+        ensure_running_handle(handle).expect("should be running");
         shutdown_runtime(handle);
     }
 
     #[test]
     fn ensure_running_err_when_backgrounded() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let handle = init_runtime(RuntimeConfig::default()).expect("init");
         handle_lifecycle(handle, AtomLifecycleEvent::Background).unwrap();
-        ensure_running(handle).expect_err("should not be running");
+        ensure_running().expect_err("should not be running");
+        ensure_running_handle(handle).expect_err("should not be running");
         shutdown_runtime(handle);
     }
 
     #[test]
+    fn ensure_running_err_when_no_runtime_exists() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let error = ensure_running().expect_err("no runtime should fail");
+        assert_eq!(error.code, AtomErrorCode::BridgeInitFailed);
+    }
+
+    #[test]
     fn full_conformance_lifecycle() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let handle = init_runtime(RuntimeConfig::default()).expect("init");
         assert_eq!(current_state(handle), Some(RuntimeState::Running));
 
@@ -162,6 +207,7 @@ mod tests {
 
     #[test]
     fn snapshot_tracks_lifecycle() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let handle = init_runtime(RuntimeConfig::default()).expect("init");
         assert_eq!(
             current_snapshot(handle).map(|snapshot| snapshot.lifecycle),

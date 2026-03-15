@@ -93,7 +93,8 @@ The intended dependency flow is:
 
 Crate responsibilities:
 
-- `atom-ffi`: stable error types, FlatBuffer error payloads, low-level ABI types.
+- `atom-ffi`: stable error types, FlatBuffer error payloads, low-level ABI types, and generated
+  export buffer/codec helpers.
 - `atom-manifest`: app metadata loading and validation from Bazel-generated JSON.
 - `atom-modules`: module metadata loading, validation, and dependency ordering.
 - `atom-backends`: shared backend contracts, registries, and backend-neutral deploy/evaluate/CNG
@@ -105,6 +106,9 @@ Crate responsibilities:
 - `atom-backend-ios` / `atom-backend-android`: first-party backend implementation crates linked into
   the official CLI binary.
 - `atom-cli`: thin CLI command dispatch and workspace resolution.
+- `atom-macros`: proc-macro ergonomics for Rust-authored module boundaries; it must stay limited to
+  code generation against stable `atom-ffi` / `atom-runtime` APIs and must not absorb CNG or CLI
+  policy.
 - `atom-runtime`: runtime primitives and host-facing execution logic.
 
 Generic crate invariants:
