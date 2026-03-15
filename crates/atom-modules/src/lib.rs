@@ -41,6 +41,8 @@ pub struct ModuleManifest {
     pub min_atom_version: Option<String>,
     pub ios_min_deployment_target: Option<String>,
     pub android_min_sdk: Option<u32>,
+    pub crate_root: Option<Utf8PathBuf>,
+    pub generated_root: Utf8PathBuf,
     pub depends_on: Vec<String>,
     pub schema_files: Vec<Utf8PathBuf>,
     pub methods: Vec<MethodSpec>,
@@ -133,13 +135,12 @@ mod tests {
     fn loads_rust_module_metadata() {
         let directory = tempdir().expect("tempdir");
         let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
-        fs::create_dir_all(root.join("modules/device_info/schema")).expect("schema dir");
         fs::create_dir_all(root.join("modules/device_info/src")).expect("src dir");
         fs::write(
-            root.join("modules/device_info/schema/device_info.fbs"),
-            "namespace atom.device_info;\n",
+            root.join("modules/device_info/src/lib.rs"),
+            "pub fn module() {}\n",
         )
-        .expect("schema");
+        .expect("lib");
         fs::write(
             root.join("modules/device_info/src/device_info.swift"),
             "final class DeviceInfoModule {}\n",
@@ -157,8 +158,10 @@ mod tests {
   "min_atom_version": "0.1.0",
   "ios_min_deployment_target": "17.0",
   "android_min_sdk": 28,
+  "crate_root": "modules/device_info/src/lib.rs",
+  "generated_root": "generated",
   "depends_on": [],
-  "schema_files": ["modules/device_info/schema/device_info.fbs"],
+  "schema_files": [],
   "methods": [
     {
       "name": "get",
@@ -189,11 +192,11 @@ mod tests {
         assert_eq!(manifest.atom_api_level, 1);
         assert_eq!(manifest.min_atom_version.as_deref(), Some("0.1.0"));
         assert_eq!(
-            manifest.schema_files,
-            vec![Utf8PathBuf::from(
-                "modules/device_info/schema/device_info.fbs"
-            )]
+            manifest.crate_root,
+            Some(Utf8PathBuf::from("modules/device_info/src/lib.rs"))
         );
+        assert_eq!(manifest.generated_root, Utf8PathBuf::from("generated"));
+        assert_eq!(manifest.schema_files, Vec::<Utf8PathBuf>::new());
         assert_eq!(
             manifest.ios_srcs,
             vec![Utf8PathBuf::from(
@@ -217,6 +220,7 @@ mod tests {
   "min_atom_version": null,
   "ios_min_deployment_target": null,
   "android_min_sdk": null,
+  "generated_root": "generated",
   "depends_on": [],
   "schema_files": [],
   "methods": [],
@@ -256,8 +260,10 @@ mod tests {
                     min_atom_version: None,
                     ios_min_deployment_target: None,
                     android_min_sdk: None,
+                    crate_root: Some(Utf8PathBuf::from("modules/a/src/lib.rs")),
+                    generated_root: Utf8PathBuf::from("generated"),
                     depends_on: Vec::new(),
-                    schema_files: vec![Utf8PathBuf::from("modules/a/schema/a.fbs")],
+                    schema_files: Vec::new(),
                     methods: vec![MethodSpec {
                         name: "a".to_owned(),
                         request_table: "atom.a.Request".to_owned(),
@@ -286,6 +292,8 @@ mod tests {
                     min_atom_version: None,
                     ios_min_deployment_target: None,
                     android_min_sdk: None,
+                    crate_root: None,
+                    generated_root: Utf8PathBuf::from("generated"),
                     depends_on: vec!["//modules/a:a".to_owned()],
                     schema_files: vec![Utf8PathBuf::from("modules/b/schema/b.fbs")],
                     methods: vec![MethodSpec {

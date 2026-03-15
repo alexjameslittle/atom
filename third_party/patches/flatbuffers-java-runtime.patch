@@ -1,0 +1,12 @@
+diff --git a/java/BUILD.bazel b/java/BUILD.bazel
+new file mode 100644
+index 0000000..c63a8b9
+--- /dev/null
++++ b/java/BUILD.bazel
+@@ -0,0 +1,6 @@
++package(default_visibility = ["//visibility:public"])
++
++java_library(
++    name = "flatbuffers_java_runtime",
++    srcs = glob(["src/main/java/com/google/flatbuffers/*.java"]),
++)

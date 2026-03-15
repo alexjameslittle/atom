@@ -21,12 +21,6 @@ pub struct SchemaPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaFilePlan {
-    pub source: Utf8PathBuf,
-    pub output: Utf8PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContributedFile {
     pub source: FileSource,
     pub output: Utf8PathBuf,
@@ -63,7 +57,6 @@ pub struct GenerationPlan {
     pub permissions: Vec<String>,
     pub entitlements: JsonMap,
     pub schema: SchemaPlan,
-    pub schema_files: Vec<SchemaFilePlan>,
     pub contributed_files: Vec<ContributedFile>,
     pub backends: BTreeMap<String, PlannedBackend>,
     pub generated_files: Vec<Utf8PathBuf>,
