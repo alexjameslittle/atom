@@ -424,6 +424,14 @@ Rules:
 - they MUST NOT define canonical module metadata for CNG or module resolution
 - they MUST NOT replace Bazel metadata loading as the module discovery mechanism
 - they MAY validate local implementation details against the Bazel-owned metadata contract
+- the first-party helper crate MAY provide `atom-macros::{atom_record, atom_export}` as ergonomic
+  attributes for Rust-authored module code
+- `#[atom_record]` MUST leave the Rust item semantics intact and serve only as a source-level marker
+  or helper expansion point
+- `#[atom_export]` MAY generate FFI wrappers, but those wrappers MUST target stable `atom-ffi` and
+  `atom-runtime` APIs rather than embedding backend-specific behavior
+- type-specific request/response codec hooks used by helper-generated exports MUST live in the
+  ABI-owned `atom-ffi` surface, not in backend crates
 
 ### 6.4 Module Resolution Rules
 
