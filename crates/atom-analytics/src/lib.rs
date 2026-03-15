@@ -1,11 +1,13 @@
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use atom_ffi::{AtomLifecycleEvent, AtomResult};
-use atom_runtime::{PluginContext, RuntimePlugin, RuntimeState};
+use atom_runtime::{self, RuntimeEvent};
 
 const DEFAULT_NAMESPACE: &str = "app";
 const PLUGIN_ID: &str = "atom.analytics";
+const NAMESPACE_KEY: &str = "atom.analytics.namespace";
+const PENDING_COUNT_KEY: &str = "atom.analytics.pending_count";
+const FLUSH_COUNT_KEY: &str = "atom.analytics.flush_count";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AnalyticsState {
@@ -14,7 +16,7 @@ struct AnalyticsState {
     flushed_batches: Vec<Vec<String>>,
 }
 
-/// Shared app-facing handle for analytics state owned by `AnalyticsPlugin`.
+/// Shared app-facing handle for analytics state owned by `AnalyticsRuntime`.
 #[derive(Clone, Debug)]
 pub struct AnalyticsHandle {
     state: Arc<Mutex<AnalyticsState>>,
@@ -22,7 +24,9 @@ pub struct AnalyticsHandle {
 
 impl AnalyticsHandle {
     pub fn track(&self, event: impl Into<String>) {
-        lock_state(&self.state).pending_events.push(event.into());
+        let event = event.into();
+        lock_state(&self.state).pending_events.push(event.clone());
+        sync_runtime(&self.state, "track", Some(event));
     }
 
     #[must_use]
@@ -41,12 +45,12 @@ impl AnalyticsHandle {
     }
 }
 
-/// First-party runtime plugin that buffers analytics events and flushes on lifecycle boundaries.
-pub struct AnalyticsPlugin {
+/// Shared analytics state that can mirror updates into the runtime store.
+pub struct AnalyticsRuntime {
     state: Arc<Mutex<AnalyticsState>>,
 }
 
-impl AnalyticsPlugin {
+impl AnalyticsRuntime {
     #[must_use]
     pub fn new(namespace: impl Into<String>) -> Self {
         let namespace = namespace.into();
@@ -71,7 +75,7 @@ impl AnalyticsPlugin {
         }
     }
 
-    fn flush_pending(&self, reason: &'static str) {
+    pub fn flush(&self, reason: &'static str) {
         let mut state = lock_state(&self.state);
         if state.pending_events.is_empty() {
             return;
@@ -87,60 +91,10 @@ impl AnalyticsPlugin {
             reason,
             batch_size,
             flush_count = state.flushed_batches.len(),
-            "analytics plugin flushed events"
+            "analytics flushed events"
         );
-    }
-}
-
-impl RuntimePlugin for AnalyticsPlugin {
-    fn id(&self) -> &str {
-        PLUGIN_ID
-    }
-
-    fn on_init(&mut self, _ctx: &PluginContext) -> AtomResult<()> {
-        let state = lock_state(&self.state);
-        tracing::info!(
-            plugin_id = PLUGIN_ID,
-            namespace = %state.namespace,
-            pending_events = state.pending_events.len(),
-            "analytics plugin initialized"
-        );
-        Ok(())
-    }
-
-    fn on_lifecycle(&mut self, event: AtomLifecycleEvent, state: RuntimeState) {
-        if matches!(
-            state,
-            RuntimeState::Backgrounded | RuntimeState::Terminating
-        ) {
-            self.flush_pending(match state {
-                RuntimeState::Backgrounded => "backgrounded",
-                RuntimeState::Terminating => "terminating",
-                _ => unreachable!(),
-            });
-        }
-
-        let state_ref = lock_state(&self.state);
-        tracing::info!(
-            plugin_id = PLUGIN_ID,
-            namespace = %state_ref.namespace,
-            ?event,
-            ?state,
-            pending_events = state_ref.pending_events.len(),
-            flush_count = state_ref.flushed_batches.len(),
-            "analytics plugin observed lifecycle change"
-        );
-    }
-
-    fn on_shutdown(&mut self) {
-        self.flush_pending("shutdown");
-        let state = lock_state(&self.state);
-        tracing::info!(
-            plugin_id = PLUGIN_ID,
-            namespace = %state.namespace,
-            flush_count = state.flushed_batches.len(),
-            "analytics plugin shutdown"
-        );
+        drop(state);
+        sync_runtime(&self.state, "flush", Some(reason.to_owned()));
     }
 }
 
@@ -151,28 +105,38 @@ fn lock_state(state: &Arc<Mutex<AnalyticsState>>) -> MutexGuard<'_, AnalyticsSta
     }
 }
 
+fn sync_runtime(state: &Arc<Mutex<AnalyticsState>>, action: &'static str, detail: Option<String>) {
+    let state = lock_state(state);
+    let namespace = state.namespace.clone();
+    let pending_count = state.pending_events.len().to_string();
+    let flush_count = state.flushed_batches.len().to_string();
+    drop(state);
+
+    atom_runtime::set_state(NAMESPACE_KEY, &namespace);
+    atom_runtime::set_state(PENDING_COUNT_KEY, &pending_count);
+    atom_runtime::set_state(FLUSH_COUNT_KEY, &flush_count);
+    atom_runtime::dispatch_event(RuntimeEvent::plugin(PLUGIN_ID, action, detail));
+}
+
 #[cfg(test)]
 mod tests {
-    use atom_ffi::AtomLifecycleEvent;
-    use atom_runtime::{RuntimePlugin, RuntimeState};
-
-    use super::{AnalyticsPlugin, DEFAULT_NAMESPACE};
+    use super::{AnalyticsRuntime, DEFAULT_NAMESPACE};
 
     #[test]
     fn empty_namespace_falls_back_to_app() {
-        let plugin = AnalyticsPlugin::new("");
-        assert_eq!(plugin.handle().namespace(), DEFAULT_NAMESPACE);
-        assert_eq!(plugin.handle().pending_events(), Vec::<String>::new());
+        let runtime = AnalyticsRuntime::new("");
+        assert_eq!(runtime.handle().namespace(), DEFAULT_NAMESPACE);
+        assert_eq!(runtime.handle().pending_events(), Vec::<String>::new());
     }
 
     #[test]
     fn background_flushes_pending_events() {
-        let mut plugin = AnalyticsPlugin::new("hello_atom");
-        let handle = plugin.handle();
+        let runtime = AnalyticsRuntime::new("hello_atom");
+        let handle = runtime.handle();
         handle.track("runtime_configured");
         handle.track("device_info_requested");
 
-        plugin.on_lifecycle(AtomLifecycleEvent::Background, RuntimeState::Backgrounded);
+        runtime.flush("backgrounded");
 
         assert!(handle.pending_events().is_empty());
         assert_eq!(
@@ -186,11 +150,11 @@ mod tests {
 
     #[test]
     fn shutdown_flushes_remaining_events() {
-        let mut plugin = AnalyticsPlugin::new("hello_atom");
-        let handle = plugin.handle();
+        let runtime = AnalyticsRuntime::new("hello_atom");
+        let handle = runtime.handle();
         handle.track("runtime_started");
 
-        plugin.on_shutdown();
+        runtime.flush("shutdown");
 
         assert!(handle.pending_events().is_empty());
         assert_eq!(

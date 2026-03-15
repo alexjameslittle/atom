@@ -1,10 +1,11 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use atom_ffi::{AtomLifecycleEvent, AtomResult};
-use atom_runtime::{PluginContext, RuntimePlugin, RuntimeState};
+use atom_runtime::{self, RuntimeEvent};
 
 const DEFAULT_ROUTE: &str = "root";
 const PLUGIN_ID: &str = "atom.navigation";
+const CURRENT_ROUTE_KEY: &str = "atom.navigation.current_route";
+const ROUTE_COUNT_KEY: &str = "atom.navigation.route_count";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NavigationState {
@@ -17,7 +18,7 @@ impl NavigationState {
     }
 }
 
-/// Shared app-facing handle for navigation state owned by `NavigationPlugin`.
+/// Shared app-facing handle for navigation state owned by `NavigationRuntime`.
 #[derive(Clone, Debug)]
 pub struct NavigationHandle {
     state: Arc<Mutex<NavigationState>>,
@@ -26,6 +27,7 @@ pub struct NavigationHandle {
 impl NavigationHandle {
     pub fn push(&self, route: impl Into<String>) {
         lock_state(&self.state).routes.push(route.into());
+        self.sync_runtime("push");
     }
 
     pub fn replace(&self, route: impl Into<String>) {
@@ -35,6 +37,8 @@ impl NavigationHandle {
         } else {
             state.routes.push(route.into());
         }
+        drop(state);
+        self.sync_runtime("replace");
     }
 
     #[must_use]
@@ -43,7 +47,10 @@ impl NavigationHandle {
         if state.routes.len() <= 1 {
             return None;
         }
-        state.routes.pop()
+        let popped = state.routes.pop();
+        drop(state);
+        self.sync_runtime("pop");
+        popped
     }
 
     #[must_use]
@@ -55,14 +62,27 @@ impl NavigationHandle {
     pub fn routes(&self) -> Vec<String> {
         lock_state(&self.state).routes.clone()
     }
+
+    fn sync_runtime(&self, action: &'static str) {
+        let state = lock_state(&self.state);
+        let current_route = state
+            .current_route()
+            .unwrap_or_else(|| DEFAULT_ROUTE.to_owned());
+        let route_count = state.routes.len().to_string();
+        drop(state);
+
+        atom_runtime::set_state(CURRENT_ROUTE_KEY, &current_route);
+        atom_runtime::set_state(ROUTE_COUNT_KEY, &route_count);
+        atom_runtime::dispatch_event(RuntimeEvent::plugin(PLUGIN_ID, action, Some(current_route)));
+    }
 }
 
-/// First-party runtime plugin that owns a route stack outside the kernel.
-pub struct NavigationPlugin {
+/// Shared navigation state that can mirror updates into the runtime store.
+pub struct NavigationRuntime {
     state: Arc<Mutex<NavigationState>>,
 }
 
-impl NavigationPlugin {
+impl NavigationRuntime {
     #[must_use]
     pub fn new(initial_route: impl Into<String>) -> Self {
         let initial_route = initial_route.into();
@@ -86,48 +106,6 @@ impl NavigationPlugin {
     }
 }
 
-impl RuntimePlugin for NavigationPlugin {
-    fn id(&self) -> &str {
-        PLUGIN_ID
-    }
-
-    fn on_init(&mut self, _ctx: &PluginContext) -> AtomResult<()> {
-        let state = lock_state(&self.state);
-        let current_route = state
-            .current_route()
-            .unwrap_or_else(|| DEFAULT_ROUTE.to_owned());
-        tracing::info!(
-            plugin_id = PLUGIN_ID,
-            route_count = state.routes.len(),
-            current_route = %current_route,
-            "navigation plugin initialized"
-        );
-        Ok(())
-    }
-
-    fn on_lifecycle(&mut self, event: AtomLifecycleEvent, state: RuntimeState) {
-        let current_route = lock_state(&self.state)
-            .current_route()
-            .unwrap_or_else(|| DEFAULT_ROUTE.to_owned());
-        tracing::info!(
-            plugin_id = PLUGIN_ID,
-            ?event,
-            ?state,
-            current_route = %current_route,
-            "navigation plugin observed lifecycle change"
-        );
-    }
-
-    fn on_shutdown(&mut self) {
-        let route_count = lock_state(&self.state).routes.len();
-        tracing::info!(
-            plugin_id = PLUGIN_ID,
-            route_count,
-            "navigation plugin shutdown"
-        );
-    }
-}
-
 fn lock_state(state: &Arc<Mutex<NavigationState>>) -> MutexGuard<'_, NavigationState> {
     match state.lock() {
         Ok(guard) => guard,
@@ -137,18 +115,18 @@ fn lock_state(state: &Arc<Mutex<NavigationState>>) -> MutexGuard<'_, NavigationS
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_ROUTE, NavigationPlugin};
+    use super::{DEFAULT_ROUTE, NavigationRuntime};
 
     #[test]
     fn empty_initial_route_falls_back_to_root() {
-        let plugin = NavigationPlugin::new("");
-        assert_eq!(plugin.handle().routes(), vec![DEFAULT_ROUTE.to_owned()]);
+        let runtime = NavigationRuntime::new("");
+        assert_eq!(runtime.handle().routes(), vec![DEFAULT_ROUTE.to_owned()]);
     }
 
     #[test]
     fn handle_updates_stack() {
-        let plugin = NavigationPlugin::new("home");
-        let handle = plugin.handle();
+        let runtime = NavigationRuntime::new("home");
+        let handle = runtime.handle();
 
         handle.push("details");
         handle.push("settings");
@@ -166,8 +144,8 @@ mod tests {
 
     #[test]
     fn pop_preserves_last_route() {
-        let plugin = NavigationPlugin::new("home");
-        let handle = plugin.handle();
+        let runtime = NavigationRuntime::new("home");
+        let handle = runtime.handle();
 
         handle.push("details");
         assert_eq!(handle.pop().as_deref(), Some("details"));
@@ -177,8 +155,8 @@ mod tests {
 
     #[test]
     fn replace_updates_current_route() {
-        let plugin = NavigationPlugin::new("home");
-        let handle = plugin.handle();
+        let runtime = NavigationRuntime::new("home");
+        let handle = runtime.handle();
 
         handle.replace("profile");
 

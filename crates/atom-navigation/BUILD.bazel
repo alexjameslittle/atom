@@ -8,7 +8,6 @@ rust_library(
     edition = "2024",
     visibility = ["//visibility:public"],
     deps = [
-        "//crates/atom-ffi",
         "//crates/atom-runtime",
         "@crates//:tracing",
     ],

@@ -1,13 +1,14 @@
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use atom_ffi::{
     AtomError, AtomErrorCode, AtomExportInput, AtomExportOutput, AtomOwnedBuffer, AtomResult,
     AtomSlice,
 };
-use atom_runtime::{RuntimeConfig, init_runtime, shutdown_runtime};
+use atom_runtime::RuntimeConfig;
 use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Table, root_unchecked};
 
 static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static RUNTIME_INIT: OnceLock<()> = OnceLock::new();
 
 #[atom_macros::atom_record]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,22 +191,16 @@ fn take_buffer(buffer: AtomOwnedBuffer) -> Vec<u8> {
     unsafe { buffer.into_vec() }
 }
 
-#[test]
-fn export_requires_running_runtime() {
-    let _guard = TEST_MUTEX.lock().unwrap();
-    let mut response = AtomOwnedBuffer::empty();
-    let mut error = AtomOwnedBuffer::empty();
-
-    let status = unsafe { __atom_export_get(&raw mut response, &raw mut error) };
-    assert_eq!(status, AtomErrorCode::BridgeInitFailed.exit_code());
-    assert!(take_buffer(response).is_empty());
-    assert!(!take_buffer(error).is_empty());
+fn ensure_runtime_initialized() {
+    RUNTIME_INIT.get_or_init(|| {
+        atom_runtime::__init(RuntimeConfig).expect("runtime init");
+    });
 }
 
 #[test]
 fn no_input_export_round_trips_device_info_flatbuffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let mut response = AtomOwnedBuffer::empty();
     let mut error = AtomOwnedBuffer::empty();
@@ -222,14 +217,12 @@ fn no_input_export_round_trips_device_info_flatbuffer() {
             status: ConnectionStatus::Connected,
         }
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn result_export_routes_ok_value_to_response_buffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_echo_request("hello");
     let mut response = AtomOwnedBuffer::empty();
@@ -248,14 +241,12 @@ fn result_export_routes_ok_value_to_response_buffer() {
         decode_string_response(&take_buffer(response)),
         "echo: hello"
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn unit_return_export_clears_response_buffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_echo_request("clear");
     let mut response = AtomOwnedBuffer::from_vec(vec![1, 2, 3]);
@@ -271,14 +262,12 @@ fn unit_return_export_clears_response_buffer() {
     assert_eq!(status, 0);
     assert!(take_buffer(response).is_empty());
     assert!(take_buffer(error).is_empty());
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn result_export_routes_err_value_to_error_buffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_echo_request("boom");
     let mut response = AtomOwnedBuffer::empty();
@@ -294,14 +283,12 @@ fn result_export_routes_err_value_to_error_buffer() {
     assert_eq!(status, AtomErrorCode::ModuleInitFailed.exit_code());
     assert!(take_buffer(response).is_empty());
     assert!(!take_buffer(error).is_empty());
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn enum_export_round_trips_flatbuffer_response() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let mut response = AtomOwnedBuffer::empty();
     let mut error = AtomOwnedBuffer::empty();
@@ -313,6 +300,4 @@ fn enum_export_round_trips_flatbuffer_response() {
         decode_status(&take_buffer(response)),
         ConnectionStatus::Disconnected
     );
-
-    shutdown_runtime(handle);
 }

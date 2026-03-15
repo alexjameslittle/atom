@@ -1,12 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
-use std::future::Future;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
+use atom_ffi::{AtomLifecycleEvent, AtomResult};
 
-use crate::config::ModuleMethodHandler;
-use crate::state::RuntimeState;
+use crate::state::{RuntimeState, validate_transition};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeEvent {
@@ -18,16 +16,6 @@ pub enum RuntimeEvent {
         plugin_id: String,
         name: String,
         detail: Option<String>,
-    },
-    TaskCompleted {
-        plugin_id: String,
-        task_name: String,
-        success: bool,
-    },
-    ModuleCallCompleted {
-        module_id: String,
-        method: String,
-        response_len: usize,
     },
 }
 
@@ -48,19 +36,7 @@ impl RuntimeEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeEffect {
-    StateChanged {
-        key: String,
-        value: String,
-    },
-    TaskStarted {
-        plugin_id: String,
-        task_name: String,
-    },
-    ModuleCall {
-        module_id: String,
-        method: String,
-        request_len: usize,
-    },
+    StateChanged { key: String, value: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,21 +52,11 @@ pub struct RuntimeEffectRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleCallRecord {
-    pub sequence: u64,
-    pub module_id: String,
-    pub method: String,
-    pub request_len: usize,
-    pub response_len: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSnapshot {
     pub lifecycle: RuntimeState,
     pub values: BTreeMap<String, String>,
     pub events: Vec<RuntimeEventRecord>,
     pub effects: Vec<RuntimeEffectRecord>,
-    pub module_calls: Vec<ModuleCallRecord>,
 }
 
 impl RuntimeSnapshot {
@@ -100,14 +66,12 @@ impl RuntimeSnapshot {
             values: BTreeMap::new(),
             events: Vec::new(),
             effects: Vec::new(),
-            module_calls: Vec::new(),
         }
     }
 }
 
 pub(crate) struct RuntimeHost {
     snapshot: Mutex<RuntimeSnapshot>,
-    module_methods: Mutex<HashMap<(String, String), ModuleMethodHandler>>,
     next_sequence: AtomicU64,
 }
 
@@ -115,7 +79,6 @@ impl RuntimeHost {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             snapshot: Mutex::new(RuntimeSnapshot::new(RuntimeState::Created)),
-            module_methods: Mutex::new(HashMap::new()),
             next_sequence: AtomicU64::new(1),
         })
     }
@@ -156,120 +119,19 @@ impl RuntimeHost {
             .push(RuntimeEffectRecord { sequence, effect });
     }
 
-    pub(crate) fn register_module_method(
+    pub(crate) fn handle_lifecycle_event(
         &self,
-        module_id: &str,
-        method_name: &str,
-        handler: ModuleMethodHandler,
-    ) -> AtomResult<()> {
-        let key = (module_id.to_owned(), method_name.to_owned());
-        let previous = lock_module_methods(&self.module_methods).insert(key.clone(), handler);
-        if previous.is_some() {
-            return Err(AtomError::new(
-                AtomErrorCode::ModuleManifestInvalid,
-                format!(
-                    "duplicate runtime module method registration: {}.{}",
-                    key.0, key.1
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn call_module(
-        &self,
-        ctx: &crate::plugin::PluginContext,
-        module_id: &str,
-        method: &str,
-        request: &[u8],
-    ) -> AtomResult<Vec<u8>> {
-        if self.snapshot().lifecycle != RuntimeState::Running {
-            return Err(AtomError::new(
-                AtomErrorCode::RuntimeTransitionInvalid,
-                "runtime module calls require Running state",
-            ));
-        }
-
-        self.emit_effect(RuntimeEffect::ModuleCall {
-            module_id: module_id.to_owned(),
-            method: method.to_owned(),
-            request_len: request.len(),
-        });
-
-        let key = (module_id.to_owned(), method.to_owned());
-        let handler = lock_module_methods(&self.module_methods)
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| {
-                AtomError::new(
-                    AtomErrorCode::ModuleNotFound,
-                    format!("runtime module method not found: {}.{}", key.0, key.1),
-                )
-            })?;
-
-        let response = handler(ctx, request)?;
+        event: AtomLifecycleEvent,
+    ) -> AtomResult<RuntimeState> {
         let sequence = self.next_sequence();
         let mut snapshot = lock_snapshot(&self.snapshot);
+        let state = validate_transition(snapshot.lifecycle, event)?;
+        snapshot.lifecycle = state;
         snapshot.events.push(RuntimeEventRecord {
             sequence,
-            event: RuntimeEvent::ModuleCallCompleted {
-                module_id: module_id.to_owned(),
-                method: method.to_owned(),
-                response_len: response.len(),
-            },
+            event: RuntimeEvent::Lifecycle { event, state },
         });
-        snapshot.module_calls.push(ModuleCallRecord {
-            sequence,
-            module_id: module_id.to_owned(),
-            method: method.to_owned(),
-            request_len: request.len(),
-            response_len: response.len(),
-        });
-        drop(snapshot);
-
-        Ok(response)
-    }
-
-    pub(crate) fn run_task<F, T>(
-        &self,
-        ctx: &crate::plugin::PluginContext,
-        plugin_id: &str,
-        task_name: &str,
-        future: F,
-    ) -> AtomResult<T>
-    where
-        F: Future<Output = AtomResult<T>>,
-    {
-        if self.snapshot().lifecycle != RuntimeState::Running {
-            return Err(AtomError::new(
-                AtomErrorCode::RuntimeTransitionInvalid,
-                "runtime async tasks require Running state",
-            ));
-        }
-
-        self.emit_effect(RuntimeEffect::TaskStarted {
-            plugin_id: plugin_id.to_owned(),
-            task_name: task_name.to_owned(),
-        });
-
-        match ctx.tokio_handle.block_on(future) {
-            Ok(value) => {
-                self.dispatch_event(RuntimeEvent::TaskCompleted {
-                    plugin_id: plugin_id.to_owned(),
-                    task_name: task_name.to_owned(),
-                    success: true,
-                });
-                Ok(value)
-            }
-            Err(error) => {
-                self.dispatch_event(RuntimeEvent::TaskCompleted {
-                    plugin_id: plugin_id.to_owned(),
-                    task_name: task_name.to_owned(),
-                    success: false,
-                });
-                Err(error)
-            }
-        }
+        Ok(state)
     }
 
     fn next_sequence(&self) -> u64 {
@@ -284,11 +146,56 @@ fn lock_snapshot(snapshot: &Mutex<RuntimeSnapshot>) -> MutexGuard<'_, RuntimeSna
     }
 }
 
-fn lock_module_methods(
-    methods: &Mutex<HashMap<(String, String), ModuleMethodHandler>>,
-) -> MutexGuard<'_, HashMap<(String, String), ModuleMethodHandler>> {
-    match methods.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    use atom_ffi::AtomLifecycleEvent;
+
+    use super::RuntimeHost;
+    use crate::state::RuntimeState;
+
+    #[test]
+    fn concurrent_lifecycle_updates_validate_against_latest_state() {
+        let host = RuntimeHost::new();
+        host.set_lifecycle(RuntimeState::Backgrounded);
+
+        let barrier = Arc::new(Barrier::new(3));
+        let foreground = {
+            let barrier = Arc::clone(&barrier);
+            let host = Arc::clone(&host);
+            thread::spawn(move || {
+                barrier.wait();
+                host.handle_lifecycle_event(AtomLifecycleEvent::Foreground)
+            })
+        };
+        let suspend = {
+            let barrier = Arc::clone(&barrier);
+            let host = Arc::clone(&host);
+            thread::spawn(move || {
+                barrier.wait();
+                host.handle_lifecycle_event(AtomLifecycleEvent::Suspend)
+            })
+        };
+
+        barrier.wait();
+
+        let foreground = foreground.join().expect("foreground thread");
+        let suspend = suspend.join().expect("suspend thread");
+        assert_eq!(
+            [foreground.is_ok(), suspend.is_ok()]
+                .into_iter()
+                .filter(|ok| *ok)
+                .count(),
+            1,
+        );
+
+        let snapshot = host.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert!(matches!(
+            snapshot.lifecycle,
+            RuntimeState::Running | RuntimeState::Suspended
+        ));
     }
 }
