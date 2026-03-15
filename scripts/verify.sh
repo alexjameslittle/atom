@@ -12,7 +12,9 @@ mode=${1:-verify}
 # If you add a new top-level directory with BUILD files, add it here.
 VERIFY_PACKAGES="//crates/... //examples/... //bzl/... //tools/... //platforms/..."
 EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
-GENERATED_FLATBUFFER_TARGETS="//generated/flatbuffers/device_info:device_info_rust_flatbuffers //generated/flatbuffers/device_info:device_info_swift_flatbuffers //generated/flatbuffers/device_info:device_info_kotlin_flatbuffers"
+GENERATED_RUST_FLATBUFFER_TARGETS="//generated/flatbuffers/device_info:device_info_rust_flatbuffers"
+GENERATED_SWIFT_FLATBUFFER_TARGETS="//generated/flatbuffers/device_info:device_info_swift_flatbuffers"
+GENERATED_KOTLIN_FLATBUFFER_TARGETS="//generated/flatbuffers/device_info:device_info_kotlin_flatbuffers"
 
 check_for_unverified_packages() {
   for dir in "$repo_root"/*/; do
@@ -55,9 +57,14 @@ generate_example_app() {
 }
 
 build_generated_flatbuffers() {
-  # Validate per-module flatc outputs for Rust, Swift, and Kotlin.
+  # Validate per-module flatc outputs. Swift generation is exercised on Darwin
+  # because the generated module is compiled through the iOS app build there.
+  generated_targets="$GENERATED_RUST_FLATBUFFER_TARGETS $GENERATED_KOTLIN_FLATBUFFER_TARGETS"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    generated_targets="$generated_targets $GENERATED_SWIFT_FLATBUFFER_TARGETS"
+  fi
   # shellcheck disable=SC2086
-  mise exec -- bazelisk build $GENERATED_FLATBUFFER_TARGETS
+  mise exec -- bazelisk build $generated_targets
 }
 
 build_ios_app() {
