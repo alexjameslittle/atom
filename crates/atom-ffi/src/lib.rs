@@ -6,6 +6,26 @@ use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
 
 pub type AtomResult<T> = Result<T, AtomError>;
 
+pub trait AtomExportInput: Sized {
+    /// Decode an Atom export request payload from `FlatBuffer` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AtomError` when the payload is missing or invalid for the
+    /// implementing type.
+    fn decode_atom_export(input: AtomSlice) -> AtomResult<Self>;
+}
+
+pub trait AtomExportOutput {
+    /// Encode an Atom export response payload into `FlatBuffer` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AtomError` when the value cannot be encoded for the FFI
+    /// boundary.
+    fn encode_atom_export(self) -> AtomResult<Vec<u8>>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtomErrorCode {
     ManifestNotFound,
@@ -247,6 +267,12 @@ impl Default for AtomOwnedBuffer {
     }
 }
 
+impl AtomExportOutput for () {
+    fn encode_atom_export(self) -> AtomResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+}
+
 pub type AtomRuntimeHandle = u64;
 
 #[repr(u32)]
@@ -286,12 +312,70 @@ pub unsafe fn write_error_buffer(slot: *mut AtomOwnedBuffer, error: &AtomError) 
     }
 
     // SAFETY: guarded by the caller contract.
-    unsafe { ptr::write(slot, AtomOwnedBuffer::from_vec(error.encode())) };
+    unsafe { replace_buffer(slot, AtomOwnedBuffer::from_vec(error.encode())) };
+}
+
+/// Validate that a generated export received a writable response slot.
+///
+/// # Errors
+///
+/// Returns `BRIDGE_INVALID_ARGUMENT` when the caller passes a null response
+/// buffer pointer.
+pub fn require_owned_buffer_slot(
+    slot: *mut AtomOwnedBuffer,
+    slot_name: &'static str,
+) -> AtomResult<()> {
+    if slot.is_null() {
+        Err(AtomError::new(
+            AtomErrorCode::BridgeInvalidArgument,
+            format!("{slot_name} must be a non-null AtomOwnedBuffer pointer"),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// # Safety
+///
+/// `slot` must be either null or a valid writable pointer to `AtomOwnedBuffer`.
+pub unsafe fn clear_buffer(slot: *mut AtomOwnedBuffer) {
+    if slot.is_null() {
+        return;
+    }
+
+    // SAFETY: guarded by the caller contract.
+    unsafe { replace_buffer(slot, AtomOwnedBuffer::empty()) };
+}
+
+/// # Safety
+///
+/// `slot` must be either null or a valid writable pointer to `AtomOwnedBuffer`.
+pub unsafe fn write_response_buffer(slot: *mut AtomOwnedBuffer, data: Vec<u8>) {
+    if slot.is_null() {
+        return;
+    }
+
+    // SAFETY: guarded by the caller contract.
+    unsafe { replace_buffer(slot, AtomOwnedBuffer::from_vec(data)) };
+}
+
+unsafe fn replace_buffer(slot: *mut AtomOwnedBuffer, buffer: AtomOwnedBuffer) {
+    // SAFETY: guarded by the caller contract.
+    let previous = unsafe { ptr::read(slot) };
+    if !previous.ptr.is_null() {
+        // SAFETY: `previous` came from the same buffer slot contract as `slot`.
+        let _ = unsafe { previous.into_vec() };
+    }
+    // SAFETY: guarded by the caller contract.
+    unsafe { ptr::write(slot, buffer) };
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AtomError, AtomErrorCode, AtomOwnedBuffer};
+    use super::{
+        AtomError, AtomErrorCode, AtomExportOutput, AtomOwnedBuffer, clear_buffer,
+        require_owned_buffer_slot, write_response_buffer,
+    };
 
     #[test]
     fn error_codes_map_to_spec_exit_codes() {
@@ -339,5 +423,36 @@ mod tests {
         // SAFETY: the buffer was allocated by `from_vec` immediately above.
         let round_trip = unsafe { buffer.into_vec() };
         assert_eq!(round_trip, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn unit_output_encodes_as_empty_payload() {
+        assert_eq!(().encode_atom_export().unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn require_owned_buffer_slot_rejects_null() {
+        let error = require_owned_buffer_slot(std::ptr::null_mut(), "out_response_flatbuffer")
+            .expect_err("null slot should fail");
+        assert_eq!(error.code, AtomErrorCode::BridgeInvalidArgument);
+    }
+
+    #[test]
+    fn write_response_buffer_round_trips() {
+        let mut slot = AtomOwnedBuffer::empty();
+        // SAFETY: `slot` is a valid writable pointer for the duration of the call.
+        unsafe { write_response_buffer(&mut slot, vec![7, 8, 9]) };
+        // SAFETY: the buffer was allocated by `write_response_buffer` immediately above.
+        let round_trip = unsafe { slot.into_vec() };
+        assert_eq!(round_trip, vec![7, 8, 9]);
+    }
+
+    #[test]
+    fn clear_buffer_resets_existing_contents() {
+        let mut slot = AtomOwnedBuffer::from_vec(vec![4, 5, 6]);
+        // SAFETY: `slot` is a valid writable pointer for the duration of the call.
+        unsafe { clear_buffer(&mut slot) };
+        assert_eq!(slot.len, 0);
+        assert!(slot.ptr.is_null());
     }
 }
