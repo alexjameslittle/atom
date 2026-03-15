@@ -9,7 +9,6 @@ atom_module(
     deps = [
         "//crates/atom-ffi",
         "//crates/atom-runtime",
-        "@crates//:flatbuffers",
     ],
 )
 
