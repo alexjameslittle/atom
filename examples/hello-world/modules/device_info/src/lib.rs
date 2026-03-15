@@ -34,11 +34,6 @@ pub fn device_summary() -> String {
     format!("{} ({})", info.model, info.os)
 }
 
-#[atom_macros::atom_import]
-extern "C" {
-    pub fn refresh_status(label: String);
-}
-
 fn current_device_info() -> DeviceInfo {
     DeviceInfo {
         model: "atom-runtime".to_owned(),
