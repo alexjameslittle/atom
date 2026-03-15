@@ -2,7 +2,9 @@ use std::fmt;
 use std::mem;
 use std::ptr;
 
-use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
+use flatbuffers::{
+    FlatBufferBuilder, ForwardsUOffset, Table, TableFinishedWIPOffset, WIPOffset, root_unchecked,
+};
 
 pub type AtomResult<T> = Result<T, AtomError>;
 
@@ -16,6 +18,16 @@ pub trait AtomExportInput: Sized {
     fn decode_atom_export(input: AtomSlice) -> AtomResult<Self>;
 }
 
+pub trait AtomImportInput {
+    /// Encode an Atom import request payload for an imported native call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AtomError` when the payload cannot be encoded for the FFI
+    /// boundary.
+    fn encode_atom_import(self) -> AtomResult<Vec<u8>>;
+}
+
 pub trait AtomExportOutput {
     /// Encode an Atom export response payload into `FlatBuffer` bytes.
     ///
@@ -24,6 +36,16 @@ pub trait AtomExportOutput {
     /// Returns an `AtomError` when the value cannot be encoded for the FFI
     /// boundary.
     fn encode_atom_export(self) -> AtomResult<Vec<u8>>;
+}
+
+pub trait AtomImportOutput: Sized {
+    /// Decode an Atom import response payload from `FlatBuffer` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AtomError` when the payload is missing or invalid for the
+    /// implementing type.
+    fn decode_atom_import(input: &[u8]) -> AtomResult<Self>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +295,60 @@ impl AtomExportOutput for () {
     }
 }
 
+impl AtomImportInput for () {
+    fn encode_atom_import(self) -> AtomResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+}
+
+impl AtomImportInput for (String,) {
+    fn encode_atom_import(self) -> AtomResult<Vec<u8>> {
+        let mut builder = FlatBufferBuilder::new();
+        let value = builder.create_string(&self.0);
+        let table = builder.start_table();
+        builder.push_slot_always(4, value);
+        let root = builder.end_table(table);
+        builder.finish(root, None);
+        Ok(builder.finished_data().to_vec())
+    }
+}
+
+impl AtomImportInput for (String, String) {
+    fn encode_atom_import(self) -> AtomResult<Vec<u8>> {
+        let mut builder = FlatBufferBuilder::new();
+        let first = builder.create_string(&self.0);
+        let second = builder.create_string(&self.1);
+        let table = builder.start_table();
+        builder.push_slot_always(4, first);
+        builder.push_slot_always(6, second);
+        let root = builder.end_table(table);
+        builder.finish(root, None);
+        Ok(builder.finished_data().to_vec())
+    }
+}
+
+impl AtomImportOutput for () {
+    fn decode_atom_import(input: &[u8]) -> AtomResult<Self> {
+        if input.is_empty() {
+            Ok(())
+        } else {
+            Err(AtomError::new(
+                AtomErrorCode::BridgeInvalidArgument,
+                "atom_import unit response must be empty",
+            ))
+        }
+    }
+}
+
+impl AtomImportOutput for String {
+    fn decode_atom_import(input: &[u8]) -> AtomResult<Self> {
+        let table = unsafe { root_unchecked::<Table<'_>>(input) };
+        Ok(unsafe { table.get::<ForwardsUOffset<&str>>(4, None) }
+            .unwrap_or("")
+            .to_owned())
+    }
+}
+
 pub type AtomRuntimeHandle = u64;
 
 #[repr(u32)]
@@ -372,9 +448,11 @@ unsafe fn replace_buffer(slot: *mut AtomOwnedBuffer, buffer: AtomOwnedBuffer) {
 
 #[cfg(test)]
 mod tests {
+    use flatbuffers::{ForwardsUOffset, Table, root_unchecked};
+
     use super::{
-        AtomError, AtomErrorCode, AtomExportOutput, AtomOwnedBuffer, clear_buffer,
-        require_owned_buffer_slot, write_response_buffer,
+        AtomError, AtomErrorCode, AtomExportOutput, AtomImportInput, AtomImportOutput,
+        AtomOwnedBuffer, clear_buffer, require_owned_buffer_slot, write_response_buffer,
     };
 
     #[test]
@@ -428,6 +506,45 @@ mod tests {
     #[test]
     fn unit_output_encodes_as_empty_payload() {
         assert_eq!(().encode_atom_export().unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn unit_import_input_encodes_as_empty_payload() {
+        assert_eq!(().encode_atom_import().unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn string_import_input_round_trips_through_string_output() {
+        let payload = (String::from("hello"),).encode_atom_import().unwrap();
+        assert_eq!(String::decode_atom_import(&payload).unwrap(), "hello");
+    }
+
+    #[test]
+    fn string_pair_import_input_encodes_distinct_slots() {
+        let payload = (String::from("first"), String::from("second"))
+            .encode_atom_import()
+            .unwrap();
+        let table = unsafe { root_unchecked::<Table<'_>>(&payload) };
+        let first = unsafe { table.get::<ForwardsUOffset<&str>>(4, None) }
+            .unwrap_or("")
+            .to_owned();
+        let second = unsafe { table.get::<ForwardsUOffset<&str>>(6, None) }
+            .unwrap_or("")
+            .to_owned();
+        assert_eq!(first, "first");
+        assert_eq!(second, "second");
+    }
+
+    #[test]
+    fn unit_import_output_accepts_empty_payload() {
+        assert_eq!(<()>::decode_atom_import(&[]).unwrap(), ());
+    }
+
+    #[test]
+    fn unit_import_output_rejects_non_empty_payload() {
+        let error = <()>::decode_atom_import(&[1]).expect_err("non-empty payload should fail");
+        assert_eq!(error.code, AtomErrorCode::BridgeInvalidArgument);
+        assert!(error.message.contains("unit response"));
     }
 
     #[test]

@@ -2,8 +2,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::Nothing;
 use syn::{
-    Error, FnArg, Ident, Item, ItemFn, ItemStruct, PatType, Result, ReturnType, Signature, Type,
-    TypePath, parse2,
+    Error, FnArg, ForeignItem, ForeignItemFn, Ident, Item, ItemFn, ItemForeignMod, ItemStruct,
+    PatType, Result, ReturnType, Signature, Type, TypePath, Visibility, parse2,
 };
 
 pub(crate) fn expand_atom_record(attr: TokenStream, item: TokenStream) -> Result<TokenStream> {
@@ -61,6 +61,62 @@ pub(crate) fn expand_atom_export(attr: TokenStream, item: TokenStream) -> Result
     })
 }
 
+pub(crate) fn expand_atom_import(attr: TokenStream, item: TokenStream) -> Result<TokenStream> {
+    parse2::<Nothing>(attr)?;
+
+    let import_block = parse2::<ItemForeignMod>(item)?;
+    validate_import_block(&import_block)?;
+
+    let functions = import_block
+        .items
+        .iter()
+        .map(|item| match item {
+            ForeignItem::Fn(function) => build_import_function(function),
+            other => Err(Error::new_spanned(
+                other,
+                "#[atom_import] may only contain foreign functions",
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let slot_definitions = functions.iter().map(|function| {
+        let slot_ident = &function.slot_ident;
+        quote! {
+            #[allow(non_upper_case_globals)]
+            static #slot_ident: ::std::sync::atomic::AtomicPtr<()> =
+                ::std::sync::atomic::AtomicPtr::new(::std::ptr::null_mut());
+        }
+    });
+    let register_parameters = functions.iter().map(|function| {
+        let register_ident = &function.register_ident;
+        let register_ty = function_pointer_type(function.returns_value);
+        quote!(#register_ident: #register_ty)
+    });
+    let register_body = functions.iter().map(|function| {
+        let slot_ident = &function.slot_ident;
+        let register_ident = &function.register_ident;
+        quote! {
+            #slot_ident.store(
+                #register_ident.map_or(::std::ptr::null_mut(), |function| function as *mut ()),
+                ::std::sync::atomic::Ordering::Release,
+            );
+        }
+    });
+    let wrappers = functions.iter().map(import_wrapper);
+
+    Ok(quote! {
+        #(#slot_definitions)*
+
+        #[doc(hidden)]
+        #[unsafe(export_name = concat!("atom_", env!("CARGO_CRATE_NAME"), "_register_imports"))]
+        pub extern "C" fn __atom_import_register_imports(#(#register_parameters),*) {
+            #(#register_body)*
+        }
+
+        #(#wrappers)*
+    })
+}
+
 fn validate_export_signature(signature: &Signature) -> Result<()> {
     if signature.constness.is_some() {
         return Err(Error::new_spanned(
@@ -111,6 +167,86 @@ fn validate_export_signature(signature: &Signature) -> Result<()> {
             &signature.inputs,
             "#[atom_export] currently supports at most one parameter; wrap multiple fields in a #[atom_record] request struct",
         ));
+    }
+
+    Ok(())
+}
+
+fn validate_import_block(import_block: &ItemForeignMod) -> Result<()> {
+    match import_block
+        .abi
+        .name
+        .as_ref()
+        .map(syn::LitStr::value)
+        .as_deref()
+    {
+        Some("C") => {}
+        _ => {
+            return Err(Error::new_spanned(
+                &import_block.abi,
+                "#[atom_import] expects an extern \"C\" block",
+            ));
+        }
+    }
+
+    if import_block.items.is_empty() {
+        return Err(Error::new_spanned(
+            import_block,
+            "#[atom_import] requires at least one foreign function",
+        ));
+    }
+
+    for item in &import_block.items {
+        match item {
+            ForeignItem::Fn(function) => validate_import_signature(&function.sig)?,
+            other => {
+                return Err(Error::new_spanned(
+                    other,
+                    "#[atom_import] may only contain foreign functions",
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_import_signature(signature: &Signature) -> Result<()> {
+    if signature.constness.is_some() {
+        return Err(Error::new_spanned(
+            signature,
+            "#[atom_import] does not support const functions",
+        ));
+    }
+
+    if signature.asyncness.is_some() {
+        return Err(Error::new_spanned(
+            signature,
+            "#[atom_import] does not support async functions",
+        ));
+    }
+
+    if !signature.generics.params.is_empty() {
+        return Err(Error::new_spanned(
+            &signature.generics,
+            "#[atom_import] does not support generic functions",
+        ));
+    }
+
+    if signature.variadic.is_some() {
+        return Err(Error::new_spanned(
+            signature,
+            "#[atom_import] does not support variadic functions",
+        ));
+    }
+
+    for input in &signature.inputs {
+        if let FnArg::Receiver(receiver) = input {
+            return Err(Error::new_spanned(
+                receiver,
+                "#[atom_import] does not support methods with self receivers",
+            ));
+        }
     }
 
     Ok(())
@@ -262,6 +398,144 @@ fn parse_result_output(output: &ReturnType) -> Result<ExportReturn> {
     Ok(ExportReturn::Value(output_ty))
 }
 
+fn build_import_function(function: &ForeignItemFn) -> Result<ImportFunction> {
+    let mut wrapper_inputs = Vec::with_capacity(function.sig.inputs.len());
+    let mut input_bindings = Vec::with_capacity(function.sig.inputs.len());
+    let mut input_types = Vec::with_capacity(function.sig.inputs.len());
+
+    for (index, input) in function.sig.inputs.iter().enumerate() {
+        let typed = match input {
+            FnArg::Typed(typed) => typed,
+            FnArg::Receiver(receiver) => {
+                return Err(Error::new_spanned(
+                    receiver,
+                    "#[atom_import] does not support methods with self receivers",
+                ));
+            }
+        };
+        let binding = format_ident!("__atom_import_input_{index}");
+        let ty = typed.ty.as_ref().clone();
+        wrapper_inputs.push(quote!(#binding: #ty));
+        input_bindings.push(binding);
+        input_types.push(ty);
+    }
+
+    let tuple_type = match input_types.as_slice() {
+        [] => quote!(()),
+        [only] => quote!((#only,)),
+        many => quote!((#(#many),*)),
+    };
+    let tuple_expr = match input_bindings.as_slice() {
+        [] => quote!(()),
+        [only] => quote!((#only,)),
+        many => quote!((#(#many),*)),
+    };
+    let output_ty = match &function.sig.output {
+        ReturnType::Default => None,
+        ReturnType::Type(_, ty) => Some(ty.as_ref().clone()),
+    };
+
+    Ok(ImportFunction {
+        attrs: function.attrs.clone(),
+        vis: function.vis.clone(),
+        ident: function.sig.ident.clone(),
+        wrapper_inputs,
+        input_tuple_type: tuple_type,
+        input_tuple_expr: tuple_expr,
+        output: function.sig.output.clone(),
+        output_ty,
+        returns_value: !matches!(function.sig.output, ReturnType::Default),
+        slot_ident: format_ident!("__atom_import_slot_{}", function.sig.ident),
+        register_ident: format_ident!("__atom_import_{}_fn", function.sig.ident),
+    })
+}
+
+fn function_pointer_type(returns_value: bool) -> TokenStream {
+    if returns_value {
+        quote!(Option<extern "C" fn(::atom_ffi::AtomSlice, *mut ::atom_ffi::AtomOwnedBuffer)>)
+    } else {
+        quote!(Option<extern "C" fn(::atom_ffi::AtomSlice)>)
+    }
+}
+
+fn import_wrapper(function: &ImportFunction) -> TokenStream {
+    let attrs = &function.attrs;
+    let vis = &function.vis;
+    let ident = &function.ident;
+    let wrapper_inputs = &function.wrapper_inputs;
+    let slot_ident = &function.slot_ident;
+    let input_tuple_type = &function.input_tuple_type;
+    let input_tuple_expr = &function.input_tuple_expr;
+    let output = &function.output;
+
+    let call = if let Some(output_ty) = &function.output_ty {
+        quote! {
+            let __atom_import_fn: extern "C" fn(
+                ::atom_ffi::AtomSlice,
+                *mut ::atom_ffi::AtomOwnedBuffer,
+            ) = unsafe { ::std::mem::transmute(__atom_import_ptr) };
+            let mut __atom_import_response = ::atom_ffi::AtomOwnedBuffer::empty();
+            __atom_import_fn(__atom_import_slice, &raw mut __atom_import_response);
+            let __atom_import_response = unsafe { __atom_import_response.into_vec() };
+            match <#output_ty as ::atom_ffi::AtomImportOutput>::decode_atom_import(
+                &__atom_import_response,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    panic!(
+                        "atom_import: failed to decode {}::{} response: {}",
+                        env!("CARGO_CRATE_NAME"),
+                        stringify!(#ident),
+                        error,
+                    );
+                }
+            }
+        }
+    } else {
+        quote! {
+            let __atom_import_fn: extern "C" fn(::atom_ffi::AtomSlice) =
+                unsafe { ::std::mem::transmute(__atom_import_ptr) };
+            __atom_import_fn(__atom_import_slice);
+        }
+    };
+
+    quote! {
+        #(#attrs)*
+        #vis fn #ident(#(#wrapper_inputs),*) #output {
+            let __atom_import_ptr =
+                #slot_ident.load(::std::sync::atomic::Ordering::Acquire);
+            assert!(
+                !__atom_import_ptr.is_null(),
+                concat!(
+                    "atom_import: ",
+                    env!("CARGO_CRATE_NAME"),
+                    "::",
+                    stringify!(#ident),
+                    " not registered. Was the native provider registered at startup?"
+                ),
+            );
+
+            let __atom_import_input =
+                match <#input_tuple_type as ::atom_ffi::AtomImportInput>::encode_atom_import(
+                    #input_tuple_expr,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        panic!(
+                            "atom_import: failed to encode {}::{} arguments: {}",
+                            env!("CARGO_CRATE_NAME"),
+                            stringify!(#ident),
+                            error,
+                        );
+                    }
+                };
+            let __atom_import_slice = ::atom_ffi::AtomSlice::from_bytes(&__atom_import_input);
+
+            #call
+        }
+    }
+}
+
 fn export_parameters(signature: &Signature) -> Result<Vec<ExportParameter>> {
     signature
         .inputs
@@ -334,13 +608,27 @@ struct ExportParameter {
     mode: ParameterMode,
 }
 
+struct ImportFunction {
+    attrs: Vec<syn::Attribute>,
+    vis: Visibility,
+    ident: Ident,
+    wrapper_inputs: Vec<TokenStream>,
+    input_tuple_type: TokenStream,
+    input_tuple_expr: TokenStream,
+    output: ReturnType,
+    output_ty: Option<Type>,
+    returns_value: bool,
+    slot_ident: Ident,
+    register_ident: Ident,
+}
+
 #[cfg(test)]
 mod tests {
     use proc_macro2::TokenStream;
     use quote::quote;
-    use syn::{ItemFn, parse_quote};
+    use syn::{ItemFn, ItemForeignMod, parse_quote};
 
-    use super::{expand_atom_export, expand_atom_record};
+    use super::{expand_atom_export, expand_atom_import, expand_atom_record};
 
     fn normalize(tokens: proc_macro2::TokenStream) -> String {
         tokens.to_string()
@@ -462,5 +750,100 @@ mod tests {
         let error =
             expand_atom_export(TokenStream::new(), quote!(#function)).expect_err("should fail");
         assert!(error.to_string().contains("supports at most one parameter"));
+    }
+
+    #[test]
+    fn atom_import_generates_registration_slots_and_panic_guard() {
+        let block: ItemForeignMod = parse_quote! {
+            extern "C" {
+                pub fn set(key: String, value: String);
+            }
+        };
+
+        let expanded =
+            expand_atom_import(TokenStream::new(), quote!(#block)).expect("import macro");
+        let normalized = normalize(expanded);
+        assert!(normalized.contains("AtomicPtr < () >"));
+        assert!(normalized.contains("_register_imports"));
+        assert!(normalized.contains("AtomImportInput"));
+        assert!(normalized.contains("not registered"));
+    }
+
+    #[test]
+    fn atom_import_returning_value_uses_output_trait_and_owned_buffer() {
+        let block: ItemForeignMod = parse_quote! {
+            extern "C" {
+                pub fn get(key: String) -> GetResult;
+            }
+        };
+
+        let expanded =
+            expand_atom_import(TokenStream::new(), quote!(#block)).expect("import macro");
+        let normalized = normalize(expanded);
+        assert!(normalized.contains("AtomOwnedBuffer :: empty"));
+        assert!(
+            normalized
+                .contains("< GetResult as :: atom_ffi :: AtomImportOutput > :: decode_atom_import")
+        );
+        assert!(normalized.contains(
+            "extern \"C\" fn (:: atom_ffi :: AtomSlice , * mut :: atom_ffi :: AtomOwnedBuffer)"
+        ));
+    }
+
+    #[test]
+    fn atom_import_result_return_uses_import_output_trait() {
+        let block: ItemForeignMod = parse_quote! {
+            extern "C" {
+                pub fn try_echo(message: String) -> Result<EchoResponse, AtomError>;
+            }
+        };
+
+        let expanded =
+            expand_atom_import(TokenStream::new(), quote!(#block)).expect("import macro");
+        let normalized = normalize(expanded);
+        assert!(normalized.contains(
+            "< Result < EchoResponse , AtomError > as :: atom_ffi :: AtomImportOutput > :: decode_atom_import"
+        ));
+    }
+
+    #[test]
+    fn atom_import_unit_return_uses_input_only_function_pointer() {
+        let block: ItemForeignMod = parse_quote! {
+            extern "C" {
+                pub fn remove(key: String);
+            }
+        };
+
+        let expanded =
+            expand_atom_import(TokenStream::new(), quote!(#block)).expect("import macro");
+        let normalized = normalize(expanded);
+        assert!(normalized.contains("extern \"C\" fn (:: atom_ffi :: AtomSlice)"));
+        assert!(!normalized.contains("AtomImportOutput"));
+    }
+
+    #[test]
+    fn atom_import_rejects_non_c_abi() {
+        let block: ItemForeignMod = parse_quote! {
+            extern "Rust" {
+                pub fn set(key: String);
+            }
+        };
+
+        let error =
+            expand_atom_import(TokenStream::new(), quote!(#block)).expect_err("should fail");
+        assert!(error.to_string().contains("extern \"C\""));
+    }
+
+    #[test]
+    fn atom_import_rejects_non_function_items() {
+        let block: ItemForeignMod = parse_quote! {
+            extern "C" {
+                static VALUE: i32;
+            }
+        };
+
+        let error =
+            expand_atom_import(TokenStream::new(), quote!(#block)).expect_err("should fail");
+        assert!(error.to_string().contains("foreign functions"));
     }
 }
