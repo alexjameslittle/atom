@@ -1,8 +1,5 @@
 use std::env;
 
-use atom_ffi::{AtomExportOutput, AtomResult};
-use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
-
 #[atom_macros::atom_record]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
@@ -26,15 +23,20 @@ pub enum DeviceEvent {
 }
 
 #[must_use]
-#[atom_macros::atom_export]
 pub fn get() -> DeviceInfo {
     current_device_info()
 }
 
-impl AtomExportOutput for DeviceInfo {
-    fn encode_atom_export(self) -> AtomResult<Vec<u8>> {
-        Ok(encode_device_info(&self))
-    }
+#[must_use]
+#[atom_macros::atom_export]
+pub fn device_summary() -> String {
+    let info = get();
+    format!("{} ({})", info.model, info.os)
+}
+
+#[atom_macros::atom_import]
+extern "C" {
+    pub fn refresh_status(label: String);
 }
 
 fn current_device_info() -> DeviceInfo {
@@ -44,29 +46,9 @@ fn current_device_info() -> DeviceInfo {
     }
 }
 
-fn encode_device_info(value: &DeviceInfo) -> Vec<u8> {
-    let mut builder = FlatBufferBuilder::new();
-    let model = builder.create_string(&value.model);
-    let os = builder.create_string(&value.os);
-    let root = create_device_info(&mut builder, model, os);
-    builder.finish(root, None);
-    builder.finished_data().to_vec()
-}
-
-fn create_device_info<'a>(
-    builder: &mut FlatBufferBuilder<'a>,
-    model: WIPOffset<&'a str>,
-    os: WIPOffset<&'a str>,
-) -> WIPOffset<TableFinishedWIPOffset> {
-    let table = builder.start_table();
-    builder.push_slot_always::<WIPOffset<_>>(4, model);
-    builder.push_slot_always::<WIPOffset<_>>(6, os);
-    builder.end_table(table)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionStatus, get};
+    use super::{ConnectionStatus, device_summary, get};
 
     #[test]
     fn get_returns_model_and_os() {
@@ -76,10 +58,10 @@ mod tests {
     }
 
     #[test]
-    fn annotated_export_returns_runtime_device_info() {
-        let info = get();
-        assert_eq!(info.model, "atom-runtime");
-        assert!(info.os.contains('-'));
+    fn annotated_export_uses_plain_rust_helper_without_manual_codecs() {
+        let summary = device_summary();
+        assert!(summary.contains("atom-runtime"));
+        assert!(summary.contains('('));
         assert!(matches!(
             ConnectionStatus::Connected,
             ConnectionStatus::Connected

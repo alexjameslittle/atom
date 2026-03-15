@@ -55,10 +55,10 @@ The surrounding example crates now exercise the module/runtime boundary in plain
 That keeps the proof of state changes and async work inside the same public runtime API surface used
 by app-owned and third-party support crates without reintroducing runtime-managed plugin hooks.
 
-The `device_info` module now declares its FlatBuffers-facing records and export shape directly in
-Rust with `#[atom_record]` and `#[atom_export]`. `atom prebuild` derives the hidden `.fbs` schema
-and language bindings under `generated/flatbuffers/device_info/`, so the example no longer carries a
-handwritten module schema file.
+The `device_info` module now declares its FlatBuffers-facing records and bridge signatures directly
+in Rust with `#[atom_record]`, `#[atom_export]`, and `#[atom_import]`. `atom prebuild` derives the
+hidden `.fbs` schema and language bindings under `generated/flatbuffers/device_info/`, so the
+example no longer carries a handwritten module schema file or hand-authored FlatBuffers codecs.
 
 Run it from the repository root:
 
