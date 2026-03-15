@@ -28,6 +28,19 @@ def _repo_relative_paths(paths):
         return paths
     return ["{}/{}".format(package_name, path) for path in paths]
 
+def _repo_relative_path(path):
+    if path == None:
+        return None
+    package_name = native.package_name()
+    if not package_name:
+        return path
+    return "{}/{}".format(package_name, path)
+
+def _generated_rust_flatbuffers_dep(generated_root, module_id):
+    target_prefix = module_id.replace("-", "_")
+    package = "{}/flatbuffers/{}".format(generated_root, module_id) if generated_root else "flatbuffers/{}".format(module_id)
+    return "//{}:{}_rust_flatbuffers".format(package, target_prefix)
+
 def emit_module_metadata(
         name,
         kind,
@@ -36,6 +49,8 @@ def emit_module_metadata(
         min_atom_version,
         ios_min_deployment_target,
         android_min_sdk,
+        crate_root,
+        generated_root,
         schema_files,
         depends_on,
         methods,
@@ -56,6 +71,8 @@ def emit_module_metadata(
         "min_atom_version": min_atom_version,
         "ios_min_deployment_target": ios_min_deployment_target,
         "android_min_sdk": android_min_sdk,
+        "crate_root": _repo_relative_path(crate_root),
+        "generated_root": generated_root,
         "depends_on": [_absolute_label(label) for label in depends_on],
         "schema_files": _repo_relative_paths(schema_files),
         "methods": methods,
@@ -104,6 +121,7 @@ def atom_module(
         srcs = None,
         crate_root = "src/lib.rs",
         crate_name = None,
+        generated_root = "generated",
         schema_files = [],
         depends_on = [],
         methods = [],
@@ -130,7 +148,7 @@ def atom_module(
         srcs = srcs if srcs != None else native.glob(["src/**/*.rs"]),
         crate_name = crate_name if crate_name != None else name.replace("-", "_"),
         crate_root = crate_root,
-        deps = deps,
+        deps = deps + [_generated_rust_flatbuffers_dep(generated_root, module_id if module_id != None else name)],
         edition = "2024",
         proc_macro_deps = proc_macro_deps,
         visibility = target_visibility,
@@ -145,6 +163,8 @@ def atom_module(
         min_atom_version = min_atom_version,
         ios_min_deployment_target = ios_min_deployment_target,
         android_min_sdk = android_min_sdk,
+        crate_root = crate_root,
+        generated_root = generated_root,
         schema_files = schema_files,
         depends_on = depends_on,
         methods = methods,

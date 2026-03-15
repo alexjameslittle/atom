@@ -1,0 +1,28 @@
+namespace {{ namespace }};
+{% if blocks %}
+
+{% for block in blocks -%}
+{% if block.kind == "table" -%}
+table {{ block.name }} {
+{% for field in block.fields -%}
+  {{ field.name }}: {{ field.ty }};
+{% endfor -%}
+}
+{% elif block.kind == "enum" -%}
+enum {{ block.name }}: ubyte {
+{% for variant in block.variants -%}
+  {{ variant }},
+{% endfor -%}
+}
+{% elif block.kind == "union" -%}
+union {{ block.name }} {
+{% for variant in block.variants -%}
+  {{ variant }},
+{% endfor -%}
+}
+{% endif -%}
+{% if not loop.last %}
+
+{% endif -%}
+{% endfor -%}
+{% endif %}
