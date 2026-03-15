@@ -489,25 +489,26 @@ The runtime state machine MUST use these states:
 
 ### 7.2 Transition Rules
 
-| From                                       | Trigger                             | To             | Required Action                         |
-| ------------------------------------------ | ----------------------------------- | -------------- | --------------------------------------- |
-| `Created`                                  | `atom_app_init` succeeds            | `Initializing` | allocate runtime handle, parse config   |
-| `Initializing`                             | all modules initialize successfully | `Running`      | mark runtime available for module calls |
-| `Initializing`                             | module init fails                   | `Failed`       | emit `MODULE_INIT_FAILED`               |
-| `Running`                                  | host foreground loss                | `Backgrounded` | pause foreground-only work              |
-| `Backgrounded`                             | host foreground gain                | `Running`      | resume foreground-only work             |
-| `Backgrounded`                             | host suspension callback            | `Suspended`    | flush state, stop non-background tasks  |
-| `Suspended`                                | host resume callback                | `Running`      | restore active scheduling               |
-| `Running` or `Backgrounded` or `Suspended` | host terminate callback             | `Terminating`  | begin reverse-order module shutdown     |
-| `Terminating`                              | shutdown completes                  | `Terminated`   | free runtime resources                  |
-| any non-terminal state                     | unrecoverable bridge/runtime error  | `Failed`       | freeze further transitions              |
+| From                                       | Trigger                            | To             | Required Action                           |
+| ------------------------------------------ | ---------------------------------- | -------------- | ----------------------------------------- |
+| `Created`                                  | `atom_app_init` succeeds           | `Initializing` | construct singleton runtime, parse config |
+| `Initializing`                             | runtime bootstrap completes        | `Running`      | publish initialized singleton             |
+| `Initializing`                             | runtime bootstrap fails            | `Failed`       | emit `BRIDGE_INIT_FAILED`                 |
+| `Running`                                  | host foreground loss               | `Backgrounded` | record backgrounded lifecycle state       |
+| `Backgrounded`                             | host foreground gain               | `Running`      | record foregrounded lifecycle state       |
+| `Backgrounded`                             | host suspension callback           | `Suspended`    | record suspended lifecycle state          |
+| `Suspended`                                | host resume callback               | `Running`      | record resumed lifecycle state            |
+| `Running` or `Backgrounded` or `Suspended` | host terminate callback            | `Terminating`  | begin singleton shutdown                  |
+| `Terminating`                              | shutdown completes                 | `Terminated`   | free runtime resources                    |
+| any non-terminal state                     | unrecoverable bridge/runtime error | `Failed`       | freeze further transitions                |
 
-### 7.3 Module Initialization Order
+### 7.3 Runtime Startup Scope
 
-- Modules MUST initialize in resolved module order from Section 6.4.
-- Shutdown MUST happen in reverse initialization order.
-- Module `init_priority` MAY reorder modules within the same dependency layer.
-- If two modules share the same dependency layer and priority, declaration order MUST win.
+- The runtime singleton no longer performs runtime-side module registration or module lifecycle
+  callbacks.
+- Module ordering remains a metadata/CNG concern from Section 6.4, not a runtime startup concern.
+- `RuntimeConfig` is reserved for runtime boot configuration and MUST NOT carry plugin or module
+  registration lists.
 
 ### 7.4 Invalid Transitions
 
@@ -521,31 +522,27 @@ These transitions MUST fail with `RUNTIME_TRANSITION_INVALID`:
 ### 7.5 Reference Algorithm: Runtime Startup
 
 ```text
-function start_runtime(normalized_manifest, resolved_modules):
+function start_runtime(config):
     state = Created
-    handle = allocate_runtime_handle()
     state = Initializing
-
-    ordered = sort_modules_for_init(resolved_modules)
-    for module in ordered:
-        result = module.init()
-        if result is error:
-            state = Failed
-            error MODULE_INIT_FAILED at module.id
-
+    runtime = build_singleton(config)
+    if runtime is error:
+        state = Failed
+        error BRIDGE_INIT_FAILED
     state = Running
-    return handle
+    install singleton runtime
+    return ok
 ```
 
 ### 7.6 Runtime Support Library Model
 
 - The runtime MUST provide a public free-function API that is distinct from native modules.
-- Runtime support libraries MAY own library-local state, observe lifecycle and app events, and emit
-  effects through the runtime kernel.
-- Runtime support libraries MUST use the kernel's dispatch and lifecycle semantics. They MUST NOT
-  introduce a second lifecycle model or direct generated-host customization path.
-- The runtime kernel MUST remain the single authority for lifecycle transitions, effect completion,
-  and dispatch ordering even when higher-level state-management libraries layer on top of it.
+- Runtime support libraries MUST be plain Rust crates. They MUST NOT be runtime-registered plugins
+  or expect kernel-managed init, running, lifecycle, or shutdown hooks.
+- Runtime support libraries MAY own library-local state and MAY call `atom_runtime::*` from their
+  ordinary public APIs when they need runtime interaction.
+- The runtime kernel MUST remain the single authority for lifecycle transitions and runtime event
+  recording even when higher-level libraries layer on top of it.
 - `atom-runtime` MUST expose only destination-agnostic free functions. Its public API MUST NOT
   mention iOS, Android, simulator, emulator, device, route-stack, or renderer-specific types.
 - Runtime support libraries MAY use `atom_runtime::tokio_handle()` after the runtime reaches
@@ -556,6 +553,8 @@ function start_runtime(normalized_manifest, resolved_modules):
   pass that config into the hidden singleton init entrypoint.
 - The app entry crate MUST expose `atom_runtime_config()` or an equivalent generated builder entry
   point that returns the runtime configuration used for startup.
+- Apps or host-side code MUST call support-library APIs explicitly when support-library behavior is
+  desired.
 - First-party runtime support crates SHOULD ship as separate crates depending on `atom-runtime`.
 - First-party and third-party runtime support crates SHOULD use the same public free-function API.
 - Navigation SHOULD be implemented as a first-party runtime support crate such as `atom-navigation`,

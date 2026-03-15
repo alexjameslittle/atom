@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use atom_runtime::{self, RuntimeEvent};
 
 const DEFAULT_ROUTE: &str = "root";
-const PLUGIN_ID: &str = "atom.navigation";
+const EVENT_SOURCE_ID: &str = "atom.navigation";
 const CURRENT_ROUTE_KEY: &str = "atom.navigation.current_route";
 const ROUTE_COUNT_KEY: &str = "atom.navigation.route_count";
 
@@ -18,7 +18,7 @@ impl NavigationState {
     }
 }
 
-/// Shared app-facing handle for navigation state owned by `NavigationRuntime`.
+/// Shared app-facing handle for navigation state owned by `Navigation`.
 #[derive(Clone, Debug)]
 pub struct NavigationHandle {
     state: Arc<Mutex<NavigationState>>,
@@ -26,19 +26,35 @@ pub struct NavigationHandle {
 
 impl NavigationHandle {
     pub fn push(&self, route: impl Into<String>) {
-        lock_state(&self.state).routes.push(route.into());
-        self.sync_runtime("push");
+        let (current_route, route_count) = {
+            let mut state = lock_state(&self.state);
+            state.routes.push(route.into());
+            (
+                state
+                    .current_route()
+                    .unwrap_or_else(|| DEFAULT_ROUTE.to_owned()),
+                state.routes.len(),
+            )
+        };
+        record_route_change("push", current_route, route_count);
     }
 
     pub fn replace(&self, route: impl Into<String>) {
-        let mut state = lock_state(&self.state);
-        if let Some(current) = state.routes.last_mut() {
-            *current = route.into();
-        } else {
-            state.routes.push(route.into());
-        }
-        drop(state);
-        self.sync_runtime("replace");
+        let (current_route, route_count) = {
+            let mut state = lock_state(&self.state);
+            if let Some(current) = state.routes.last_mut() {
+                *current = route.into();
+            } else {
+                state.routes.push(route.into());
+            }
+            (
+                state
+                    .current_route()
+                    .unwrap_or_else(|| DEFAULT_ROUTE.to_owned()),
+                state.routes.len(),
+            )
+        };
+        record_route_change("replace", current_route, route_count);
     }
 
     #[must_use]
@@ -48,8 +64,12 @@ impl NavigationHandle {
             return None;
         }
         let popped = state.routes.pop();
+        let current_route = state
+            .current_route()
+            .unwrap_or_else(|| DEFAULT_ROUTE.to_owned());
+        let route_count = state.routes.len();
         drop(state);
-        self.sync_runtime("pop");
+        record_route_change("pop", current_route, route_count);
         popped
     }
 
@@ -62,27 +82,14 @@ impl NavigationHandle {
     pub fn routes(&self) -> Vec<String> {
         lock_state(&self.state).routes.clone()
     }
-
-    fn sync_runtime(&self, action: &'static str) {
-        let state = lock_state(&self.state);
-        let current_route = state
-            .current_route()
-            .unwrap_or_else(|| DEFAULT_ROUTE.to_owned());
-        let route_count = state.routes.len().to_string();
-        drop(state);
-
-        atom_runtime::set_state(CURRENT_ROUTE_KEY, &current_route);
-        atom_runtime::set_state(ROUTE_COUNT_KEY, &route_count);
-        atom_runtime::dispatch_event(RuntimeEvent::plugin(PLUGIN_ID, action, Some(current_route)));
-    }
 }
 
-/// Shared navigation state that can mirror updates into the runtime store.
-pub struct NavigationRuntime {
+/// Plain navigation state that can publish route changes through `atom_runtime::*`.
+pub struct Navigation {
     state: Arc<Mutex<NavigationState>>,
 }
 
-impl NavigationRuntime {
+impl Navigation {
     #[must_use]
     pub fn new(initial_route: impl Into<String>) -> Self {
         let initial_route = initial_route.into();
@@ -106,6 +113,16 @@ impl NavigationRuntime {
     }
 }
 
+fn record_route_change(action: &'static str, current_route: String, route_count: usize) {
+    atom_runtime::set_state(CURRENT_ROUTE_KEY, &current_route);
+    atom_runtime::set_state(ROUTE_COUNT_KEY, &route_count.to_string());
+    atom_runtime::dispatch_event(RuntimeEvent::plugin(
+        EVENT_SOURCE_ID,
+        action,
+        Some(current_route),
+    ));
+}
+
 fn lock_state(state: &Arc<Mutex<NavigationState>>) -> MutexGuard<'_, NavigationState> {
     match state.lock() {
         Ok(guard) => guard,
@@ -115,18 +132,18 @@ fn lock_state(state: &Arc<Mutex<NavigationState>>) -> MutexGuard<'_, NavigationS
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_ROUTE, NavigationRuntime};
+    use super::{DEFAULT_ROUTE, Navigation};
 
     #[test]
     fn empty_initial_route_falls_back_to_root() {
-        let runtime = NavigationRuntime::new("");
-        assert_eq!(runtime.handle().routes(), vec![DEFAULT_ROUTE.to_owned()]);
+        let navigation = Navigation::new("");
+        assert_eq!(navigation.handle().routes(), vec![DEFAULT_ROUTE.to_owned()]);
     }
 
     #[test]
     fn handle_updates_stack() {
-        let runtime = NavigationRuntime::new("home");
-        let handle = runtime.handle();
+        let navigation = Navigation::new("home");
+        let handle = navigation.handle();
 
         handle.push("details");
         handle.push("settings");
@@ -144,8 +161,8 @@ mod tests {
 
     #[test]
     fn pop_preserves_last_route() {
-        let runtime = NavigationRuntime::new("home");
-        let handle = runtime.handle();
+        let navigation = Navigation::new("home");
+        let handle = navigation.handle();
 
         handle.push("details");
         assert_eq!(handle.pop().as_deref(), Some("details"));
@@ -155,8 +172,8 @@ mod tests {
 
     #[test]
     fn replace_updates_current_route() {
-        let runtime = NavigationRuntime::new("home");
-        let handle = runtime.handle();
+        let navigation = Navigation::new("home");
+        let handle = navigation.handle();
 
         handle.replace("profile");
 

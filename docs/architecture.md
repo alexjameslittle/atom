@@ -89,11 +89,12 @@ Dependency direction should move one way:
   - Structured logging via `tracing` at lifecycle transitions
   - Hidden generated-host entrypoints for singleton init, lifecycle dispatch, and shutdown
 - `atom-navigation`
-  - First-party runtime support crate that owns a route stack outside the kernel and mirrors state
-    through `atom_runtime::*`
+  - First-party library that owns a route stack outside the kernel and may publish route changes
+    through `atom_runtime::*` from its public API
   - Proves navigation is a library concern rather than kernel state
 - `atom-analytics`
-  - First-party runtime support crate that buffers and flushes analytics batches outside the kernel
+  - First-party library that buffers app-owned analytics events outside the kernel and may publish
+    tracking state through `atom_runtime::*` from its public API
   - Proves non-routing headless app behavior composes through the same public runtime free functions
 
 ## Metadata Flow
@@ -128,8 +129,9 @@ Dependency direction should move one way:
 - Keep backend-specific assertions and fixtures in `atom-backend-*` crates or schema-owning crates.
 - Keep examples representative. The hello-world example should exercise real repo conventions, not a
   toy path that bypasses them.
-- Keep first-party plugins outside `atom-runtime`. The kernel owns lifecycle and registration, while
-  higher-level concerns like navigation and analytics stay in separate crates.
+- Keep first-party runtime libraries outside `atom-runtime`. The kernel owns singleton lifecycle and
+  state primitives, while higher-level concerns like navigation and analytics stay in separate
+  crates.
 
 ## When Adding A New Layer
 
