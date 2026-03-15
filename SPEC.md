@@ -441,8 +441,10 @@ Rules:
   or helper expansion point
 - `#[atom_export]` MAY generate FFI wrappers, but those wrappers MUST target stable `atom-ffi` and
   `atom-runtime` APIs rather than embedding backend-specific behavior
-- type-specific request/response codec hooks used by helper-generated exports MUST live in the
-  ABI-owned `atom-ffi` surface, not in backend crates
+- `#[atom_import]` MAY generate native-provider registration glue plus safe Rust wrappers, but those
+  wrappers MUST target stable `atom-ffi` APIs rather than embedding backend-specific behavior
+- type-specific request/response codec hooks used by helper-generated exports and imports MUST live
+  in the ABI-owned `atom-ffi` surface, not in backend crates
 
 ### 6.4 Module Resolution Rules
 
@@ -658,6 +660,27 @@ Export naming rules:
 - generated export names MUST use the form `atom_<module_id>_<method_name>`
 - `<module_id>` and `<method_name>` MUST use the normalized manifest identifiers
 - export name collisions MUST fail generation with `CNG_CONFLICT`
+
+### 8.3.1 Helper-Generated Import Registration
+
+Rust helper-generated imports MAY expose a per-module native registration entry point with this
+shape:
+
+```c
+void atom_<module_id>_register_imports(...);
+```
+
+Rules:
+
+- helper-generated import registration symbols MUST use the form `atom_<module_id>_register_imports`
+- parameters MUST be native function pointers in imported-method declaration order
+- imported methods with no Rust return type MUST use `extern "C" fn(AtomSlice)` provider pointers
+- imported methods with a Rust return type MUST use
+  `extern "C" fn(AtomSlice, AtomOwnedBuffer *out_response_flatbuffer)` provider pointers
+- helper-generated import wrappers MUST panic with a clear message when called before native
+  providers are registered
+- helper-generated import wrappers MUST encode request payloads and decode response payloads through
+  stable `atom-ffi` codec hooks or generated bindings that target that ABI-owned seam
 
 ### 8.4 Memory Ownership Rules
 

@@ -1,14 +1,16 @@
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use atom_ffi::{
-    AtomError, AtomErrorCode, AtomExportInput, AtomExportOutput, AtomOwnedBuffer, AtomResult,
-    AtomSlice,
+    AtomError, AtomErrorCode, AtomExportInput, AtomExportOutput, AtomImportOutput, AtomOwnedBuffer,
+    AtomResult, AtomSlice, write_response_buffer,
 };
 use atom_runtime::RuntimeConfig;
 use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Table, Vector, root_unchecked};
 
 static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static RUNTIME_INIT: OnceLock<()> = OnceLock::new();
+static IMPORT_STATE: LazyLock<Mutex<ImportState>> =
+    LazyLock::new(|| Mutex::new(ImportState::default()));
 
 #[atom_macros::atom_record]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,8 +33,20 @@ struct DeviceInfo {
     status: ConnectionStatus,
 }
 
+#[atom_macros::atom_record]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GetResult {
+    value: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EchoResponse(String);
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ImportState {
+    set_calls: Vec<(String, String)>,
+    removed_keys: Vec<String>,
+}
 
 impl From<ConnectionStatus> for u8 {
     fn from(value: ConnectionStatus) -> Self {
@@ -107,6 +121,14 @@ impl AtomExportOutput for ConnectionStatus {
     }
 }
 
+impl AtomImportOutput for GetResult {
+    fn decode_atom_import(input: &[u8]) -> AtomResult<Self> {
+        let table = unsafe { root_unchecked::<Table<'_>>(input) };
+        let value = unsafe { table.get::<ForwardsUOffset<&str>>(4, None) }.map(str::to_owned);
+        Ok(Self { value })
+    }
+}
+
 #[atom_macros::atom_export]
 fn get() -> DeviceInfo {
     DeviceInfo {
@@ -174,11 +196,31 @@ fn increment_optional(value: Option<i32>) -> Option<i32> {
     value.map(|value| value + 1)
 }
 
+#[atom_macros::atom_import]
+extern "C" {
+    pub fn imported_ping() -> String;
+    pub fn imported_set(key: String, value: String);
+    pub fn imported_get(key: String) -> GetResult;
+    pub fn imported_remove(key: String);
+}
+
 fn encode_echo_request(message: &str) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let message = builder.create_string(message);
     let table = builder.start_table();
     builder.push_slot_always(4, message);
+    let root = builder.end_table(table);
+    builder.finish(root, None);
+    builder.finished_data().to_vec()
+}
+
+fn encode_get_result(value: Option<&str>) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let value = value.map(|value| builder.create_string(value));
+    let table = builder.start_table();
+    if let Some(value) = value {
+        builder.push_slot_always(4, value);
+    }
     let root = builder.end_table(table);
     builder.finish(root, None);
     builder.finished_data().to_vec()
@@ -204,6 +246,17 @@ fn decode_string_response(bytes: &[u8]) -> String {
     unsafe { table.get::<ForwardsUOffset<&str>>(4, None) }
         .unwrap_or("")
         .to_owned()
+}
+
+fn decode_string_pair(bytes: &[u8]) -> (String, String) {
+    let table = unsafe { root_unchecked::<Table<'_>>(bytes) };
+    let first = unsafe { table.get::<ForwardsUOffset<&str>>(4, None) }
+        .unwrap_or("")
+        .to_owned();
+    let second = unsafe { table.get::<ForwardsUOffset<&str>>(6, None) }
+        .unwrap_or("")
+        .to_owned();
+    (first, second)
 }
 
 fn decode_status(bytes: &[u8]) -> ConnectionStatus {
@@ -289,6 +342,64 @@ fn decode_optional_i32_response(bytes: &[u8]) -> Option<i32> {
 
 fn take_buffer(buffer: AtomOwnedBuffer) -> Vec<u8> {
     unsafe { buffer.into_vec() }
+}
+
+fn reset_import_state() {
+    *IMPORT_STATE.lock().unwrap() = ImportState::default();
+}
+
+fn clear_import_registration() {
+    __atom_import_register_imports(None, None, None, None);
+}
+
+fn register_import_providers() {
+    __atom_import_register_imports(
+        Some(imported_ping_provider),
+        Some(imported_set_provider),
+        Some(imported_get_provider),
+        Some(imported_remove_provider),
+    );
+}
+
+fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+    match panic.downcast::<String>() {
+        Ok(message) => *message,
+        Err(panic) => match panic.downcast::<&'static str>() {
+            Ok(message) => (*message).to_owned(),
+            Err(_) => "non-string panic".to_owned(),
+        },
+    }
+}
+
+extern "C" fn imported_ping_provider(input: AtomSlice, out: *mut AtomOwnedBuffer) {
+    assert!(unsafe { input.as_bytes() }.is_empty());
+    unsafe {
+        write_response_buffer(out, encode_echo_request("pong"));
+    }
+}
+
+extern "C" fn imported_set_provider(input: AtomSlice) {
+    let args = decode_string_pair(unsafe { input.as_bytes() });
+    let mut state = IMPORT_STATE.lock().unwrap();
+    state.set_calls.push(args);
+}
+
+extern "C" fn imported_get_provider(input: AtomSlice, out: *mut AtomOwnedBuffer) {
+    let key = decode_string_response(unsafe { input.as_bytes() });
+    let value = if key == "missing" {
+        None
+    } else {
+        Some(format!("native:{key}"))
+    };
+    unsafe {
+        write_response_buffer(out, encode_get_result(value.as_deref()));
+    }
+}
+
+extern "C" fn imported_remove_provider(input: AtomSlice) {
+    let key = decode_string_response(unsafe { input.as_bytes() });
+    let mut state = IMPORT_STATE.lock().unwrap();
+    state.removed_keys.push(key);
 }
 
 fn ensure_runtime_initialized() {
@@ -535,4 +646,55 @@ fn primitive_option_none_round_trips_through_ffi_boundary() {
     assert_eq!(status, 0);
     assert!(take_buffer(error).is_empty());
     assert_eq!(decode_optional_i32_response(&take_buffer(response)), None);
+}
+
+#[test]
+fn atom_import_round_trips_registered_native_providers() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_import_state();
+    clear_import_registration();
+    register_import_providers();
+
+    assert_eq!(imported_ping(), "pong");
+
+    imported_set("theme".to_owned(), "light".to_owned());
+    assert_eq!(
+        IMPORT_STATE.lock().unwrap().set_calls,
+        vec![("theme".to_owned(), "light".to_owned())]
+    );
+
+    assert_eq!(
+        imported_get("theme".to_owned()),
+        GetResult {
+            value: Some("native:theme".to_owned()),
+        }
+    );
+    assert_eq!(
+        imported_get("missing".to_owned()),
+        GetResult { value: None }
+    );
+
+    imported_remove("theme".to_owned());
+    assert_eq!(
+        IMPORT_STATE.lock().unwrap().removed_keys,
+        vec!["theme".to_owned()]
+    );
+
+    clear_import_registration();
+}
+
+#[test]
+fn atom_import_panics_when_provider_is_not_registered() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_import_state();
+    clear_import_registration();
+
+    let panic = std::panic::catch_unwind(|| imported_set("theme".to_owned(), "dark".to_owned()))
+        .expect_err("unregistered import should panic");
+    let message = panic_message(panic);
+    assert!(message.contains("atom_import"));
+    assert!(message.contains("imported_set"));
+    assert!(message.contains("not registered"));
+
+    clear_import_registration();
 }

@@ -24,7 +24,7 @@ Dependency direction should move one way:
   - Stable error taxonomy
   - FlatBuffer error encoding
   - ABI-adjacent types
-  - Generated export buffer/codecs helpers used by proc-macro-expanded bridges
+  - Import/export buffer and codec helpers used by proc-macro-expanded bridges
 - `atom-manifest`
   - Loads Bazel-generated app metadata
   - Validates app/platform/build configuration
@@ -76,7 +76,8 @@ Dependency direction should move one way:
   - Exposes uniform backend-aware verbs such as `atom run --platform <platform>`
   - Must stay a thin wrapper, not an alternate build system
 - `atom-macros`
-  - Provides `#[atom_record]` and `#[atom_export]` as Rust-authored module ergonomics
+  - Provides `#[atom_record]`, `#[atom_export]`, and `#[atom_import]` as Rust-authored module
+    ergonomics
   - Expands only against stable `atom-ffi` and `atom-runtime` APIs
   - Must not own CNG discovery, schema planning, or backend-specific behavior
 - `atom-runtime`
