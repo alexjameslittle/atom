@@ -1,9 +1,10 @@
 # AGENTS
 
-Atom is a Rust-first mobile application framework. App logic, runtime plugins, and modules are
-authored in Rust. Continuous Native Generation (CNG) derives Swift/Kotlin host code from Bazel
+Atom is a Rust-first mobile application framework. App logic, runtime support libraries, and modules
+are authored in Rust. Continuous Native Generation (CNG) derives Swift/Kotlin host code from Bazel
 metadata. The CLI orchestrates Bazel builds, device deployment, and code generation. There is no UI
-renderer — navigation, persistence, and analytics are plugins, not kernel features.
+renderer; navigation, persistence, and analytics remain library concerns rather than kernel
+features.
 
 Start here, then read [docs/README.md](docs/README.md).
 

@@ -48,14 +48,12 @@ pub fn atom_runtime_config() -> atom_runtime::RuntimeConfig {
 The surrounding example crates now exercise the module/runtime boundary in plain Rust:
 
 - `modules/device_info` exposes `get() -> DeviceInfo` as a plain Rust helper
-- `crates/atom-navigation` and `crates/atom-analytics` are plain libraries whose public APIs may
-  call `atom_runtime::*` when the app chooses to use them
 - `plugins/lifecycle_logger` is a plain helper crate that records state, dispatches events, and
   performs async warmup through the public runtime singleton API without `PluginContext` or
   runtime-side module registration
 
 That keeps the proof of state changes and async work inside the same public runtime API surface used
-by first-party and third-party support crates without reintroducing runtime-managed plugin hooks.
+by app-owned and third-party support crates without reintroducing runtime-managed plugin hooks.
 
 Run it from the repository root:
 
