@@ -41,8 +41,10 @@ Dependency direction should move one way:
   - Validates framework-wide extension compatibility and delegates backend-specific compatibility
     checks to registered backends
   - Merges app + module + config-plugin configuration into deterministic generation plans
+  - Parses Rust module source metadata (`#[atom_record]`, `#[atom_export]`, `#[atom_import]`) and
+    emits per-module FlatBuffers schema/build packages for Rust, Swift, and Kotlin bindings
   - Dispatches backend planning and emission through registered `GenerationBackend` contracts
-  - Writes generic schema/contributed files plus delegates backend host-tree emission
+  - Writes generic contributed files plus delegates backend host-tree emission
 - `atom-cng-app-icon`
   - First-party config/CNG plugin crate implementing the public `ConfigPlugin` trait
   - Owns app icon config parsing, validation, file contributions, and platform resource wiring

@@ -17,6 +17,8 @@ struct RawModuleManifest {
     min_atom_version: Option<String>,
     ios_min_deployment_target: Option<String>,
     android_min_sdk: Option<u32>,
+    crate_root: Option<String>,
+    generated_root: Option<String>,
     #[serde(default)]
     depends_on: Vec<String>,
     #[serde(default)]
@@ -134,12 +136,31 @@ pub(crate) fn load_module_manifest_from_path(
     }
 
     let depends_on = validate_labels(parsed.depends_on, "depends_on", metadata_path)?;
+    let crate_root = match kind {
+        ModuleKind::Rust => Some(validate_repo_relative_path(
+            repo_root,
+            parsed.crate_root,
+            "crate_root",
+            metadata_path,
+            true,
+            true,
+        )?),
+        ModuleKind::Native => None,
+    };
+    let generated_root = validate_repo_relative_path(
+        repo_root,
+        parsed.generated_root,
+        "generated_root",
+        metadata_path,
+        true,
+        false,
+    )?;
     let schema_files = validate_repo_relative_paths(
         repo_root,
         parsed.schema_files,
         "schema_files",
         metadata_path,
-        true,
+        matches!(kind, ModuleKind::Native),
     )?;
     let ios_srcs =
         validate_repo_relative_paths(repo_root, parsed.ios_srcs, "ios_srcs", metadata_path, false)?;
@@ -159,6 +180,8 @@ pub(crate) fn load_module_manifest_from_path(
         min_atom_version: parsed.min_atom_version,
         ios_min_deployment_target: parsed.ios_min_deployment_target,
         android_min_sdk: parsed.android_min_sdk,
+        crate_root,
+        generated_root,
         depends_on,
         schema_files,
         methods: parsed.methods,
@@ -280,4 +303,53 @@ fn validate_repo_relative_paths(
         validated.push(path);
     }
     Ok(validated)
+}
+
+fn validate_repo_relative_path(
+    repo_root: &Utf8Path,
+    raw: Option<String>,
+    field: &str,
+    metadata_path: &Utf8Path,
+    required: bool,
+    must_exist: bool,
+) -> AtomResult<Utf8PathBuf> {
+    let Some(raw) = raw else {
+        if required {
+            return Err(AtomError::with_path(
+                AtomErrorCode::ModuleManifestInvalid,
+                format!("{field} must be set"),
+                metadata_path.as_str(),
+            ));
+        }
+        return Ok(Utf8PathBuf::new());
+    };
+
+    if raw.is_empty()
+        || raw
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ModuleManifestInvalid,
+            format!("{field} must be a normalized repo-relative path"),
+            metadata_path.as_str(),
+        ));
+    }
+
+    let path = Utf8PathBuf::from(raw);
+    if path.is_absolute() {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ModuleManifestInvalid,
+            format!("{field} must be relative"),
+            metadata_path.as_str(),
+        ));
+    }
+    if must_exist && !repo_root.join(&path).exists() {
+        return Err(AtomError::with_path(
+            AtomErrorCode::ModuleNotFound,
+            format!("configured module input is missing: {path}"),
+            metadata_path.as_str(),
+        ));
+    }
+    Ok(path)
 }

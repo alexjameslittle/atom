@@ -5,15 +5,12 @@ atom_module(
     name = "device_info",
     android_srcs = ["android/DeviceInfoModule.kt"],
     ios_srcs = ["ios/DeviceInfoModule.swift"],
-    methods = [
-        {
-            "name": "get",
-            "request_table": "atom.device_info.GetDeviceInfoRequest",
-            "response_table": "atom.device_info.GetDeviceInfoResponse",
-        },
+    proc_macro_deps = ["//crates/atom-macros"],
+    deps = [
+        "//crates/atom-ffi",
+        "//crates/atom-runtime",
+        "@crates//:flatbuffers",
     ],
-    schema_files = ["schema/device_info.fbs"],
-    deps = [],
 )
 
 rust_test(
