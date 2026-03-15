@@ -555,10 +555,11 @@ function start_runtime(config):
   point that returns the runtime configuration used for startup.
 - Apps or host-side code MUST call support-library APIs explicitly when support-library behavior is
   desired.
-- First-party runtime support crates SHOULD ship as separate crates depending on `atom-runtime`.
-- First-party and third-party runtime support crates SHOULD use the same public free-function API.
-- Navigation SHOULD be implemented as a first-party runtime support crate such as `atom-navigation`,
-  not as a kernel concern.
+- Runtime support crates SHOULD ship as separate crates depending on `atom-runtime` when reuse is
+  warranted.
+- App-owned, example-owned, and third-party runtime support crates SHOULD use the same public
+  free-function API.
+- Navigation SHOULD remain a library concern rather than a kernel concern.
 - Destination- or platform-specific behavior MAY be packaged as separate adapter crates outside
   `atom-runtime`, but those crates MUST NOT redefine lifecycle semantics.
 - `atom-runtime` MUST NOT own route stacks, screen descriptors, destination discovery, device
@@ -1539,7 +1540,7 @@ Required behavior:
 - runtime support crates follow Section 7.6
 - apps assemble runtime config in app-owned code rather than through kernel-side discovery
 - generated hosts do not require per-library bootstrap changes
-- the same startup path works for framework-owned and third-party-style support crates
+- the same startup path works for app-owned, example-owned, and third-party-style support crates
 
 Conformance example:
 
@@ -1547,21 +1548,22 @@ Conformance example:
 - Expected output: runtime boots successfully with the support crate linked through app-owned Rust
   code and without changes to `atom-runtime` or generated host templates
 
-### 11.7 Phase 4C: First-Party Runtime Libraries
+### 11.7 Phase 4C: Runtime Support Library Patterns
 
 Required behavior:
 
-- first-party runtime support crates ship as separate crates outside `atom-runtime`
-- no first-party runtime support types are re-exported from `atom-runtime`
-- at least one routing/navigation-style library is proven as a library concern rather than a kernel
-  concern
-- at least one additional non-routing support crate proves the model is generic
+- runtime support crates ship as separate crates outside `atom-runtime` when shared reuse is
+  justified
+- no runtime support types are re-exported from `atom-runtime`
+- support-library behavior remains a library concern rather than a kernel concern
+- support-library patterns stay generic enough for both app-owned and third-party crates
 
 Conformance example:
 
-- Input: canonical app with `atom-navigation` or `atom-router` plus one additional support crate
-- Expected output: runtime boots successfully, library behavior is available through the shared
-  public runtime API, and either library can be removed without kernel changes
+- Input: canonical app or example workspace with one runtime support crate linked beside the app
+  entry crate
+- Expected output: runtime boots successfully, support-library behavior is available through the
+  shared public runtime API, and the library can be removed without kernel changes
 
 ### 11.8 Phase 5: Config/CNG Plugin System
 
@@ -1669,7 +1671,8 @@ Required behavior:
   framework automation MUST NOT depend on app-specific generated hooks
 - the evaluation model remains extensible to additional platforms and destination kinds through
   capability discovery
-- apps can consume first-party and third-party-style plugin crates through documented workflows
+- apps can consume app-owned and third-party-style runtime support crates through documented
+  workflows
 
 Conformance example:
 
