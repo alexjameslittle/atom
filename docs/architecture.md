@@ -76,18 +76,16 @@ Dependency direction should move one way:
   - Runtime kernel: lifecycle state machine (Created → Initializing → Running →
     Backgrounded/Suspended → Terminating → Terminated)
   - Kernel-owned state container and inspection snapshot (`RuntimeSnapshot`) for state values,
-    dispatched events, completed effects, and module call records
-  - Module lifecycle management: init in dependency order, shutdown in reverse
+    dispatched events, and completed effects
   - Runtime plugin host API (`RuntimePlugin` trait) for observing lifecycle events and owning
     plugin-local state
   - App-owned runtime config assembly through `atom_runtime_config()` in the app crate
   - Tokio `current_thread` async runtime available via `PluginContext`
-  - `PluginContext` APIs for shared state writes, event/effect recording, async task execution, and
-    runtime module calls
+  - `PluginContext` APIs for shared state writes, event/effect recording, and async task execution
   - Structured logging via `tracing` at lifecycle transitions
-  - Handle-based registry for FFI access from generated native hosts
-  - `ensure_running()` gate plus runtime-side module method registration/call plumbing for
-    Rust-backed modules
+  - Handle-based registry plus `running_plugin_context()` access for generated native bridges
+  - Module crates consume public runtime APIs directly; generated bridge code owns FlatBuffer
+    decode/encode and calls module crate methods without kernel-side callback dispatch
 - `atom-navigation`
   - First-party runtime plugin crate that owns a route stack through the public `RuntimePlugin`
     contract
@@ -110,9 +108,11 @@ Dependency direction should move one way:
    and host-tree emission through the shared CNG contracts.
 8. `atom-deploy` resolves destinations, proof plans, and backend sessions through registered backend
    contracts when needed.
-9. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
-   kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
-   Rust-backed runtime module registrations, enter through that app-owned configuration path.
+9. Generated runtime bridge code links the app crate, calls `atom_runtime_config()` without
+   kernel-side plugin discovery, and uses `running_plugin_context()` plus module crate APIs when it
+   needs to service Rust-backed module exports. Any first-party or third-party plugin crates enter
+   through that app-owned runtime configuration path, while Rust-backed modules enter through Bazel
+   module metadata plus generated bridge code rather than runtime registration.
 
 ## Boundaries To Preserve
 

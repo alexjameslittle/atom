@@ -1,3 +1,4 @@
+mod bridge;
 mod emit;
 mod templates;
 
@@ -17,6 +18,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
 use serde_json::Value;
 
+pub use crate::bridge::render_rust_module_exports;
 pub use crate::emit::emit_host_tree;
 pub use crate::emit::write_file as write_generated_file;
 

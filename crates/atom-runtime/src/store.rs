@@ -1,11 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
 
-use crate::config::ModuleMethodHandler;
 use crate::state::RuntimeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,11 +22,6 @@ pub enum RuntimeEvent {
         plugin_id: String,
         task_name: String,
         success: bool,
-    },
-    ModuleCallCompleted {
-        module_id: String,
-        method: String,
-        response_len: usize,
     },
 }
 
@@ -56,11 +50,6 @@ pub enum RuntimeEffect {
         plugin_id: String,
         task_name: String,
     },
-    ModuleCall {
-        module_id: String,
-        method: String,
-        request_len: usize,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,21 +65,11 @@ pub struct RuntimeEffectRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleCallRecord {
-    pub sequence: u64,
-    pub module_id: String,
-    pub method: String,
-    pub request_len: usize,
-    pub response_len: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSnapshot {
     pub lifecycle: RuntimeState,
     pub values: BTreeMap<String, String>,
     pub events: Vec<RuntimeEventRecord>,
     pub effects: Vec<RuntimeEffectRecord>,
-    pub module_calls: Vec<ModuleCallRecord>,
 }
 
 impl RuntimeSnapshot {
@@ -100,14 +79,12 @@ impl RuntimeSnapshot {
             values: BTreeMap::new(),
             events: Vec::new(),
             effects: Vec::new(),
-            module_calls: Vec::new(),
         }
     }
 }
 
 pub(crate) struct RuntimeHost {
     snapshot: Mutex<RuntimeSnapshot>,
-    module_methods: Mutex<HashMap<(String, String), ModuleMethodHandler>>,
     next_sequence: AtomicU64,
 }
 
@@ -115,7 +92,6 @@ impl RuntimeHost {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             snapshot: Mutex::new(RuntimeSnapshot::new(RuntimeState::Created)),
-            module_methods: Mutex::new(HashMap::new()),
             next_sequence: AtomicU64::new(1),
         })
     }
@@ -154,80 +130,6 @@ impl RuntimeHost {
         lock_snapshot(&self.snapshot)
             .effects
             .push(RuntimeEffectRecord { sequence, effect });
-    }
-
-    pub(crate) fn register_module_method(
-        &self,
-        module_id: &str,
-        method_name: &str,
-        handler: ModuleMethodHandler,
-    ) -> AtomResult<()> {
-        let key = (module_id.to_owned(), method_name.to_owned());
-        let previous = lock_module_methods(&self.module_methods).insert(key.clone(), handler);
-        if previous.is_some() {
-            return Err(AtomError::new(
-                AtomErrorCode::ModuleManifestInvalid,
-                format!(
-                    "duplicate runtime module method registration: {}.{}",
-                    key.0, key.1
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn call_module(
-        &self,
-        ctx: &crate::plugin::PluginContext,
-        module_id: &str,
-        method: &str,
-        request: &[u8],
-    ) -> AtomResult<Vec<u8>> {
-        if self.snapshot().lifecycle != RuntimeState::Running {
-            return Err(AtomError::new(
-                AtomErrorCode::RuntimeTransitionInvalid,
-                "runtime module calls require Running state",
-            ));
-        }
-
-        self.emit_effect(RuntimeEffect::ModuleCall {
-            module_id: module_id.to_owned(),
-            method: method.to_owned(),
-            request_len: request.len(),
-        });
-
-        let key = (module_id.to_owned(), method.to_owned());
-        let handler = lock_module_methods(&self.module_methods)
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| {
-                AtomError::new(
-                    AtomErrorCode::ModuleNotFound,
-                    format!("runtime module method not found: {}.{}", key.0, key.1),
-                )
-            })?;
-
-        let response = handler(ctx, request)?;
-        let sequence = self.next_sequence();
-        let mut snapshot = lock_snapshot(&self.snapshot);
-        snapshot.events.push(RuntimeEventRecord {
-            sequence,
-            event: RuntimeEvent::ModuleCallCompleted {
-                module_id: module_id.to_owned(),
-                method: method.to_owned(),
-                response_len: response.len(),
-            },
-        });
-        snapshot.module_calls.push(ModuleCallRecord {
-            sequence,
-            module_id: module_id.to_owned(),
-            method: method.to_owned(),
-            request_len: request.len(),
-            response_len: response.len(),
-        });
-        drop(snapshot);
-
-        Ok(response)
     }
 
     pub(crate) fn run_task<F, T>(
@@ -279,15 +181,6 @@ impl RuntimeHost {
 
 fn lock_snapshot(snapshot: &Mutex<RuntimeSnapshot>) -> MutexGuard<'_, RuntimeSnapshot> {
     match snapshot.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-fn lock_module_methods(
-    methods: &Mutex<HashMap<(String, String), ModuleMethodHandler>>,
-) -> MutexGuard<'_, HashMap<(String, String), ModuleMethodHandler>> {
-    match methods.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

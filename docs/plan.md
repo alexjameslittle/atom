@@ -79,7 +79,7 @@ The runtime kernel owns:
 - Event dispatch and the deterministic state transition boundary.
 - Async task execution and effect scheduling.
 - Structured logging and inspection hooks.
-- Runtime-side module registration and call plumbing.
+- Public runtime context access for generated bridges and direct module crate APIs.
 - Runtime plugin registration and coordination.
 
 This should be platform-agnostic Rust with no iOS/Android logic mixed into it. It should not bake in
@@ -562,13 +562,14 @@ Deliverables:
 - Event and effect model
 - Async runtime integration
 - Structured logging
-- Runtime-side module call plumbing
+- Public runtime APIs consumable by module crates
 - Runtime plugin host API
 
 Exit criteria:
 
 - The example app boots inside the runtime kernel on both platforms
-- The example app performs real state changes, async work, and module calls on both platforms
+- The example app performs real state changes, async work, and direct module crate calls on both
+  platforms
 - The runtime exposes one stable execution model for apps and plugins without requiring a renderer
 
 ### Phase 4B: Runtime plugin SDK and registration

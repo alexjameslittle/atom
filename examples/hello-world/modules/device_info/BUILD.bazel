@@ -1,4 +1,5 @@
 load("@atom//bzl/atom:defs.bzl", "atom_module")
+load("@rules_rust//rust:defs.bzl", "rust_test")
 
 atom_module(
     name = "device_info",
@@ -13,7 +14,12 @@ atom_module(
     ],
     schema_files = ["schema/device_info.fbs"],
     deps = [
+        "//crates/atom-ffi",
         "//crates/atom-runtime",
-        "@crates//:flatbuffers",
     ],
+)
+
+rust_test(
+    name = "device_info_test",
+    crate = ":device_info",
 )

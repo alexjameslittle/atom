@@ -7,6 +7,7 @@ use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult, AtomRun
 use crate::config::RuntimeConfig;
 use crate::kernel::Runtime;
 use crate::logging;
+use crate::plugin::PluginContext;
 use crate::state::RuntimeState;
 use crate::store::RuntimeSnapshot;
 
@@ -38,7 +39,7 @@ fn get_runtime_mut(
 /// # Errors
 ///
 /// Returns an error if the runtime registry mutex is poisoned, tokio fails to
-/// initialize, or any module/plugin init fails.
+/// initialize, or any plugin startup hook fails.
 pub fn init_runtime(config: RuntimeConfig) -> AtomResult<AtomRuntimeHandle> {
     logging::init_logging();
 
@@ -88,6 +89,33 @@ pub fn current_snapshot(handle: AtomRuntimeHandle) -> Option<RuntimeSnapshot> {
         .and_then(|runtimes| runtimes.get(&handle).map(Runtime::snapshot))
 }
 
+/// Clone the live plugin context for a running runtime so generated/native glue
+/// can invoke module crate APIs directly.
+///
+/// # Errors
+///
+/// Returns an error if the handle is unknown, the registry is poisoned, or the
+/// runtime is not in the `Running` state.
+pub fn running_plugin_context(handle: AtomRuntimeHandle) -> AtomResult<PluginContext<'static>> {
+    let runtimes = lock_runtimes()?;
+    let runtime = runtimes.get(&handle).ok_or_else(|| {
+        AtomError::new(
+            AtomErrorCode::BridgeInvalidArgument,
+            format!("unknown runtime handle: {handle}"),
+        )
+    })?;
+    if runtime.state() != RuntimeState::Running {
+        return Err(AtomError::new(
+            AtomErrorCode::RuntimeTransitionInvalid,
+            format!(
+                "runtime is {:?}, public module APIs require Running state",
+                runtime.state()
+            ),
+        ));
+    }
+    Ok(runtime.context())
+}
+
 /// Gate function for CNG-generated per-method exports. Returns `Ok(())` if the
 /// runtime is in the `Running` state, or an error otherwise.
 ///
@@ -109,7 +137,7 @@ pub fn ensure_running(handle: AtomRuntimeHandle) -> AtomResult<()> {
         Err(AtomError::new(
             AtomErrorCode::RuntimeTransitionInvalid,
             format!(
-                "runtime is {:?}, module calls require Running state",
+                "runtime is {:?}, public module APIs require Running state",
                 runtime.state()
             ),
         ))
@@ -125,7 +153,7 @@ mod tests {
 
     use super::{
         current_snapshot, current_state, ensure_running, handle_lifecycle, init_runtime,
-        shutdown_runtime,
+        running_plugin_context, shutdown_runtime,
     };
 
     #[test]
@@ -174,6 +202,14 @@ mod tests {
             Some(RuntimeState::Backgrounded),
         );
 
+        shutdown_runtime(handle);
+    }
+
+    #[test]
+    fn running_plugin_context_clones_live_context() {
+        let handle = init_runtime(RuntimeConfig::default()).expect("init");
+        let ctx = running_plugin_context(handle).expect("context should be available");
+        assert_eq!(ctx.handle, handle);
         shutdown_runtime(handle);
     }
 }

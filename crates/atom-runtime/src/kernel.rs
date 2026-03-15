@@ -10,8 +10,6 @@ use crate::store::{RuntimeEvent, RuntimeHost, RuntimeSnapshot};
 
 pub(crate) struct Runtime {
     state: RuntimeState,
-    module_ids: Vec<String>,
-    module_shutdown_fns: Vec<Option<Box<dyn FnOnce() + Send>>>,
     plugins: Vec<Box<dyn RuntimePlugin>>,
     ctx: PluginContext<'static>,
     host: Arc<RuntimeHost>,
@@ -27,7 +25,6 @@ impl fmt::Debug for Runtime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Runtime")
             .field("state", &self.state)
-            .field("module_ids", &self.module_ids)
             .finish_non_exhaustive()
     }
 }
@@ -42,7 +39,7 @@ impl Drop for Runtime {
 
 impl Runtime {
     /// Create and start a runtime with the given config. Runs the full init
-    /// sequence: Created → Initializing → (modules) → (plugins) → Running.
+    /// sequence: Created → Initializing → (plugins) → Running.
     pub(crate) fn start(handle: AtomRuntimeHandle, mut config: RuntimeConfig) -> AtomResult<Self> {
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -59,8 +56,6 @@ impl Runtime {
 
         let mut runtime = Self {
             state: RuntimeState::Created,
-            module_ids: Vec::new(),
-            module_shutdown_fns: Vec::new(),
             plugins: Vec::new(),
             ctx,
             host,
@@ -71,35 +66,8 @@ impl Runtime {
         runtime.host.set_lifecycle(RuntimeState::Initializing);
         tracing::info!("runtime initializing");
 
-        // Sort modules by init_order, then init in order.
-        config.modules.sort_by_key(|m| m.init_order);
-
-        for module in config.modules {
-            tracing::info!(module_id = %module.id, "initializing module");
-            if let Err(err) = (module.init_fn)(&runtime.ctx) {
-                tracing::error!(module_id = %module.id, error = %err, "module init failed");
-                runtime.state = RuntimeState::Failed;
-                runtime.host.set_lifecycle(RuntimeState::Failed);
-                return Err(AtomError::new(
-                    AtomErrorCode::ModuleInitFailed,
-                    format!("module '{}' init failed: {err}", module.id),
-                ));
-            }
-            for method in &module.methods {
-                runtime
-                    .host
-                    .register_module_method(&module.id, &method.name, Arc::clone(&method.handler))
-                    .inspect_err(|_error| {
-                        runtime.state = RuntimeState::Failed;
-                        runtime.host.set_lifecycle(RuntimeState::Failed);
-                    })?;
-            }
-            runtime.module_ids.push(module.id);
-            runtime.module_shutdown_fns.push(module.shutdown_fn);
-        }
-
         // Init plugins in registration order.
-        for plugin in &mut config.plugins {
+        for mut plugin in config.plugins.drain(..) {
             tracing::info!(plugin_id = %plugin.id(), "initializing plugin");
             if let Err(err) = plugin.on_init(&runtime.ctx) {
                 tracing::error!(plugin_id = %plugin.id(), error = %err, "plugin init failed");
@@ -110,8 +78,8 @@ impl Runtime {
                     format!("plugin '{}' init failed: {err}", plugin.id()),
                 ));
             }
+            runtime.plugins.push(plugin);
         }
-        runtime.plugins = config.plugins;
 
         runtime.state = RuntimeState::Running;
         runtime.host.set_lifecycle(RuntimeState::Running);
@@ -139,6 +107,10 @@ impl Runtime {
 
     pub(crate) fn snapshot(&self) -> RuntimeSnapshot {
         self.host.snapshot()
+    }
+
+    pub(crate) fn context(&self) -> PluginContext<'static> {
+        self.ctx.clone()
     }
 
     pub(crate) fn handle_event(&mut self, event: AtomLifecycleEvent) -> AtomResult<()> {
@@ -181,15 +153,6 @@ impl Runtime {
             plugin.on_shutdown();
         }
 
-        // Shutdown modules in reverse init order.
-        while let Some(shutdown_fn) = self.module_shutdown_fns.pop() {
-            let module_id = self.module_ids.pop().unwrap_or_default();
-            if let Some(f) = shutdown_fn {
-                tracing::info!(module_id = %module_id, "shutting down module");
-                f();
-            }
-        }
-
         self.state = RuntimeState::Terminated;
         self.host.set_lifecycle(RuntimeState::Terminated);
         tracing::info!("runtime terminated");
@@ -202,7 +165,7 @@ mod tests {
 
     use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
 
-    use crate::config::{ModuleMethodRegistration, ModuleRegistration, RuntimeConfig};
+    use crate::config::RuntimeConfig;
     use crate::plugin::{PluginContext, RuntimePlugin};
     use crate::state::RuntimeState;
     use crate::store::{RuntimeEffect, RuntimeEvent};
@@ -214,135 +177,99 @@ mod tests {
     }
 
     #[test]
-    fn init_with_no_modules_succeeds() {
+    fn init_with_no_plugins_succeeds() {
         let rt = Runtime::start(1, empty_config()).expect("should start");
         assert_eq!(rt.state(), RuntimeState::Running);
     }
 
     #[test]
-    fn init_calls_modules_in_order() {
-        let order = Arc::new(Mutex::new(Vec::new()));
+    fn partial_plugin_init_failure_cleans_up_earlier_plugins() {
+        struct TestPlugin {
+            id: &'static str,
+            fail_init: bool,
+            events: Arc<Mutex<Vec<String>>>,
+            shutdown_called: Option<Arc<Mutex<bool>>>,
+        }
 
-        let o1 = Arc::clone(&order);
-        let o2 = Arc::clone(&order);
+        impl RuntimePlugin for TestPlugin {
+            fn id(&self) -> &str {
+                self.id
+            }
 
-        let config = RuntimeConfig {
-            plugins: Vec::new(),
-            modules: vec![
-                ModuleRegistration {
-                    id: "second".to_owned(),
-                    init_order: 2,
-                    init_fn: Box::new(move |_| {
-                        o2.lock().unwrap().push("second");
-                        Ok(())
-                    }),
-                    shutdown_fn: None,
-                    methods: Vec::new(),
-                },
-                ModuleRegistration {
-                    id: "first".to_owned(),
-                    init_order: 1,
-                    init_fn: Box::new(move |_| {
-                        o1.lock().unwrap().push("first");
-                        Ok(())
-                    }),
-                    shutdown_fn: None,
-                    methods: Vec::new(),
-                },
-            ],
-        };
+            fn on_init(&mut self, _ctx: &PluginContext) -> AtomResult<()> {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("init:{}", self.id));
+                if self.fail_init {
+                    Err(AtomError::new(AtomErrorCode::ModuleInitFailed, "boom"))
+                } else {
+                    Ok(())
+                }
+            }
 
-        let _rt = Runtime::start(1, config).expect("should start");
-        assert_eq!(*order.lock().unwrap(), vec!["first", "second"]);
-    }
+            fn on_shutdown(&mut self) {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("shutdown:{}", self.id));
+                if let Some(called) = &self.shutdown_called {
+                    *called.lock().unwrap() = true;
+                }
+            }
+        }
 
-    #[test]
-    fn failing_module_transitions_to_failed() {
-        let config = RuntimeConfig {
-            plugins: Vec::new(),
-            modules: vec![ModuleRegistration {
-                id: "bad".to_owned(),
-                init_order: 0,
-                init_fn: Box::new(|_| Err(AtomError::new(AtomErrorCode::ModuleInitFailed, "boom"))),
-                shutdown_fn: None,
-                methods: Vec::new(),
-            }],
-        };
-
-        let err = Runtime::start(1, config).unwrap_err();
-        assert_eq!(err.code, AtomErrorCode::ModuleInitFailed);
-    }
-
-    #[test]
-    fn partial_init_failure_cleans_up_earlier_modules() {
+        let events = Arc::new(Mutex::new(Vec::new()));
         let shutdown_called = Arc::new(Mutex::new(false));
-        let sc = Arc::clone(&shutdown_called);
 
         let config = RuntimeConfig {
-            plugins: Vec::new(),
-            modules: vec![
-                ModuleRegistration {
-                    id: "good".to_owned(),
-                    init_order: 1,
-                    init_fn: Box::new(|_| Ok(())),
-                    shutdown_fn: Some(Box::new(move || {
-                        *sc.lock().unwrap() = true;
-                    })),
-                    methods: Vec::new(),
-                },
-                ModuleRegistration {
-                    id: "bad".to_owned(),
-                    init_order: 2,
-                    init_fn: Box::new(|_| {
-                        Err(AtomError::new(AtomErrorCode::ModuleInitFailed, "boom"))
-                    }),
-                    shutdown_fn: None,
-                    methods: Vec::new(),
-                },
+            plugins: vec![
+                Box::new(TestPlugin {
+                    id: "good",
+                    fail_init: false,
+                    events: Arc::clone(&events),
+                    shutdown_called: Some(Arc::clone(&shutdown_called)),
+                }),
+                Box::new(TestPlugin {
+                    id: "bad",
+                    fail_init: true,
+                    events: Arc::clone(&events),
+                    shutdown_called: None,
+                }),
             ],
         };
 
         let err = Runtime::start(1, config).unwrap_err();
         assert_eq!(err.code, AtomErrorCode::ModuleInitFailed);
-        // Drop impl should have called shutdown on the "good" module.
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["init:good", "init:bad", "shutdown:good"]
+        );
         assert!(*shutdown_called.lock().unwrap());
     }
 
     #[test]
-    fn shutdown_calls_modules_in_reverse_order() {
-        let order = Arc::new(Mutex::new(Vec::new()));
+    fn failing_plugin_transitions_to_failed() {
+        struct FailingPlugin;
 
-        let o1 = Arc::clone(&order);
-        let o2 = Arc::clone(&order);
+        impl RuntimePlugin for FailingPlugin {
+            fn id(&self) -> &str {
+                "bad"
+            }
 
-        let config = RuntimeConfig {
-            plugins: Vec::new(),
-            modules: vec![
-                ModuleRegistration {
-                    id: "first".to_owned(),
-                    init_order: 1,
-                    init_fn: Box::new(|_| Ok(())),
-                    shutdown_fn: Some(Box::new(move || {
-                        o1.lock().unwrap().push("first");
-                    })),
-                    methods: Vec::new(),
-                },
-                ModuleRegistration {
-                    id: "second".to_owned(),
-                    init_order: 2,
-                    init_fn: Box::new(|_| Ok(())),
-                    shutdown_fn: Some(Box::new(move || {
-                        o2.lock().unwrap().push("second");
-                    })),
-                    methods: Vec::new(),
-                },
-            ],
-        };
+            fn on_init(&mut self, _ctx: &PluginContext) -> AtomResult<()> {
+                Err(AtomError::new(AtomErrorCode::ModuleInitFailed, "boom"))
+            }
+        }
 
-        let mut rt = Runtime::start(1, config).expect("should start");
-        rt.shutdown();
-        assert_eq!(rt.state(), RuntimeState::Terminated);
-        assert_eq!(*order.lock().unwrap(), vec!["second", "first"]);
+        let err = Runtime::start(
+            1,
+            RuntimeConfig {
+                plugins: vec![Box::new(FailingPlugin)],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, AtomErrorCode::ModuleInitFailed);
     }
 
     #[test]
@@ -370,19 +297,10 @@ mod tests {
     #[test]
     fn terminate_triggers_shutdown() {
         let shutdown_called = Arc::new(Mutex::new(false));
-        let sc = Arc::clone(&shutdown_called);
-
         let config = RuntimeConfig {
-            plugins: Vec::new(),
-            modules: vec![ModuleRegistration {
-                id: "m".to_owned(),
-                init_order: 0,
-                init_fn: Box::new(|_| Ok(())),
-                shutdown_fn: Some(Box::new(move || {
-                    *sc.lock().unwrap() = true;
-                })),
-                methods: Vec::new(),
-            }],
+            plugins: vec![Box::new(ShutdownProbe {
+                called: Arc::clone(&shutdown_called),
+            })],
         };
 
         let mut rt = Runtime::start(1, config).expect("should start");
@@ -468,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn running_hook_can_update_state_run_tasks_and_call_modules() {
+    fn running_hook_can_update_state_and_run_tasks() {
         struct ProbePlugin;
 
         impl RuntimePlugin for ProbePlugin {
@@ -483,23 +401,13 @@ mod tests {
                     tokio::task::yield_now().await;
                     Ok(())
                 })?;
-                let response = ctx.call_module("device_info", "get", b"request")?;
-                ctx.set_state("module.response_len", response.len().to_string());
+                ctx.set_state("app.ready", "true");
                 Ok(())
             }
         }
 
         let config = RuntimeConfig {
             plugins: vec![Box::new(ProbePlugin)],
-            modules: vec![ModuleRegistration {
-                id: "device_info".to_owned(),
-                init_order: 0,
-                init_fn: Box::new(|_| Ok(())),
-                shutdown_fn: None,
-                methods: vec![ModuleMethodRegistration::new("get", |_ctx, request| {
-                    Ok(request.to_vec())
-                })],
-            }],
         };
 
         let rt = Runtime::start(1, config).expect("should start");
@@ -511,11 +419,8 @@ mod tests {
             Some("running"),
         );
         assert_eq!(
-            snapshot
-                .values
-                .get("module.response_len")
-                .map(String::as_str),
-            Some("7"),
+            snapshot.values.get("app.ready").map(String::as_str),
+            Some("true"),
         );
         assert!(snapshot
             .events
@@ -531,6 +436,23 @@ mod tests {
             RuntimeEffect::TaskStarted { ref plugin_id, ref task_name }
                 if plugin_id == "probe" && task_name == "yield"
         )));
-        assert_eq!(snapshot.module_calls.len(), 1);
+    }
+
+    struct ShutdownProbe {
+        called: Arc<Mutex<bool>>,
+    }
+
+    impl RuntimePlugin for ShutdownProbe {
+        fn id(&self) -> &str {
+            "shutdown_probe"
+        }
+
+        fn on_init(&mut self, _ctx: &PluginContext) -> AtomResult<()> {
+            Ok(())
+        }
+
+        fn on_shutdown(&mut self) {
+            *self.called.lock().unwrap() = true;
+        }
     }
 }

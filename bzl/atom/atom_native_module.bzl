@@ -31,6 +31,7 @@ def atom_native_module(
         name = name,
         kind = "atom_native_module",
         module_id = module_id if module_id != None else name,
+        rust_crate_name = None,
         atom_api_level = atom_api_level,
         min_atom_version = min_atom_version,
         ios_min_deployment_target = ios_min_deployment_target,

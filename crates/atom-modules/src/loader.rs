@@ -13,6 +13,7 @@ struct RawModuleManifest {
     kind: String,
     target_label: String,
     id: String,
+    rust_crate_name: Option<String>,
     atom_api_level: u32,
     min_atom_version: Option<String>,
     ios_min_deployment_target: Option<String>,
@@ -105,6 +106,33 @@ pub(crate) fn load_module_manifest_from_path(
             metadata_path.as_str(),
         ));
     }
+    match kind {
+        ModuleKind::Rust => {
+            let Some(crate_name) = parsed.rust_crate_name.as_deref() else {
+                return Err(AtomError::with_path(
+                    AtomErrorCode::ModuleManifestInvalid,
+                    "rust-authored modules must declare rust_crate_name",
+                    metadata_path.as_str(),
+                ));
+            };
+            if !is_crate_name(crate_name) {
+                return Err(AtomError::with_path(
+                    AtomErrorCode::ModuleManifestInvalid,
+                    "rust_crate_name must match ^[A-Za-z_][A-Za-z0-9_]*$",
+                    metadata_path.as_str(),
+                ));
+            }
+        }
+        ModuleKind::Native => {
+            if parsed.rust_crate_name.is_some() {
+                return Err(AtomError::with_path(
+                    AtomErrorCode::ModuleManifestInvalid,
+                    "native-only modules must not declare rust_crate_name",
+                    metadata_path.as_str(),
+                ));
+            }
+        }
+    }
     if let Some(min_atom_version) = &parsed.min_atom_version
         && !is_semver(min_atom_version)
     {
@@ -155,6 +183,7 @@ pub(crate) fn load_module_manifest_from_path(
         kind,
         target_label: parsed.target_label,
         id: id.to_owned(),
+        rust_crate_name: parsed.rust_crate_name,
         atom_api_level: parsed.atom_api_level,
         min_atom_version: parsed.min_atom_version,
         ios_min_deployment_target: parsed.ios_min_deployment_target,
@@ -204,6 +233,15 @@ fn is_semver(value: &str) -> bool {
                 && minor.chars().all(|character| character.is_ascii_digit())
                 && patch.chars().all(|character| character.is_ascii_digit())
     )
+}
+
+fn is_crate_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    match characters.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn validate_labels(
