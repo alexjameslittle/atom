@@ -19,6 +19,16 @@ bazel_dep(name = "rules_apple", version = "4.2.0", repo_name = "build_bazel_rule
 bazel_dep(name = "rules_rust", version = "0.68.1")
 bazel_dep(name = "rules_swift", version = "2.4.0", repo_name = "build_bazel_rules_swift")
 bazel_dep(name = "flatbuffers", version = "25.9.23")
+archive_override(
+    module_name = "flatbuffers",
+    integrity = "sha256-kQIlMhTepq4QwqyWbqHtIVXSIgI5C1MtHepkk1xRito=",
+    patch_cmds = [
+        "perl -0pi -e 's/exports_files\\(\\[\\n    \"LICENSE\",\\n    \"tsconfig.json\",\\n\\]\\)/exports_files([\\n    \"LICENSE\",\\n    \"tsconfig.json\",\\n] + glob([\\n    \"java\\/src\\/main\\/java\\/com\\/google\\/flatbuffers\\/*.java\",\\n]))/' BUILD.bazel",
+        "printf 'exports_files(glob([\\n    \"Sources/Common/*.swift\",\\n    \"Sources/FlatBuffers/*.swift\",\\n]))\\n\\n' | cat - swift/BUILD.bazel > swift/BUILD.bazel.new && mv swift/BUILD.bazel.new swift/BUILD.bazel",
+    ],
+    strip_prefix = "flatbuffers-25.9.23",
+    urls = ["https://github.com/google/flatbuffers/archive/refs/tags/v25.9.23.tar.gz"],
+)
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
