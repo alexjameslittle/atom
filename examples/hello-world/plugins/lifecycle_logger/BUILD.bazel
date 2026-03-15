@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "lifecycle_logger",
@@ -14,4 +14,9 @@ rust_library(
         "@crates//:tokio",
         "@crates//:tracing",
     ],
+)
+
+rust_test(
+    name = "lifecycle_logger-test",
+    crate = ":lifecycle_logger",
 )

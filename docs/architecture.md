@@ -16,7 +16,7 @@ Dependency direction should move one way:
 `atom-ffi` -> `atom-manifest` -> `atom-modules` -> `atom-backends` -> `atom-cng` -> `atom-deploy` ->
 `atom-backend-{ios,android}` -> `atom-cli`
 
-`atom-runtime` and runtime plugin libraries remain separate from CLI/CNG graph orchestration.
+`atom-runtime` and runtime support libraries remain separate from CLI/CNG graph orchestration.
 
 ### Layer Responsibilities
 
@@ -80,27 +80,21 @@ Dependency direction should move one way:
 - `atom-runtime`
   - Runtime kernel: lifecycle state machine (Created → Initializing → Running →
     Backgrounded/Suspended → Terminating → Terminated)
-  - Kernel-owned state container and inspection snapshot (`RuntimeSnapshot`) for state values,
-    dispatched events, completed effects, and module call records
-  - Module lifecycle management: init in dependency order, shutdown in reverse
-  - Runtime plugin host API (`RuntimePlugin` trait) for observing lifecycle events and owning
-    plugin-local state
+  - Kernel-owned singleton runtime with inspection snapshots (`RuntimeSnapshot`) for state values,
+    dispatched events, completed effects, and recorded lifecycle
   - App-owned runtime config assembly through `atom_runtime_config()` in the app crate
-  - Tokio `current_thread` async runtime available via `PluginContext`
-  - `PluginContext` APIs for shared state writes, event/effect recording, async task execution, and
-    runtime module calls
+  - Tokio `current_thread` async runtime available through the public `tokio_handle()` free function
+  - Public free functions for shared state writes, state reads, event dispatch, and `Running`
+    lifecycle checks
   - Structured logging via `tracing` at lifecycle transitions
-  - Handle-based registry for FFI access from generated native hosts
-  - `ensure_running()` gate plus runtime-side module method registration/call plumbing for
-    Rust-backed modules
+  - Hidden generated-host entrypoints for singleton init, lifecycle dispatch, and shutdown
 - `atom-navigation`
-  - First-party runtime plugin crate that owns a route stack through the public `RuntimePlugin`
-    contract
+  - First-party runtime support crate that owns a route stack outside the kernel and mirrors state
+    through `atom_runtime::*`
   - Proves navigation is a library concern rather than kernel state
 - `atom-analytics`
-  - First-party runtime plugin crate that buffers and flushes analytics batches on lifecycle
-    boundaries
-  - Proves non-routing headless app behavior composes through the same public plugin API
+  - First-party runtime support crate that buffers and flushes analytics batches outside the kernel
+  - Proves non-routing headless app behavior composes through the same public runtime free functions
 
 ## Metadata Flow
 
@@ -115,9 +109,9 @@ Dependency direction should move one way:
    and host-tree emission through the shared CNG contracts.
 8. `atom-deploy` resolves destinations, proof plans, and backend sessions through registered backend
    contracts when needed.
-9. Generated runtime bridge code links the app crate and calls `atom_runtime_config()` without
-   kernel-side plugin discovery. Any first-party or third-party plugin crates, along with any
-   Rust-backed runtime module registrations, enter through that app-owned configuration path.
+9. Generated runtime bridge code links the app crate, calls `atom_runtime_config()`, and passes the
+   resulting config to `atom_runtime::__init()` without kernel-side plugin discovery or runtime-side
+   module registration.
 
 ## Boundaries To Preserve
 

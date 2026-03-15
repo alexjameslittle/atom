@@ -1,13 +1,14 @@
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use atom_ffi::{
     AtomError, AtomErrorCode, AtomExportInput, AtomExportOutput, AtomOwnedBuffer, AtomResult,
     AtomSlice,
 };
-use atom_runtime::{RuntimeConfig, init_runtime, shutdown_runtime};
+use atom_runtime::RuntimeConfig;
 use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Table, Vector, root_unchecked};
 
 static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static RUNTIME_INIT: OnceLock<()> = OnceLock::new();
 
 #[atom_macros::atom_record]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,22 +291,16 @@ fn take_buffer(buffer: AtomOwnedBuffer) -> Vec<u8> {
     unsafe { buffer.into_vec() }
 }
 
-#[test]
-fn export_requires_running_runtime() {
-    let _guard = TEST_MUTEX.lock().unwrap();
-    let mut response = AtomOwnedBuffer::empty();
-    let mut error = AtomOwnedBuffer::empty();
-
-    let status = unsafe { __atom_export_get(&raw mut response, &raw mut error) };
-    assert_eq!(status, AtomErrorCode::BridgeInitFailed.exit_code());
-    assert!(take_buffer(response).is_empty());
-    assert!(!take_buffer(error).is_empty());
+fn ensure_runtime_initialized() {
+    RUNTIME_INIT.get_or_init(|| {
+        atom_runtime::__init(RuntimeConfig).expect("runtime init");
+    });
 }
 
 #[test]
 fn no_input_export_round_trips_device_info_flatbuffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let mut response = AtomOwnedBuffer::empty();
     let mut error = AtomOwnedBuffer::empty();
@@ -322,14 +317,12 @@ fn no_input_export_round_trips_device_info_flatbuffer() {
             status: ConnectionStatus::Connected,
         }
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn result_export_routes_ok_value_to_response_buffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_echo_request("hello");
     let mut response = AtomOwnedBuffer::empty();
@@ -348,14 +341,12 @@ fn result_export_routes_ok_value_to_response_buffer() {
         decode_string_response(&take_buffer(response)),
         "echo: hello"
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn unit_return_export_clears_response_buffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_echo_request("clear");
     let mut response = AtomOwnedBuffer::from_vec(vec![1, 2, 3]);
@@ -371,14 +362,12 @@ fn unit_return_export_clears_response_buffer() {
     assert_eq!(status, 0);
     assert!(take_buffer(response).is_empty());
     assert!(take_buffer(error).is_empty());
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn result_export_routes_err_value_to_error_buffer() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_echo_request("boom");
     let mut response = AtomOwnedBuffer::empty();
@@ -394,14 +383,12 @@ fn result_export_routes_err_value_to_error_buffer() {
     assert_eq!(status, AtomErrorCode::ModuleInitFailed.exit_code());
     assert!(take_buffer(response).is_empty());
     assert!(!take_buffer(error).is_empty());
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn enum_export_round_trips_flatbuffer_response() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let mut response = AtomOwnedBuffer::empty();
     let mut error = AtomOwnedBuffer::empty();
@@ -413,14 +400,12 @@ fn enum_export_round_trips_flatbuffer_response() {
         decode_status(&take_buffer(response)),
         ConnectionStatus::Disconnected
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn borrowed_str_export_round_trips_string_response() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_string_input("Atom");
     let mut response = AtomOwnedBuffer::empty();
@@ -439,14 +424,12 @@ fn borrowed_str_export_round_trips_string_response() {
         decode_string_response(&take_buffer(response)),
         "hello, Atom".to_owned()
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn primitive_i32_export_round_trips_through_ffi_boundary() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_i32_input(41);
     let mut response = AtomOwnedBuffer::empty();
@@ -462,14 +445,12 @@ fn primitive_i32_export_round_trips_through_ffi_boundary() {
     assert_eq!(status, 0);
     assert!(take_buffer(error).is_empty());
     assert_eq!(decode_i32_response(&take_buffer(response)), 42);
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn primitive_bool_export_round_trips_through_ffi_boundary() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_bool_input(false);
     let mut response = AtomOwnedBuffer::empty();
@@ -485,14 +466,12 @@ fn primitive_bool_export_round_trips_through_ffi_boundary() {
     assert_eq!(status, 0);
     assert!(take_buffer(error).is_empty());
     assert!(decode_bool_response(&take_buffer(response)));
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn primitive_vec_export_round_trips_through_ffi_boundary() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_i32_vec_input(&[1, 2, 3]);
     let mut response = AtomOwnedBuffer::empty();
@@ -511,14 +490,12 @@ fn primitive_vec_export_round_trips_through_ffi_boundary() {
         decode_i32_vec_response(&take_buffer(response)),
         vec![1, 2, 3, 99]
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn primitive_option_export_round_trips_through_ffi_boundary() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_optional_i32_input(Some(41));
     let mut response = AtomOwnedBuffer::empty();
@@ -537,14 +514,12 @@ fn primitive_option_export_round_trips_through_ffi_boundary() {
         decode_optional_i32_response(&take_buffer(response)),
         Some(42)
     );
-
-    shutdown_runtime(handle);
 }
 
 #[test]
 fn primitive_option_none_round_trips_through_ffi_boundary() {
     let _guard = TEST_MUTEX.lock().unwrap();
-    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+    ensure_runtime_initialized();
 
     let input = encode_optional_i32_input(None);
     let mut response = AtomOwnedBuffer::empty();
@@ -560,6 +535,4 @@ fn primitive_option_none_round_trips_through_ffi_boundary() {
     assert_eq!(status, 0);
     assert!(take_buffer(error).is_empty());
     assert_eq!(decode_optional_i32_response(&take_buffer(response)), None);
-
-    shutdown_runtime(handle);
 }

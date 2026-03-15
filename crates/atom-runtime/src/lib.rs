@@ -1,18 +1,14 @@
 mod config;
 mod kernel;
 mod logging;
-mod plugin;
 mod registry;
 mod state;
 mod store;
 
-pub use config::{
-    ModuleMethodRegistration, ModuleRegistration, RuntimeConfig, RuntimeConfigBuilder,
-};
-pub use plugin::{PluginContext, RuntimePlugin};
+pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use registry::{
-    current_snapshot, current_state, ensure_running, handle_lifecycle, init_runtime,
-    shutdown_runtime,
+    __handle_lifecycle, __init, __shutdown, current_snapshot, current_state, dispatch_event,
+    ensure_running, set_state, state_value, tokio_handle,
 };
 pub use state::RuntimeState;
 pub use store::{RuntimeEffect, RuntimeEvent, RuntimeSnapshot};
