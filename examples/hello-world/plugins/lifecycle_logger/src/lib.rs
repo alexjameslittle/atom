@@ -1,6 +1,6 @@
 use atom_ffi::{AtomLifecycleEvent, AtomResult};
-use atom_runtime::{PluginContext, RuntimeEvent, RuntimePlugin, RuntimeState};
-use device_info::{METHOD_GET, MODULE_ID, encode_get_device_info_request};
+use atom_runtime::{self, RuntimeEvent, RuntimeState};
+use device_info::get as device_info;
 
 pub struct LifecycleLoggerPlugin;
 
@@ -17,53 +17,63 @@ impl Default for LifecycleLoggerPlugin {
     }
 }
 
-impl RuntimePlugin for LifecycleLoggerPlugin {
-    fn id(&self) -> &'static str {
+impl LifecycleLoggerPlugin {
+    #[must_use]
+    pub fn id(&self) -> &'static str {
         "hello_world.lifecycle_logger"
     }
 
-    fn on_init(&mut self, ctx: &PluginContext) -> AtomResult<()> {
-        ctx.set_state("plugins.lifecycle_logger", "initialized");
-        ctx.dispatch_event(RuntimeEvent::plugin(self.id(), "initialized", None));
+    pub fn record_initialized(&self) {
+        atom_runtime::set_state("plugins.lifecycle_logger", "initialized");
+        atom_runtime::dispatch_event(RuntimeEvent::plugin(self.id(), "initialized", None));
         tracing::info!(
             plugin_id = self.id(),
             "hello-world lifecycle logger initialized"
         );
-        Ok(())
     }
 
-    fn on_running(&mut self, ctx: &PluginContext) -> AtomResult<()> {
-        ctx.run_task(self.id(), "warmup", async {
+    /// Complete the example warmup probe against the runtime singleton.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has not been initialized or is not in
+    /// the `Running` state.
+    pub fn record_running(&self) -> AtomResult<()> {
+        atom_runtime::ensure_running()?;
+        atom_runtime::tokio_handle().block_on(async {
             tokio::task::yield_now().await;
-            Ok(())
-        })?;
-        ctx.set_state("plugins.lifecycle_logger.async", "completed");
+        });
+        atom_runtime::dispatch_event(RuntimeEvent::TaskCompleted {
+            plugin_id: self.id().to_owned(),
+            task_name: "warmup".to_owned(),
+            success: true,
+        });
+        atom_runtime::set_state("plugins.lifecycle_logger.async", "completed");
 
-        let response = ctx.call_module(MODULE_ID, METHOD_GET, &encode_get_device_info_request())?;
-        ctx.set_state(
-            "plugins.lifecycle_logger.device_info_bytes",
-            response.len().to_string(),
-        );
-        ctx.dispatch_event(RuntimeEvent::plugin(
+        let info = device_info();
+        atom_runtime::set_state("plugins.lifecycle_logger.device_info_model", &info.model);
+        atom_runtime::set_state("plugins.lifecycle_logger.device_info_os", &info.os);
+        atom_runtime::dispatch_event(RuntimeEvent::plugin(
             self.id(),
             "running",
-            Some(format!("device_info_bytes={}", response.len())),
+            Some(format!("device_info={} {}", info.model, info.os)),
         ));
 
-        let snapshot = ctx.snapshot();
-        tracing::info!(
-            plugin_id = self.id(),
-            state_keys = snapshot.values.len(),
-            event_count = snapshot.events.len(),
-            effect_count = snapshot.effects.len(),
-            module_calls = snapshot.module_calls.len(),
-            "hello-world lifecycle logger completed runtime probe"
-        );
+        if let Some(snapshot) = atom_runtime::current_snapshot() {
+            tracing::info!(
+                plugin_id = self.id(),
+                state_keys = snapshot.values.len(),
+                event_count = snapshot.events.len(),
+                effect_count = snapshot.effects.len(),
+                module_calls = snapshot.module_calls.len(),
+                "hello-world lifecycle logger completed runtime probe"
+            );
+        }
 
         Ok(())
     }
 
-    fn on_lifecycle(&mut self, event: AtomLifecycleEvent, state: RuntimeState) {
+    pub fn observe_lifecycle(&self, event: AtomLifecycleEvent, state: RuntimeState) {
         tracing::info!(
             plugin_id = self.id(),
             ?event,
@@ -72,10 +82,28 @@ impl RuntimePlugin for LifecycleLoggerPlugin {
         );
     }
 
-    fn on_shutdown(&mut self) {
+    pub fn record_shutdown(&self) {
         tracing::info!(
             plugin_id = self.id(),
             "hello-world lifecycle logger shutdown"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LifecycleLoggerPlugin;
+
+    #[test]
+    fn initialized_marker_does_not_require_runtime() {
+        LifecycleLoggerPlugin::new().record_initialized();
+    }
+
+    #[test]
+    fn running_probe_requires_runtime() {
+        let error = LifecycleLoggerPlugin::new()
+            .record_running()
+            .expect_err("running probe should require runtime");
+        assert_eq!(error.code, atom_ffi::AtomErrorCode::BridgeInitFailed);
     }
 }

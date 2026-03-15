@@ -1,12 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
-use std::future::Future;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use atom_ffi::{AtomError, AtomErrorCode, AtomLifecycleEvent, AtomResult};
-
-use crate::config::ModuleMethodHandler;
 use crate::state::RuntimeState;
+use atom_ffi::AtomLifecycleEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeEvent {
@@ -107,7 +104,6 @@ impl RuntimeSnapshot {
 
 pub(crate) struct RuntimeHost {
     snapshot: Mutex<RuntimeSnapshot>,
-    module_methods: Mutex<HashMap<(String, String), ModuleMethodHandler>>,
     next_sequence: AtomicU64,
 }
 
@@ -115,7 +111,6 @@ impl RuntimeHost {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             snapshot: Mutex::new(RuntimeSnapshot::new(RuntimeState::Created)),
-            module_methods: Mutex::new(HashMap::new()),
             next_sequence: AtomicU64::new(1),
         })
     }
@@ -156,122 +151,6 @@ impl RuntimeHost {
             .push(RuntimeEffectRecord { sequence, effect });
     }
 
-    pub(crate) fn register_module_method(
-        &self,
-        module_id: &str,
-        method_name: &str,
-        handler: ModuleMethodHandler,
-    ) -> AtomResult<()> {
-        let key = (module_id.to_owned(), method_name.to_owned());
-        let previous = lock_module_methods(&self.module_methods).insert(key.clone(), handler);
-        if previous.is_some() {
-            return Err(AtomError::new(
-                AtomErrorCode::ModuleManifestInvalid,
-                format!(
-                    "duplicate runtime module method registration: {}.{}",
-                    key.0, key.1
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn call_module(
-        &self,
-        ctx: &crate::plugin::PluginContext,
-        module_id: &str,
-        method: &str,
-        request: &[u8],
-    ) -> AtomResult<Vec<u8>> {
-        if self.snapshot().lifecycle != RuntimeState::Running {
-            return Err(AtomError::new(
-                AtomErrorCode::RuntimeTransitionInvalid,
-                "runtime module calls require Running state",
-            ));
-        }
-
-        self.emit_effect(RuntimeEffect::ModuleCall {
-            module_id: module_id.to_owned(),
-            method: method.to_owned(),
-            request_len: request.len(),
-        });
-
-        let key = (module_id.to_owned(), method.to_owned());
-        let handler = lock_module_methods(&self.module_methods)
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| {
-                AtomError::new(
-                    AtomErrorCode::ModuleNotFound,
-                    format!("runtime module method not found: {}.{}", key.0, key.1),
-                )
-            })?;
-
-        let response = handler(ctx, request)?;
-        let sequence = self.next_sequence();
-        let mut snapshot = lock_snapshot(&self.snapshot);
-        snapshot.events.push(RuntimeEventRecord {
-            sequence,
-            event: RuntimeEvent::ModuleCallCompleted {
-                module_id: module_id.to_owned(),
-                method: method.to_owned(),
-                response_len: response.len(),
-            },
-        });
-        snapshot.module_calls.push(ModuleCallRecord {
-            sequence,
-            module_id: module_id.to_owned(),
-            method: method.to_owned(),
-            request_len: request.len(),
-            response_len: response.len(),
-        });
-        drop(snapshot);
-
-        Ok(response)
-    }
-
-    pub(crate) fn run_task<F, T>(
-        &self,
-        ctx: &crate::plugin::PluginContext,
-        plugin_id: &str,
-        task_name: &str,
-        future: F,
-    ) -> AtomResult<T>
-    where
-        F: Future<Output = AtomResult<T>>,
-    {
-        if self.snapshot().lifecycle != RuntimeState::Running {
-            return Err(AtomError::new(
-                AtomErrorCode::RuntimeTransitionInvalid,
-                "runtime async tasks require Running state",
-            ));
-        }
-
-        self.emit_effect(RuntimeEffect::TaskStarted {
-            plugin_id: plugin_id.to_owned(),
-            task_name: task_name.to_owned(),
-        });
-
-        match ctx.tokio_handle.block_on(future) {
-            Ok(value) => {
-                self.dispatch_event(RuntimeEvent::TaskCompleted {
-                    plugin_id: plugin_id.to_owned(),
-                    task_name: task_name.to_owned(),
-                    success: true,
-                });
-                Ok(value)
-            }
-            Err(error) => {
-                self.dispatch_event(RuntimeEvent::TaskCompleted {
-                    plugin_id: plugin_id.to_owned(),
-                    task_name: task_name.to_owned(),
-                    success: false,
-                });
-                Err(error)
-            }
-        }
-    }
-
     fn next_sequence(&self) -> u64 {
         self.next_sequence.fetch_add(1, Ordering::Relaxed)
     }
@@ -279,15 +158,6 @@ impl RuntimeHost {
 
 fn lock_snapshot(snapshot: &Mutex<RuntimeSnapshot>) -> MutexGuard<'_, RuntimeSnapshot> {
     match snapshot.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-fn lock_module_methods(
-    methods: &Mutex<HashMap<(String, String), ModuleMethodHandler>>,
-) -> MutexGuard<'_, HashMap<(String, String), ModuleMethodHandler>> {
-    match methods.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

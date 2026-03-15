@@ -26,11 +26,7 @@ atom_app(
     ],
     slug = "hello-atom",
     deps = [
-        "//crates/atom-analytics",
-        "//crates/atom-navigation",
         "//crates/atom-runtime",
-        "//examples/hello-world/modules/device_info",
-        "//examples/hello-world/plugins/lifecycle_logger",
     ],
 )
 
@@ -59,10 +55,6 @@ atom_app(
     ],
     slug = "hello-atom-plain",
     deps = [
-        "//crates/atom-analytics",
-        "//crates/atom-navigation",
         "//crates/atom-runtime",
-        "//examples/hello-world/modules/device_info",
-        "//examples/hello-world/plugins/lifecycle_logger",
     ],
 )

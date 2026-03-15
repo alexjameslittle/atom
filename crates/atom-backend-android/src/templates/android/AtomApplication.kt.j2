@@ -4,14 +4,15 @@ import android.app.Application
 import android.util.Log
 
 class AtomApplication : Application() {
-    var runtimeHandle: Long = 0
+    var runtimeInitialized = false
         private set
 
     override fun onCreate() {
         super.onCreate()
         System.loadLibrary("atom_runtime_jni")
-        runtimeHandle = AtomRuntimeBridge.initRuntime()
-        if (runtimeHandle == 0L) {
+        val initStatus = AtomRuntimeBridge.initRuntime()
+        runtimeInitialized = initStatus == 0
+        if (!runtimeInitialized) {
             Log.e(TAG, "atom_app_init failed")
         } else {
             Log.i(TAG, "Booting {{ name }} ({{ slug }}) on Android")
@@ -20,17 +21,17 @@ class AtomApplication : Application() {
     }
 
     override fun onTerminate() {
-        if (runtimeHandle != 0L) {
-            AtomRuntimeBridge.handleLifecycle(runtimeHandle, 5)
-            AtomRuntimeBridge.shutdown(runtimeHandle)
-            runtimeHandle = 0
+        if (runtimeInitialized) {
+            AtomRuntimeBridge.handleLifecycle(5)
+            AtomRuntimeBridge.shutdown()
+            runtimeInitialized = false
         }
         super.onTerminate()
     }
 
     fun sendLifecycle(event: Int, action: String) {
-        if (runtimeHandle == 0L) return
-        val result = AtomRuntimeBridge.handleLifecycle(runtimeHandle, event)
+        if (!runtimeInitialized) return
+        val result = AtomRuntimeBridge.handleLifecycle(event)
         if (result != 0) {
             Log.e(TAG, "$action transition failed with code $result")
         }
@@ -42,7 +43,7 @@ class AtomApplication : Application() {
 }
 
 object AtomRuntimeBridge {
-    external fun initRuntime(): Long
-    external fun handleLifecycle(handle: Long, event: Int): Int
-    external fun shutdown(handle: Long)
+    external fun initRuntime(): Int
+    external fun handleLifecycle(event: Int): Int
+    external fun shutdown()
 }

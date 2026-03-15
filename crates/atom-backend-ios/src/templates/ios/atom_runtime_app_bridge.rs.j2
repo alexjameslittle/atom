@@ -1,34 +1,17 @@
 use std::ptr;
 
-use atom_ffi::{
-    AtomError, AtomErrorCode, AtomLifecycleEvent, AtomOwnedBuffer, AtomRuntimeHandle, AtomSlice,
-    write_error_buffer,
-};
+use atom_ffi::{AtomLifecycleEvent, AtomOwnedBuffer, AtomSlice, write_error_buffer};
 
 /// # Safety
 ///
-/// `out_handle` must be a valid writable pointer and `out_error_flatbuffer` must be null or a
-/// valid writable pointer to `AtomOwnedBuffer`.
+/// `out_error_flatbuffer` must be null or a valid writable pointer to `AtomOwnedBuffer`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atom_app_init(
     _config_flatbuffer: AtomSlice,
-    out_handle: *mut AtomRuntimeHandle,
     out_error_flatbuffer: *mut AtomOwnedBuffer,
 ) -> i32 {
-    if out_handle.is_null() {
-        let error = AtomError::new(
-            AtomErrorCode::BridgeInvalidArgument,
-            "atom_app_init requires a non-null out_handle",
-        );
-        unsafe { write_error_buffer(out_error_flatbuffer, &error) };
-        return error.exit_code();
-    }
-
-    match atom_runtime::init_runtime({{ entry_crate_name }}::atom_runtime_config()) {
-        Ok(handle) => {
-            unsafe {
-                ptr::write(out_handle, handle);
-            }
+    match atom_runtime::__init({{ entry_crate_name }}::atom_runtime_config()) {
+        Ok(()) => {
             if !out_error_flatbuffer.is_null() {
                 unsafe {
                     ptr::write(out_error_flatbuffer, AtomOwnedBuffer::empty());
@@ -48,7 +31,6 @@ pub unsafe extern "C" fn atom_app_init(
 /// `out_error_flatbuffer` must be null or a valid writable pointer to `AtomOwnedBuffer`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atom_app_handle_lifecycle(
-    handle: AtomRuntimeHandle,
     event: u32,
     out_error_flatbuffer: *mut AtomOwnedBuffer,
 ) -> i32 {
@@ -60,7 +42,7 @@ pub unsafe extern "C" fn atom_app_handle_lifecycle(
         }
     };
 
-    match atom_runtime::handle_lifecycle(handle, event) {
+    match atom_runtime::__handle_lifecycle(event) {
         Ok(()) => {
             if !out_error_flatbuffer.is_null() {
                 unsafe {
@@ -77,8 +59,8 @@ pub unsafe extern "C" fn atom_app_handle_lifecycle(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn atom_app_shutdown(handle: AtomRuntimeHandle) {
-    atom_runtime::shutdown_runtime(handle);
+pub extern "C" fn atom_app_shutdown() {
+    atom_runtime::__shutdown();
 }
 
 /// # Safety

@@ -247,8 +247,6 @@ impl Default for AtomOwnedBuffer {
     }
 }
 
-pub type AtomRuntimeHandle = u64;
-
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtomLifecycleEvent {

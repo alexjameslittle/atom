@@ -17,7 +17,7 @@ Atom defines a way to build iOS and Android applications where:
 
 - application logic is authored in Rust
 - the shared runtime is headless and platform-agnostic
-- the runtime kernel provides one stable execution model for apps and runtime plugins
+- the runtime kernel provides one stable execution model for apps and runtime support crates
 - native host projects are continuously generated from config and module metadata
 - native platform code is minimized to generated Swift/Kotlin glue
 
@@ -33,9 +33,9 @@ Atom is not:
 
 - Define a stable Bazel-native app metadata model through `atom_app(...)`.
 - Define a Rust module format that is consumable by both the runtime and CNG.
-- Define a runtime plugin model that is distinct from native modules.
-- Define a runtime plugin model that supports first-party and third-party library crates through the
-  same public API.
+- Define a runtime free-function API that is distinct from native modules.
+- Define a runtime-library model that supports first-party and third-party library crates through
+  the same public API.
 - Define a config/CNG plugin model for deterministic native host customization.
 - Define deterministic CNG behavior and concrete generated outputs.
 - Define a Bazel-first build contract using `bzlmod`.
@@ -494,12 +494,13 @@ The runtime state machine MUST use these states:
 | `Terminating`                              | shutdown completes                  | `Terminated`   | free runtime resources                  |
 | any non-terminal state                     | unrecoverable bridge/runtime error  | `Failed`       | freeze further transitions              |
 
-### 7.3 Module Initialization Order
+### 7.3 Startup Profile
 
-- Modules MUST initialize in resolved module order from Section 6.4.
-- Shutdown MUST happen in reverse initialization order.
-- Module `init_priority` MAY reorder modules within the same dependency layer.
-- If two modules share the same dependency layer and priority, declaration order MUST win.
+- The app entry crate MUST build `RuntimeConfig` in app-owned Rust code.
+- The runtime singleton MUST start without kernel-side plugin registration, module registration, or
+  runtime handle allocation.
+- Native module metadata still flows through Section 6 and CNG, but runtime startup itself is
+  singleton initialization only.
 
 ### 7.4 Invalid Transitions
 
@@ -515,49 +516,36 @@ These transitions MUST fail with `RUNTIME_TRANSITION_INVALID`:
 ```text
 function start_runtime(normalized_manifest, resolved_modules):
     state = Created
-    handle = allocate_runtime_handle()
+    install_runtime_singleton()
     state = Initializing
-
-    ordered = sort_modules_for_init(resolved_modules)
-    for module in ordered:
-        result = module.init()
-        if result is error:
-            state = Failed
-            error MODULE_INIT_FAILED at module.id
-
+    initialize_tokio_runtime()
+    initialize_runtime_store()
     state = Running
-    return handle
+    return success
 ```
 
-### 7.6 Runtime Plugin Model
+### 7.6 Runtime Library Model
 
-- The runtime MUST provide a runtime plugin registration model that is distinct from native modules.
-- Runtime plugins MAY own plugin-local state, observe lifecycle and app events, and emit effects
-  through the runtime kernel.
-- Runtime plugins MUST use the kernel's dispatch, lifecycle, and task-execution semantics. They MUST
-  NOT introduce a second lifecycle model or direct generated-host customization path.
-- The runtime kernel MUST remain the single authority for lifecycle transitions, effect completion,
-  and dispatch ordering even when higher-level state-management libraries layer on top of it.
-- The runtime plugin context SHOULD expose kernel-owned hooks for shared state writes, event
-  recording, effect recording, async task execution, and runtime module calls.
-- Runtime plugins MAY use an `on_running`-style callback after the runtime reaches `Running` to
-  begin work that requires module-call availability.
-- Runtime module methods registered through app-owned runtime config MUST only be callable while the
-  runtime is in the `Running` state.
-- `atom-runtime` MUST expose only destination-agnostic plugin host types. Its public plugin API MUST
-  NOT mention iOS, Android, simulator, emulator, device, route-stack, or renderer-specific types.
-- Apps MUST opt into runtime plugins in app code by constructing the runtime configuration passed to
-  the kernel. `atom-runtime` MUST NOT perform dynamic plugin discovery or hard-code first-party
-  plugin registration.
+- The runtime MUST expose public free functions for shared state writes, state reads, event
+  dispatch, async work access, and `Running`-state checks.
+- Runtime support crates MAY own library-local state and call those free functions to mirror app
+  behavior into the runtime snapshot.
+- Runtime support crates MUST use the kernel's lifecycle and dispatch semantics. They MUST NOT
+  introduce a second lifecycle model or direct generated-host customization path.
+- The runtime kernel MUST remain the single authority for lifecycle transitions and dispatch
+  ordering even when higher-level libraries layer on top of it.
+- `atom-runtime` MUST NOT expose `PluginContext`, `RuntimePlugin`, runtime-side module
+  registrations, or handle-based runtime lookup as part of its public API.
+- Apps MUST construct the runtime configuration in app-owned code, and generated bridge code MUST
+  pass that config into the hidden singleton init entrypoint.
 - The app entry crate MUST expose `atom_runtime_config()` or an equivalent generated builder entry
   point that returns the runtime configuration used for startup.
-- First-party runtime plugins SHOULD ship as separate crates depending on `atom-runtime`.
-- First-party and third-party runtime plugins SHOULD use the same public host API and app-owned
-  registration model.
-- Navigation SHOULD be implemented as a first-party runtime plugin crate such as `atom-navigation`,
+- First-party runtime support crates SHOULD ship as separate crates depending on `atom-runtime`.
+- First-party and third-party runtime support crates SHOULD use the same public free-function API.
+- Navigation SHOULD be implemented as a first-party runtime support crate such as `atom-navigation`,
   not as a kernel concern.
-- Destination- or platform-specific behavior MAY be packaged as separate adapter/plugin crates
-  outside `atom-runtime`, but those crates MUST NOT redefine lifecycle semantics.
+- Destination- or platform-specific behavior MAY be packaged as separate adapter crates outside
+  `atom-runtime`, but those crates MUST NOT redefine lifecycle semantics.
 - `atom-runtime` MUST NOT own route stacks, screen descriptors, destination discovery, device
   automation, or generated-host customization.
 
@@ -577,8 +565,6 @@ typedef struct {
   uintptr_t cap;
 } AtomOwnedBuffer;
 
-typedef uint64_t AtomRuntimeHandle;
-
 typedef enum {
   ATOM_LIFECYCLE_FOREGROUND = 1,
   ATOM_LIFECYCLE_BACKGROUND = 2,
@@ -593,17 +579,15 @@ typedef enum {
 ```c
 int32_t atom_app_init(
   AtomSlice config_flatbuffer,
-  AtomRuntimeHandle *out_handle,
   AtomOwnedBuffer *out_error_flatbuffer
 );
 
 int32_t atom_app_handle_lifecycle(
-  AtomRuntimeHandle handle,
   AtomLifecycleEvent event,
   AtomOwnedBuffer *out_error_flatbuffer
 );
 
-void atom_app_shutdown(AtomRuntimeHandle handle);
+void atom_app_shutdown(void);
 void atom_buffer_free(AtomOwnedBuffer buffer);
 ```
 
@@ -612,7 +596,7 @@ Return rules:
 - `0` means success
 - non-zero means failure and MUST populate `out_error_flatbuffer`
 
-### 8.2.1 App-Owned Runtime Registration Handshake
+### 8.2.1 App-Owned Runtime Startup Handshake
 
 The runtime registration handshake for the initial mobile profile MUST be app-owned.
 
@@ -620,11 +604,14 @@ Rules:
 
 - the app entry crate identified by `entry_crate_name` MUST expose `atom_runtime_config()` or an
   equivalent generated builder entry point
-- generated Rust bridge code for iOS and Android MUST call that app-owned registration function
-  during `atom_app_init` or JNI init before the runtime is started
-- adding or removing a runtime plugin MUST NOT require edits to generated Swift/Kotlin host
+- generated Rust bridge code for iOS and Android MUST call
+  `atom_runtime::__init(atom_runtime_config())` during `atom_app_init` or JNI init before the
+  runtime is marked `Running`
+- generated bridge code MUST forward lifecycle and shutdown through hidden singleton helpers without
+  passing runtime handles
+- adding or removing a runtime support crate MUST NOT require edits to generated Swift/Kotlin host
   templates beyond the generic framework-owned bridge
-- `atom-runtime` MUST remain unaware of concrete plugin crate identities
+- `atom-runtime` MUST remain unaware of concrete support-crate identities
 
 ### 8.3 Generated Method Exports
 
@@ -1527,40 +1514,40 @@ Required behavior:
 Conformance example:
 
 - Input: canonical app startup plus lifecycle sequence `init -> background -> resume -> terminate`
-- Expected output: the runtime records shared state updates, completes at least one async task,
-  successfully performs a `device_info.get` module call while `Running`, and transitions through
+- Expected output: the runtime records shared state updates, completes at least one async task, and
+  transitions through
   `Created -> Initializing -> Running -> Backgrounded -> Running -> Terminating -> Terminated`
 
-### 11.6 Phase 4B: Runtime Plugin SDK and Registration
+### 11.6 Phase 4B: Runtime Free-Function API
 
 Required behavior:
 
-- runtime plugins follow Section 7.6
-- apps register runtime plugins in app-owned code rather than through kernel-side discovery
-- generated hosts do not require per-plugin bootstrap changes
-- the same registration path works for framework-owned and third-party-style plugin crates
+- runtime support crates follow Section 7.6
+- apps assemble runtime config in app-owned code rather than through kernel-side discovery
+- generated hosts do not require per-library bootstrap changes
+- the same startup path works for framework-owned and third-party-style support crates
 
 Conformance example:
 
-- Input: canonical app with one external plugin crate
-- Expected output: runtime boots successfully with the plugin registered through app-owned runtime
-  config and without changes to `atom-runtime` or generated host templates
+- Input: canonical app with one external runtime support crate
+- Expected output: runtime boots successfully with the support crate linked through app-owned Rust
+  code and without changes to `atom-runtime` or generated host templates
 
-### 11.7 Phase 4C: First-Party Plugin Libraries
+### 11.7 Phase 4C: First-Party Runtime Libraries
 
 Required behavior:
 
-- first-party plugins ship as separate crates outside `atom-runtime`
-- no first-party plugin types are re-exported from `atom-runtime`
-- at least one routing/navigation-style plugin is proven as a library concern rather than a kernel
+- first-party runtime support crates ship as separate crates outside `atom-runtime`
+- no first-party runtime support types are re-exported from `atom-runtime`
+- at least one routing/navigation-style library is proven as a library concern rather than a kernel
   concern
-- at least one additional non-routing plugin crate proves the model is generic
+- at least one additional non-routing support crate proves the model is generic
 
 Conformance example:
 
-- Input: canonical app with `atom-navigation` or `atom-router` plus one additional plugin crate
-- Expected output: runtime boots successfully, plugin behavior is available through the shared
-  public plugin API, and either plugin can be removed without kernel changes
+- Input: canonical app with `atom-navigation` or `atom-router` plus one additional support crate
+- Expected output: runtime boots successfully, library behavior is available through the shared
+  public runtime API, and either library can be removed without kernel changes
 
 ### 11.8 Phase 5: Config/CNG Plugin System
 
@@ -1569,10 +1556,10 @@ Required behavior:
 - config/CNG plugins are separate crates that implement a `ConfigPlugin` trait owned by `atom-cng`
 - `atom-cng` has no knowledge of any specific plugin's domain (icons, splash screens, etc.)
 - config/CNG plugins contribute deterministic host customization per Section 9
-- config/CNG plugins remain separate from runtime plugins and native modules
-- runtime plugins MUST NOT mutate generated native trees directly
+- config/CNG plugins remain separate from runtime support crates and native modules
+- runtime support crates MUST NOT mutate generated native trees directly
 - incompatible module or config/CNG plugin metadata fails fast with `EXTENSION_INCOMPATIBLE`
-- the same app may combine runtime plugins, native modules, and config/CNG plugins coherently
+- the same app may combine runtime support crates, native modules, and config/CNG plugins coherently
 
 #### 11.8.1 Config Plugin Trait
 
@@ -1643,13 +1630,13 @@ When no icon paths are configured, the plugin MUST contribute nothing (no-op).
 
 Conformance example:
 
-- Input: canonical app with one runtime plugin, one native module, and the `atom-cng-app-icon`
-  config plugin configured with `ios = "assets/AppIcon.icon"` and
+- Input: canonical app with one runtime support crate, one native module, and the
+  `atom-cng-app-icon` config plugin configured with `ios = "assets/AppIcon.icon"` and
   `android = "assets/ic_launcher.png"`
 - Expected output: generated hosts include the correct icon files, plist/manifest reference them,
   build rules include them as resources — all contributed by the plugin crate, not by `atom-cng`
-  itself. The runtime plugin remains a runtime-only concern, and no manual edits to generated roots
-  are needed. A third party could write a new config plugin crate following the same pattern.
+  itself. The runtime support crate remains a runtime-only concern, and no manual edits to generated
+  roots are needed. A third party could write a new config plugin crate following the same pattern.
 
 ### 11.9 Phase 6: Developer Workflow, Ecosystem, and Evaluation
 
