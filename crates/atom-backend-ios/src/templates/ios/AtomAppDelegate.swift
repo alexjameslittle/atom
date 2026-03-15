@@ -2,7 +2,7 @@ import AtomRuntimeBridge
 import UIKit
 
 final class AtomAppDelegate: NSObject, UIApplicationDelegate {
-    private var handle: AtomRuntimeHandle = 0
+    private var runtimeInitialized = false
 
     func application(
         _: UIApplication,
@@ -25,28 +25,27 @@ final class AtomAppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func initializeRuntime() {
-        guard handle == 0 else {
+        guard !runtimeInitialized else {
             return
         }
         do {
-            var handle: AtomRuntimeHandle = 0
             var errorBuffer = AtomOwnedBuffer(ptr: nil, len: 0, cap: 0)
-            let status = atom_app_init(AtomSlice(ptr: nil, len: 0), &handle, &errorBuffer)
+            let status = atom_app_init(AtomSlice(ptr: nil, len: 0), &errorBuffer)
             defer { freeBuffer(&errorBuffer) }
             try ensureSuccess(status, action: "atom_app_init")
-            self.handle = handle
+            runtimeInitialized = true
         } catch {
             logError(error, action: "launch")
         }
     }
 
     func sendLifecycle(_ event: UInt32, action: String) {
-        guard handle != 0 else {
+        guard runtimeInitialized else {
             return
         }
         do {
             var errorBuffer = AtomOwnedBuffer(ptr: nil, len: 0, cap: 0)
-            let status = atom_app_handle_lifecycle(handle, event, &errorBuffer)
+            let status = atom_app_handle_lifecycle(event, &errorBuffer)
             defer { freeBuffer(&errorBuffer) }
             try ensureSuccess(status, action: action)
         } catch {
@@ -55,11 +54,11 @@ final class AtomAppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func shutdownRuntime() {
-        guard handle != 0 else {
+        guard runtimeInitialized else {
             return
         }
-        atom_app_shutdown(handle)
-        handle = 0
+        atom_app_shutdown()
+        runtimeInitialized = false
     }
 
     private func ensureSuccess(_ status: Int32, action: String) throws {

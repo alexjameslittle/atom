@@ -15,8 +15,6 @@ typedef struct AtomOwnedBuffer {
   size_t cap;
 } AtomOwnedBuffer;
 
-typedef uint64_t AtomRuntimeHandle;
-
 typedef enum AtomLifecycleEventCode {
   ATOM_LIFECYCLE_FOREGROUND = 1,
   ATOM_LIFECYCLE_BACKGROUND = 2,
@@ -27,15 +25,13 @@ typedef enum AtomLifecycleEventCode {
 
 int32_t atom_app_init(
     AtomSlice config_flatbuffer,
-    AtomRuntimeHandle *out_handle,
     AtomOwnedBuffer *out_error_flatbuffer);
 
 int32_t atom_app_handle_lifecycle(
-    AtomRuntimeHandle handle,
     uint32_t event,
     AtomOwnedBuffer *out_error_flatbuffer);
 
-void atom_app_shutdown(AtomRuntimeHandle handle);
+void atom_app_shutdown(void);
 void atom_buffer_free(AtomOwnedBuffer buffer);
 
 #endif  // ATOM_RUNTIME_H_
