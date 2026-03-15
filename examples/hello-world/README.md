@@ -70,6 +70,11 @@ the example `plugins/lifecycle_logger` crate uses the shared `PluginContext` API
 That keeps the proof of state changes, async work, and module calls inside the same public runtime
 API surface used by first-party and third-party plugins.
 
+The `device_info` module now declares its FlatBuffers-facing records and export shape directly in
+Rust with `#[atom_record]` and `#[atom_export]`. `atom prebuild` derives the hidden `.fbs` schema
+and language bindings under `generated/flatbuffers/device_info/`, so the example no longer carries a
+handwritten module schema file.
+
 Run it from the repository root:
 
 ```sh

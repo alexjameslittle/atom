@@ -1,12 +1,13 @@
 mod emit;
-mod templates;
+mod module_flatbuffers;
+mod rust_source;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use atom_backends::{
     BackendContribution, BackendPlan, ContributedFile, FileSource, GenerationBackendRegistry,
-    GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
+    GenerationPlan, PlannedBackend, SchemaPlan,
 };
 use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 use atom_manifest::{
@@ -16,6 +17,8 @@ use atom_modules::{JsonMap, ResolvedModule};
 use camino::{Utf8Path, Utf8PathBuf};
 use flatbuffers::{FlatBufferBuilder, TableFinishedWIPOffset, WIPOffset};
 use serde_json::Value;
+
+use crate::module_flatbuffers::plan_module_flatbuffers;
 
 pub use crate::emit::emit_host_tree;
 pub use crate::emit::write_file as write_generated_file;
@@ -126,9 +129,7 @@ pub fn build_generation_plan(
         )?;
     }
     let mut entitlements = JsonMap::new();
-    let mut schema_outputs = Vec::new();
-    let schema_root = manifest.build.generated_root.join("schema");
-    let aggregate_schema = schema_root.join("atom.fbs");
+    let mut schema_modules = Vec::new();
 
     for module in modules {
         for permission in &module.manifest.permissions {
@@ -152,16 +153,24 @@ pub fn build_generation_plan(
             &format!("entitlements.{}", module.manifest.id),
         )?;
 
-        for schema_file in &module.manifest.schema_files {
-            let relative = normalize_schema_output(schema_file);
-            schema_outputs.push(SchemaFilePlan {
-                source: manifest.repo_root.join(schema_file),
-                output: schema_root
-                    .join("modules")
-                    .join(&module.manifest.id)
-                    .join(relative),
+        let flatbuffer_package = plan_module_flatbuffers(&manifest.repo_root, module)?;
+        if let Some(schema) = &flatbuffer_package.generated_schema {
+            schema_modules.push(schema.path.clone());
+            contributed_files.push(ContributedFile {
+                source: FileSource::Content(schema.contents.clone()),
+                output: schema.path.clone(),
             });
+        } else {
+            schema_modules.extend(module.manifest.schema_files.iter().cloned());
         }
+        contributed_files.push(ContributedFile {
+            source: FileSource::Content(flatbuffer_package.build_contents()),
+            output: flatbuffer_package.build_file.clone(),
+        });
+        contributed_files.push(ContributedFile {
+            source: FileSource::Content(flatbuffer_package.rust_wrapper_contents()),
+            output: flatbuffer_package.rust_wrapper.clone(),
+        });
     }
 
     let plugin_ctx = ConfigPluginContext {
@@ -185,11 +194,8 @@ pub fn build_generation_plan(
     }
 
     let schema = SchemaPlan {
-        aggregate: aggregate_schema.clone(),
-        modules: schema_outputs
-            .iter()
-            .map(|schema_file| schema_file.output.clone())
-            .collect(),
+        aggregate: Utf8PathBuf::new(),
+        modules: schema_modules,
     };
 
     for backend in registry.iter() {
@@ -202,9 +208,10 @@ pub fn build_generation_plan(
         backends.entry(backend.id().to_owned()).or_default().plan = Some(backend_plan);
     }
 
-    let mut generated_files = vec![aggregate_schema];
-    generated_files.extend(schema.modules.iter().cloned());
-    generated_files.extend(contributed_files.iter().map(|file| file.output.clone()));
+    let mut generated_files: Vec<Utf8PathBuf> = contributed_files
+        .iter()
+        .map(|file| file.output.clone())
+        .collect();
     let backends: BTreeMap<String, PlannedBackend> = backends
         .into_iter()
         .filter_map(|(id, pending)| {
@@ -231,7 +238,6 @@ pub fn build_generation_plan(
         permissions: permissions.into_iter().collect(),
         entitlements,
         schema,
-        schema_files: schema_outputs,
         contributed_files,
         backends,
         generated_files,
@@ -361,17 +367,6 @@ fn create_prebuild_schema<'a, T>(
     builder.push_slot_always::<WIPOffset<_>>(4, aggregate);
     builder.push_slot_always::<WIPOffset<_>>(6, modules);
     builder.end_table(table)
-}
-
-fn normalize_schema_output(schema_file: &Utf8Path) -> Utf8PathBuf {
-    let value = schema_file.as_str();
-    if let Some(stripped) = value.strip_prefix("schema/") {
-        return Utf8PathBuf::from(stripped);
-    }
-    if let Some((_, stripped)) = value.rsplit_once("/schema/") {
-        return Utf8PathBuf::from(stripped);
-    }
-    schema_file.to_owned()
 }
 
 fn validate_extension_compatibility(
@@ -532,26 +527,6 @@ fn object_from_value(value: Value) -> JsonMap {
     }
 }
 
-fn render_aggregate_schema(plan: &GenerationPlan) -> AtomResult<String> {
-    let schema_includes: Vec<&str> = plan
-        .schema
-        .modules
-        .iter()
-        .map(|schema_file| {
-            schema_file
-                .strip_prefix(plan.manifest.build.generated_root.join("schema"))
-                .expect("schema file should live under generated schema root")
-                .as_str()
-        })
-        .collect();
-    templates::render(
-        "schema/atom.fbs",
-        minijinja::context! {
-            schema_includes,
-        },
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -565,7 +540,7 @@ mod tests {
         NormalizedManifest,
         testing::{fixture_config_plugin_request, fixture_manifest, fixture_module_request},
     };
-    use atom_modules::{ResolvedModule, testing::fixture_schema_module};
+    use atom_modules::{ResolvedModule, testing::fixture_resolved_module};
     use camino::{Utf8Path, Utf8PathBuf};
     use serde_json::{Value, json};
     use tempfile::tempdir;
@@ -688,17 +663,23 @@ mod tests {
     fn fixture_manifest_and_modules(
         root: &Utf8PathBuf,
     ) -> (NormalizedManifest, Vec<ResolvedModule>) {
-        fs::create_dir_all(root.join("modules/schema")).expect("module dir");
+        fs::create_dir_all(root.join("modules/fixture/src")).expect("module dir");
         fs::write(
-            root.join("modules/schema/fixture.fbs"),
-            "namespace atom.fixture;\n",
+            root.join("modules/fixture/src/lib.rs"),
+            r#"
+#[atom_macros::atom_record]
+pub struct DeviceInfo {
+    pub model: String,
+    pub os: String,
+}
+"#,
         )
-        .expect("schema");
+        .expect("source");
 
         let mut manifest = fixture_manifest(root);
-        manifest.modules = vec![fixture_module_request("//modules/schema:schema")];
+        manifest.modules = vec![fixture_module_request("//modules/fixture:fixture")];
 
-        let modules = vec![fixture_schema_module(root, "modules/schema/fixture.fbs")];
+        let modules = vec![fixture_resolved_module(root)];
         (manifest, modules)
     }
 
@@ -726,16 +707,25 @@ mod tests {
         let plan = build_generation_plan(&manifest, &modules, &fixture_registry(), &registry)
             .expect("plan");
 
-        assert!(
-            plan.generated_files
-                .contains(&Utf8PathBuf::from("generated/schema/atom.fbs"))
-        );
         assert!(plan.generated_files.contains(&Utf8PathBuf::from(
-            "generated/schema/modules/schema_module/fixture.fbs"
+            "generated/flatbuffers/fixture_module/BUILD.bazel"
+        )));
+        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
+            "generated/flatbuffers/fixture_module/lib.rs"
+        )));
+        assert!(plan.generated_files.contains(&Utf8PathBuf::from(
+            "generated/flatbuffers/fixture_module/fixture_module.fbs"
         )));
         assert!(
             plan.generated_files
                 .contains(&Utf8PathBuf::from("generated/fixture/FIXTURE.txt"))
+        );
+        assert_eq!(plan.schema.aggregate, Utf8PathBuf::new());
+        assert_eq!(
+            plan.schema.modules,
+            vec![Utf8PathBuf::from(
+                "generated/flatbuffers/fixture_module/fixture_module.fbs"
+            )]
         );
         assert!(!render_prebuild_plan(&plan).is_empty());
     }
@@ -752,9 +742,16 @@ mod tests {
 
         let roots = emit_host_tree(&root, &plan, &registry).expect("host tree");
 
-        assert!(root.join("generated/schema/atom.fbs").exists());
         assert!(
-            root.join("generated/schema/modules/schema_module/fixture.fbs")
+            root.join("generated/flatbuffers/fixture_module/fixture_module.fbs")
+                .exists()
+        );
+        assert!(
+            root.join("generated/flatbuffers/fixture_module/BUILD.bazel")
+                .exists()
+        );
+        assert!(
+            root.join("generated/flatbuffers/fixture_module/lib.rs")
                 .exists()
         );
         assert!(root.join("generated/fixture/FIXTURE.txt").exists());
@@ -880,6 +877,50 @@ mod tests {
             root.join("cng-output/alpha/resources/alpha/subdir")
                 .exists()
         );
+    }
+
+    #[test]
+    fn stale_flatbuffer_module_packages_are_removed() {
+        let directory = tempdir().expect("tempdir");
+        let root = Utf8PathBuf::from_path_buf(directory.path().to_path_buf()).expect("utf8 path");
+        let (manifest, modules) = fixture_manifest_and_modules(&root);
+        fs::create_dir_all(root.join("modules/fixture_two/src")).expect("module dir");
+        fs::write(
+            root.join("modules/fixture_two/src/lib.rs"),
+            r#"
+#[atom_macros::atom_record]
+pub struct SecondaryInfo {
+    pub value: String,
+}
+"#,
+        )
+        .expect("source");
+        let mut second_module = fixture_resolved_module(&root);
+        second_module.request.target_label = "//modules/fixture_two:fixture_two".to_owned();
+        second_module.metadata_path = root.join("fixture_two.atom.module.json");
+        second_module.manifest.target_label = "//modules/fixture_two:fixture_two".to_owned();
+        second_module.manifest.id = "fixture_two".to_owned();
+        second_module.manifest.crate_root =
+            Some(Utf8PathBuf::from("modules/fixture_two/src/lib.rs"));
+        let registry = generation_registry(&["fixture"]);
+
+        let initial_plan = build_generation_plan(
+            &manifest,
+            &[modules[0].clone(), second_module.clone()],
+            &fixture_registry(),
+            &registry,
+        )
+        .expect("plan");
+        emit_host_tree(&root, &initial_plan, &registry).expect("host tree");
+        assert!(root.join("generated/flatbuffers/fixture_module").exists());
+        assert!(root.join("generated/flatbuffers/fixture_two").exists());
+
+        let empty_plan = build_generation_plan(&manifest, &modules, &fixture_registry(), &registry)
+            .expect("plan");
+        emit_host_tree(&root, &empty_plan, &registry).expect("host tree");
+
+        assert!(root.join("generated/flatbuffers/fixture_module").exists());
+        assert!(!root.join("generated/flatbuffers/fixture_two").exists());
     }
 
     #[test]

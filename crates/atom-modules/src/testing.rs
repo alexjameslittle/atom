@@ -18,6 +18,8 @@ pub fn fixture_resolved_module(repo_root: &Utf8Path) -> ResolvedModule {
             min_atom_version: Some("0.1.0".to_owned()),
             ios_min_deployment_target: None,
             android_min_sdk: None,
+            crate_root: Some(Utf8PathBuf::from("modules/fixture/src/lib.rs")),
+            generated_root: Utf8PathBuf::from("generated"),
             depends_on: Vec::new(),
             schema_files: Vec::new(),
             methods: Vec::new(),
@@ -39,10 +41,12 @@ pub fn fixture_resolved_module(repo_root: &Utf8Path) -> ResolvedModule {
 #[must_use]
 pub fn fixture_schema_module(repo_root: &Utf8Path, schema_path: &str) -> ResolvedModule {
     let mut module = fixture_resolved_module(repo_root);
+    module.manifest.kind = ModuleKind::Native;
     "schema_module".clone_into(&mut module.manifest.id);
     "//modules/schema:schema".clone_into(&mut module.request.target_label);
     module.metadata_path = repo_root.join("schema.atom.module.json");
     "//modules/schema:schema".clone_into(&mut module.manifest.target_label);
+    module.manifest.crate_root = None;
     module.manifest.schema_files = vec![Utf8PathBuf::from(schema_path)];
     module
 }

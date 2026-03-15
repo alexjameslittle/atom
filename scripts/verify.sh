@@ -11,6 +11,8 @@ mode=${1:-verify}
 # only valid when built with the correct platform flags via `atom run`.
 # If you add a new top-level directory with BUILD files, add it here.
 VERIFY_PACKAGES="//crates/... //examples/... //bzl/... //tools/... //platforms/..."
+EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
+GENERATED_FLATBUFFER_TARGETS="//generated/flatbuffers/device_info:device_info_rust_flatbuffers //generated/flatbuffers/device_info:device_info_swift_flatbuffers //generated/flatbuffers/device_info:device_info_kotlin_flatbuffers"
 
 check_for_unverified_packages() {
   for dir in "$repo_root"/*/; do
@@ -29,6 +31,7 @@ check_for_unverified_packages() {
 
 lint() {
   check_for_unverified_packages
+  generate_example_app
   sh scripts/check-generic-backend-leaks.sh
   # shellcheck disable=SC2086
   mise exec -- bazelisk build --config=lint --@aspect_rules_lint//lint:fail_on_violation --keep_going $VERIFY_PACKAGES
@@ -38,17 +41,23 @@ lint() {
 }
 
 test_suite() {
+  generate_example_app
   # shellcheck disable=SC2086
   mise exec -- bazelisk test $VERIFY_PACKAGES
-  mise exec -- bazelisk run //:atom -- prebuild --target //examples/hello-world/apps/hello_atom:hello_atom --dry-run >/dev/null
+  build_generated_flatbuffers
+  mise exec -- bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET" --dry-run >/dev/null
   sh scripts/verify-scaffold-project.sh
 }
-
-EXAMPLE_TARGET="//examples/hello-world/apps/hello_atom:hello_atom"
 
 generate_example_app() {
   # Generate BUILD files for the example app (non-dry-run).
   mise exec -- bazelisk run //:atom -- prebuild --target "$EXAMPLE_TARGET"
+}
+
+build_generated_flatbuffers() {
+  # Validate per-module flatc outputs for Rust, Swift, and Kotlin.
+  # shellcheck disable=SC2086
+  mise exec -- bazelisk build $GENERATED_FLATBUFFER_TARGETS
 }
 
 build_ios_app() {
