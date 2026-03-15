@@ -5,7 +5,7 @@ use atom_ffi::{
     AtomSlice,
 };
 use atom_runtime::{RuntimeConfig, init_runtime, shutdown_runtime};
-use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Table, root_unchecked};
+use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Table, Vector, root_unchecked};
 
 static TEST_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -146,6 +146,33 @@ fn status() -> ConnectionStatus {
     ConnectionStatus::Disconnected
 }
 
+#[atom_macros::atom_export]
+fn greet(name: &str) -> String {
+    format!("hello, {name}")
+}
+
+#[atom_macros::atom_export]
+fn add_one(value: i32) -> i32 {
+    value + 1
+}
+
+#[atom_macros::atom_export]
+fn toggle(flag: bool) -> bool {
+    !flag
+}
+
+#[atom_macros::atom_export]
+fn append_value(values: Vec<i32>) -> Vec<i32> {
+    let mut values = values;
+    values.push(99);
+    values
+}
+
+#[atom_macros::atom_export]
+fn increment_optional(value: Option<i32>) -> Option<i32> {
+    value.map(|value| value + 1)
+}
+
 fn encode_echo_request(message: &str) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let message = builder.create_string(message);
@@ -184,6 +211,79 @@ fn decode_status(bytes: &[u8]) -> ConnectionStatus {
         .unwrap_or(0)
         .try_into()
         .expect("known status")
+}
+
+fn encode_string_input(value: &str) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let value = builder.create_string(value);
+    let table = builder.start_table();
+    builder.push_slot_always(4, value);
+    let root = builder.end_table(table);
+    builder.finish(root, None);
+    builder.finished_data().to_vec()
+}
+
+fn encode_i32_input(value: i32) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let table = builder.start_table();
+    builder.push_slot_always(4, value);
+    let root = builder.end_table(table);
+    builder.finish(root, None);
+    builder.finished_data().to_vec()
+}
+
+fn encode_bool_input(value: bool) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let table = builder.start_table();
+    builder.push_slot_always(4, value);
+    let root = builder.end_table(table);
+    builder.finish(root, None);
+    builder.finished_data().to_vec()
+}
+
+fn encode_i32_vec_input(values: &[i32]) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let values = builder.create_vector(values);
+    let table = builder.start_table();
+    builder.push_slot_always(4, values);
+    let root = builder.end_table(table);
+    builder.finish(root, None);
+    builder.finished_data().to_vec()
+}
+
+fn encode_optional_i32_input(value: Option<i32>) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let table = builder.start_table();
+    builder.push_slot_always(4, value.is_some());
+    if let Some(value) = value {
+        builder.push_slot(6, value, 0);
+    }
+    let root = builder.end_table(table);
+    builder.finish(root, None);
+    builder.finished_data().to_vec()
+}
+
+fn decode_i32_response(bytes: &[u8]) -> i32 {
+    let table = unsafe { root_unchecked::<Table<'_>>(bytes) };
+    unsafe { table.get::<i32>(4, Some(0)) }.unwrap_or(0)
+}
+
+fn decode_bool_response(bytes: &[u8]) -> bool {
+    let table = unsafe { root_unchecked::<Table<'_>>(bytes) };
+    unsafe { table.get::<bool>(4, Some(false)) }.unwrap_or(false)
+}
+
+fn decode_i32_vec_response(bytes: &[u8]) -> Vec<i32> {
+    let table = unsafe { root_unchecked::<Table<'_>>(bytes) };
+    let values =
+        unsafe { table.get::<ForwardsUOffset<Vector<'_, i32>>>(4, None) }.expect("vector response");
+    values.iter().collect()
+}
+
+fn decode_optional_i32_response(bytes: &[u8]) -> Option<i32> {
+    let table = unsafe { root_unchecked::<Table<'_>>(bytes) };
+    let present = unsafe { table.get::<bool>(4, Some(false)) }.unwrap_or(false);
+    present.then(|| unsafe { table.get::<i32>(6, Some(0)) }.unwrap_or(0))
 }
 
 fn take_buffer(buffer: AtomOwnedBuffer) -> Vec<u8> {
@@ -313,6 +413,153 @@ fn enum_export_round_trips_flatbuffer_response() {
         decode_status(&take_buffer(response)),
         ConnectionStatus::Disconnected
     );
+
+    shutdown_runtime(handle);
+}
+
+#[test]
+fn borrowed_str_export_round_trips_string_response() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+
+    let input = encode_string_input("Atom");
+    let mut response = AtomOwnedBuffer::empty();
+    let mut error = AtomOwnedBuffer::empty();
+    let status = unsafe {
+        __atom_export_greet(
+            AtomSlice::from_bytes(&input),
+            &raw mut response,
+            &raw mut error,
+        )
+    };
+
+    assert_eq!(status, 0);
+    assert!(take_buffer(error).is_empty());
+    assert_eq!(
+        decode_string_response(&take_buffer(response)),
+        "hello, Atom".to_owned()
+    );
+
+    shutdown_runtime(handle);
+}
+
+#[test]
+fn primitive_i32_export_round_trips_through_ffi_boundary() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+
+    let input = encode_i32_input(41);
+    let mut response = AtomOwnedBuffer::empty();
+    let mut error = AtomOwnedBuffer::empty();
+    let status = unsafe {
+        __atom_export_add_one(
+            AtomSlice::from_bytes(&input),
+            &raw mut response,
+            &raw mut error,
+        )
+    };
+
+    assert_eq!(status, 0);
+    assert!(take_buffer(error).is_empty());
+    assert_eq!(decode_i32_response(&take_buffer(response)), 42);
+
+    shutdown_runtime(handle);
+}
+
+#[test]
+fn primitive_bool_export_round_trips_through_ffi_boundary() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+
+    let input = encode_bool_input(false);
+    let mut response = AtomOwnedBuffer::empty();
+    let mut error = AtomOwnedBuffer::empty();
+    let status = unsafe {
+        __atom_export_toggle(
+            AtomSlice::from_bytes(&input),
+            &raw mut response,
+            &raw mut error,
+        )
+    };
+
+    assert_eq!(status, 0);
+    assert!(take_buffer(error).is_empty());
+    assert!(decode_bool_response(&take_buffer(response)));
+
+    shutdown_runtime(handle);
+}
+
+#[test]
+fn primitive_vec_export_round_trips_through_ffi_boundary() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+
+    let input = encode_i32_vec_input(&[1, 2, 3]);
+    let mut response = AtomOwnedBuffer::empty();
+    let mut error = AtomOwnedBuffer::empty();
+    let status = unsafe {
+        __atom_export_append_value(
+            AtomSlice::from_bytes(&input),
+            &raw mut response,
+            &raw mut error,
+        )
+    };
+
+    assert_eq!(status, 0);
+    assert!(take_buffer(error).is_empty());
+    assert_eq!(
+        decode_i32_vec_response(&take_buffer(response)),
+        vec![1, 2, 3, 99]
+    );
+
+    shutdown_runtime(handle);
+}
+
+#[test]
+fn primitive_option_export_round_trips_through_ffi_boundary() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+
+    let input = encode_optional_i32_input(Some(41));
+    let mut response = AtomOwnedBuffer::empty();
+    let mut error = AtomOwnedBuffer::empty();
+    let status = unsafe {
+        __atom_export_increment_optional(
+            AtomSlice::from_bytes(&input),
+            &raw mut response,
+            &raw mut error,
+        )
+    };
+
+    assert_eq!(status, 0);
+    assert!(take_buffer(error).is_empty());
+    assert_eq!(
+        decode_optional_i32_response(&take_buffer(response)),
+        Some(42)
+    );
+
+    shutdown_runtime(handle);
+}
+
+#[test]
+fn primitive_option_none_round_trips_through_ffi_boundary() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let handle = init_runtime(RuntimeConfig::default()).expect("runtime init");
+
+    let input = encode_optional_i32_input(None);
+    let mut response = AtomOwnedBuffer::empty();
+    let mut error = AtomOwnedBuffer::empty();
+    let status = unsafe {
+        __atom_export_increment_optional(
+            AtomSlice::from_bytes(&input),
+            &raw mut response,
+            &raw mut error,
+        )
+    };
+
+    assert_eq!(status, 0);
+    assert!(take_buffer(error).is_empty());
+    assert_eq!(decode_optional_i32_response(&take_buffer(response)), None);
 
     shutdown_runtime(handle);
 }
