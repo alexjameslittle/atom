@@ -4,10 +4,20 @@ use minijinja::Environment;
 pub fn env() -> Environment<'static> {
     let mut env = Environment::new();
     env.add_template(
-        "schema/atom.fbs",
-        include_str!("templates/schema/atom.fbs.j2"),
+        "flatbuffers/BUILD.bazel",
+        include_str!("templates/flatbuffers/BUILD.bazel.j2"),
     )
-    .expect("schema/atom.fbs template");
+    .expect("flatbuffers/BUILD.bazel template");
+    env.add_template(
+        "flatbuffers/lib.rs",
+        include_str!("templates/flatbuffers/lib.rs.j2"),
+    )
+    .expect("flatbuffers/lib.rs template");
+    env.add_template(
+        "flatbuffers/module.fbs",
+        include_str!("templates/flatbuffers/module.fbs.j2"),
+    )
+    .expect("flatbuffers/module.fbs template");
     env
 }
 
@@ -18,13 +28,13 @@ pub fn render(name: &str, ctx: minijinja::Value) -> AtomResult<String> {
     let env = env();
     let template = env.get_template(name).map_err(|error| {
         AtomError::new(
-            AtomErrorCode::CngWriteError,
+            AtomErrorCode::CngTemplateError,
             format!("failed to load template {name}: {error}"),
         )
     })?;
     template.render(ctx).map_err(|error| {
         AtomError::new(
-            AtomErrorCode::CngWriteError,
+            AtomErrorCode::CngTemplateError,
             format!("failed to render template {name}: {error}"),
         )
     })

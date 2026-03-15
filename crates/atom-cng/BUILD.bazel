@@ -17,6 +17,7 @@ rust_library(
         "@crates//:flatbuffers",
         "@crates//:minijinja",
         "@crates//:serde_json",
+        "@crates//:syn",
     ],
 )
 
