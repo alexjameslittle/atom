@@ -39,7 +39,7 @@ fn get_runtime_mut(
 /// # Errors
 ///
 /// Returns an error if the runtime registry mutex is poisoned, tokio fails to
-/// initialize, or any module/plugin init fails.
+/// initialize, or any plugin startup hook fails.
 pub fn init_runtime(config: RuntimeConfig) -> AtomResult<AtomRuntimeHandle> {
     logging::init_logging();
 

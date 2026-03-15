@@ -77,7 +77,6 @@ Dependency direction should move one way:
     Backgrounded/Suspended → Terminating → Terminated)
   - Kernel-owned state container and inspection snapshot (`RuntimeSnapshot`) for state values,
     dispatched events, and completed effects
-  - Module lifecycle management: init in dependency order, shutdown in reverse
   - Runtime plugin host API (`RuntimePlugin` trait) for observing lifecycle events and owning
     plugin-local state
   - App-owned runtime config assembly through `atom_runtime_config()` in the app crate
@@ -111,9 +110,9 @@ Dependency direction should move one way:
    contracts when needed.
 9. Generated runtime bridge code links the app crate, calls `atom_runtime_config()` without
    kernel-side plugin discovery, and uses `running_plugin_context()` plus module crate APIs when it
-   needs to service Rust-backed module exports. Any first-party or third-party plugin crates, along
-   with any Rust-backed module lifecycle registrations, enter through that app-owned configuration
-   path.
+   needs to service Rust-backed module exports. Any first-party or third-party plugin crates enter
+   through that app-owned runtime configuration path, while Rust-backed modules enter through Bazel
+   module metadata plus generated bridge code rather than runtime registration.
 
 ## Boundaries To Preserve
 

@@ -164,7 +164,7 @@ Every user-facing failure MUST map to one of the following codes.
 | Bridge    | `BRIDGE_INVALID_ARGUMENT`       | native host passed invalid ABI data              | `68`     |
 | Bridge    | `BRIDGE_INIT_FAILED`            | runtime bridge bootstrap failed                  | `68`     |
 | Runtime   | `RUNTIME_TRANSITION_INVALID`    | invalid lifecycle transition                     | `68`     |
-| Runtime   | `MODULE_INIT_FAILED`            | module init or shutdown hook failed              | `68`     |
+| Runtime   | `MODULE_INIT_FAILED`            | runtime plugin startup or shutdown hook failed   | `68`     |
 | CLI       | `CLI_USAGE_ERROR`               | invalid CLI invocation                           | `64`     |
 | Auto      | `AUTOMATION_UNAVAILABLE`        | required automation backend unavailable          | `69`     |
 | Auto      | `AUTOMATION_TARGET_NOT_FOUND`   | requested UI target could not be resolved        | `69`     |
@@ -488,22 +488,22 @@ The runtime state machine MUST use these states:
 | From                                       | Trigger                             | To             | Required Action                               |
 | ------------------------------------------ | ----------------------------------- | -------------- | --------------------------------------------- |
 | `Created`                                  | `atom_app_init` succeeds            | `Initializing` | allocate runtime handle, parse config         |
-| `Initializing`                             | all modules initialize successfully | `Running`      | mark runtime available for public module APIs |
-| `Initializing`                             | module init fails                   | `Failed`       | emit `MODULE_INIT_FAILED`                     |
+| `Initializing`                             | all plugins initialize successfully | `Running`      | mark runtime available for public module APIs |
+| `Initializing`                             | plugin startup hook fails           | `Failed`       | emit `MODULE_INIT_FAILED`                     |
 | `Running`                                  | host foreground loss                | `Backgrounded` | pause foreground-only work                    |
 | `Backgrounded`                             | host foreground gain                | `Running`      | resume foreground-only work                   |
 | `Backgrounded`                             | host suspension callback            | `Suspended`    | flush state, stop non-background tasks        |
 | `Suspended`                                | host resume callback                | `Running`      | restore active scheduling                     |
-| `Running` or `Backgrounded` or `Suspended` | host terminate callback             | `Terminating`  | begin reverse-order module shutdown           |
+| `Running` or `Backgrounded` or `Suspended` | host terminate callback             | `Terminating`  | begin reverse-order plugin shutdown           |
 | `Terminating`                              | shutdown completes                  | `Terminated`   | free runtime resources                        |
 | any non-terminal state                     | unrecoverable bridge/runtime error  | `Failed`       | freeze further transitions                    |
 
-### 7.3 Module Initialization Order
+### 7.3 Runtime Plugin Ordering
 
-- Modules MUST initialize in resolved module order from Section 6.4.
-- Shutdown MUST happen in reverse initialization order.
-- Module `init_priority` MAY reorder modules within the same dependency layer.
-- If two modules share the same dependency layer and priority, declaration order MUST win.
+- Runtime plugins MUST initialize in app registration order.
+- Runtime plugins MUST shut down in reverse registration order.
+- Rust-backed modules are not runtime-registered plugins. They enter through Bazel module metadata
+  plus generated bridge code and direct Rust imports.
 
 ### 7.4 Invalid Transitions
 
@@ -517,19 +517,25 @@ These transitions MUST fail with `RUNTIME_TRANSITION_INVALID`:
 ### 7.5 Reference Algorithm: Runtime Startup
 
 ```text
-function start_runtime(normalized_manifest, resolved_modules):
+function start_runtime(runtime_config):
     state = Created
     handle = allocate_runtime_handle()
     state = Initializing
 
-    ordered = sort_modules_for_init(resolved_modules)
-    for module in ordered:
-        result = module.init()
+    for plugin in runtime_config.plugins:
+        result = plugin.on_init()
         if result is error:
             state = Failed
-            error MODULE_INIT_FAILED at module.id
+            error MODULE_INIT_FAILED at plugin.id
 
     state = Running
+
+    for plugin in runtime_config.plugins:
+        result = plugin.on_running()
+        if result is error:
+            state = Failed
+            error MODULE_INIT_FAILED at plugin.id
+
     return handle
 ```
 
@@ -650,6 +656,8 @@ Export naming rules:
 - export name collisions MUST fail generation with `CNG_CONFLICT`
 - generated exports MUST resolve the active runtime handle for the app and fail with
   `RUNTIME_TRANSITION_INVALID` if startup has not completed
+- generated exports MUST obtain a running `PluginContext` from `atom-runtime` and call the module
+  crate API directly rather than routing the call back through a runtime-owned module registry
 
 ### 8.4 Memory Ownership Rules
 
@@ -672,6 +680,8 @@ Inside Rust, module access MUST stay typed:
 - generated per-method exports deserialize the incoming FlatBuffer request, obtain a running
   `PluginContext` from `atom-runtime`, call the module crate's Rust API directly, and serialize the
   Rust response back to FlatBuffer bytes for the host
+- requestless module methods MAY omit a Rust request type entirely; the generated bridge still MUST
+  validate the method-specific FlatBuffer request table before calling the Rust API
 
 CNG MUST emit:
 
@@ -1531,7 +1541,7 @@ Conformance example:
 
 Required behavior:
 
-- module init in resolved order
+- runtime plugins initialize in registration order and shut down in reverse registration order
 - runtime lifecycle follows Section 7.2
 - invalid transitions return `RUNTIME_TRANSITION_INVALID`
 - the runtime exposes kernel-owned state/event/effect inspection plus a public running-context API
@@ -1541,7 +1551,7 @@ Conformance example:
 
 - Input: canonical app startup plus lifecycle sequence `init -> background -> resume -> terminate`
 - Expected output: the runtime records shared state updates, completes at least one async task,
-  generated bridge code can obtain a running context and call `device_info::get(...)` successfully
+  generated bridge code can obtain a running context and call `device_info::get(&ctx)` successfully
   while `Running`, and the runtime transitions through
   `Created -> Initializing -> Running -> Backgrounded -> Running -> Terminating -> Terminated`
 

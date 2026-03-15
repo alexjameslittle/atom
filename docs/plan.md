@@ -79,7 +79,7 @@ The runtime kernel owns:
 - Event dispatch and the deterministic state transition boundary.
 - Async task execution and effect scheduling.
 - Structured logging and inspection hooks.
-- Runtime-side module registration and call plumbing.
+- Public runtime context access for generated bridges and direct module crate APIs.
 - Runtime plugin registration and coordination.
 
 This should be platform-agnostic Rust with no iOS/Android logic mixed into it. It should not bake in

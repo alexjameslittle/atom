@@ -289,7 +289,7 @@ fn render_method_export(
         to_camel_case(module_id),
         to_camel_case(method_name)
     );
-    let decode_fn = format!("decode_{module_id}_{method_name}_request");
+    let request_fn = format!("decode_{module_id}_{method_name}_request");
     let encode_fn = format!("encode_{module_id}_{method_name}_response");
     let export_fn = format!("atom_{module_id}_{method_name}");
 
@@ -316,14 +316,35 @@ impl flatbuffers::Verifiable for {request_root_type} {{
     )
     .expect("write request root");
     render_table_verifier(rendered, request_table);
-    writeln!(
-        rendered,
-        r#"        table.finish();
+    if request_table.fields.is_empty() {
+        writeln!(
+            rendered,
+            r#"        table.finish();
         Ok(())
     }}
 }}
 
-fn {decode_fn}(input_flatbuffer: &[u8]) -> AtomResult<{request_type}> {{
+fn {request_fn}(input_flatbuffer: &[u8]) -> AtomResult<()> {{
+    let _table = flatbuffers::root::<{request_root_type}>(input_flatbuffer).map_err(|error| {{
+        AtomError::new(
+            AtomErrorCode::BridgeInvalidArgument,
+            format!("invalid FlatBuffer request for {module_id}.{method_name}: {{error}}"),
+        )
+    }})?;
+    Ok(())
+}}
+"#
+        )
+        .expect("write empty request validator");
+    } else {
+        writeln!(
+            rendered,
+            r#"        table.finish();
+        Ok(())
+    }}
+}}
+
+fn {request_fn}(input_flatbuffer: &[u8]) -> AtomResult<{request_type}> {{
     let table = flatbuffers::root::<{request_root_type}>(input_flatbuffer).map_err(|error| {{
         AtomError::new(
             AtomErrorCode::BridgeInvalidArgument,
@@ -331,13 +352,8 @@ fn {decode_fn}(input_flatbuffer: &[u8]) -> AtomResult<{request_type}> {{
         )
     }})?;
 "#
-    )
-    .expect("write decode header");
-
-    if request_table.fields.is_empty() {
-        writeln!(rendered, "    let _ = table;").expect("write empty request validation");
-        writeln!(rendered, "    Ok({request_type} {{}})").expect("write empty request constructor");
-    } else {
+        )
+        .expect("write decode header");
         for field in &request_table.fields {
             render_decode_field(rendered, field);
         }
@@ -346,8 +362,8 @@ fn {decode_fn}(input_flatbuffer: &[u8]) -> AtomResult<{request_type}> {{
             writeln!(rendered, "        {},", field.name).expect("write request field");
         }
         writeln!(rendered, "    }})").expect("write request constructor close");
+        writeln!(rendered, "}}\n").expect("write decode footer");
     }
-    writeln!(rendered, "}}\n").expect("write decode footer");
 
     writeln!(
         rendered,
@@ -414,7 +430,26 @@ pub unsafe extern "C" fn {export_fn}(
         }}
     }};
 
-    let request = match {decode_fn}(unsafe {{ input_flatbuffer.as_bytes() }}) {{
+    "#
+    )
+    .expect("write export prefix");
+    if request_table.fields.is_empty() {
+        writeln!(
+            rendered,
+            r"    if let Err(error) = {request_fn}(unsafe {{ input_flatbuffer.as_bytes() }}) {{
+        unsafe {{ ptr::write(out_response_flatbuffer, AtomOwnedBuffer::empty()) }};
+        unsafe {{ write_error_buffer(out_error_flatbuffer, &error) }};
+        return error.exit_code();
+    }}
+
+    match {crate_name}::{method_name}(&ctx) {{
+"
+        )
+        .expect("write zero-arg request handling");
+    } else {
+        writeln!(
+            rendered,
+            r"    let request = match {request_fn}(unsafe {{ input_flatbuffer.as_bytes() }}) {{
         Ok(request) => request,
         Err(error) => {{
             unsafe {{ ptr::write(out_response_flatbuffer, AtomOwnedBuffer::empty()) }};
@@ -424,7 +459,13 @@ pub unsafe extern "C" fn {export_fn}(
     }};
 
     match {crate_name}::{method_name}(&ctx, request) {{
-        Ok(response) => {{
+"
+        )
+        .expect("write requestful handling");
+    }
+    writeln!(
+        rendered,
+        r"        Ok(response) => {{
             let bytes = {encode_fn}(&response);
             unsafe {{
                 ptr::write(out_response_flatbuffer, AtomOwnedBuffer::from_vec(bytes));
@@ -443,9 +484,9 @@ pub unsafe extern "C" fn {export_fn}(
         }}
     }}
 }}
-"#
+"
     )
-    .expect("write export");
+    .expect("write export body");
 }
 
 fn render_decode_field(rendered: &mut String, field: &FlatbufferFieldSpec) {
@@ -651,7 +692,7 @@ table GetDeviceInfoResponse {
 
         assert!(rendered.contains("pub unsafe extern \"C\" fn atom_device_info_get("));
         assert!(rendered.contains("atom_runtime::running_plugin_context(handle)"));
-        assert!(rendered.contains("device_info::get(&ctx, request)"));
+        assert!(rendered.contains("device_info::get(&ctx)"));
         assert!(rendered.contains("builder.create_string(&response.model)"));
         assert!(rendered.contains("builder.create_string(&response.os)"));
     }

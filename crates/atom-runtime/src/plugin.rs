@@ -71,7 +71,7 @@ pub trait RuntimePlugin: Send + Sync {
     /// Unique identifier for this plugin.
     fn id(&self) -> &str;
 
-    /// Called during runtime init, after all modules are initialized.
+    /// Called during runtime init before the runtime reaches `Running`.
     /// Plugins init in registration order.
     ///
     /// # Errors
