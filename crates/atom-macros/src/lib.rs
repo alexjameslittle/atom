@@ -17,3 +17,11 @@ pub fn atom_export(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(error) => error.into_compile_error().into(),
     }
 }
+
+#[proc_macro_attribute]
+pub fn atom_import(attr: TokenStream, item: TokenStream) -> TokenStream {
+    match expand::expand_atom_import(attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
