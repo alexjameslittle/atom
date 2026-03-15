@@ -6,7 +6,7 @@ use atom_ffi::{AtomError, AtomErrorCode, AtomResult};
 
 pub use crate::cng::{
     BackendContribution, BackendPlan, ContributedFile, FileSource, GenerationBackend,
-    GenerationBackendRegistry, GenerationPlan, PlannedBackend, SchemaFilePlan, SchemaPlan,
+    GenerationBackendRegistry, GenerationPlan, PlannedBackend, SchemaPlan,
 };
 pub use crate::deploy::{
     ArtifactRecord, BackendAutomationSession, DeployBackend, DeployBackendRegistry,

@@ -140,7 +140,6 @@ Planned public Bazel surface:
 - `atom_module` for Rust-authored Atom modules
 - `atom_native_module` for native-only or mixed native modules
 - plugin-specific Starlark macros consumed through `atom_app(...).config_plugins`
-- `atom_schema_bundle` for module-owned FlatBuffers schemas
 
 ## 4. Error Taxonomy
 
@@ -335,7 +334,9 @@ Rules:
   JSON target emitted by the Bazel rule
 - optional Rust helper traits or proc macros MAY exist for ergonomics, but module discovery and CNG
   MUST NOT depend on proc-macro-generated manifest exports or runtime reflection
-- `.fbs` files remain the source of truth for ABI-visible request and response payloads
+- Rust-authored modules MUST define ABI-visible request, response, and record metadata in Rust
+  source rooted at `crate_root`
+- native-only modules MAY continue to provide `.fbs` files through `schema_files`
 
 ### 6.2 Required Metadata Shape
 
@@ -348,6 +349,8 @@ The Bazel-generated metadata document MUST include these top-level keys:
 - `min_atom_version`
 - `ios_min_deployment_target`
 - `android_min_sdk`
+- `crate_root`
+- `generated_root`
 - `depends_on`
 - `schema_files`
 - `methods`
@@ -370,6 +373,8 @@ The normalized module manifest MUST support these fields:
 - `min_atom_version: Option<String>`
 - `ios_min_deployment_target: Option<String>`
 - `android_min_sdk: Option<u32>`
+- `crate_root: Option<String>`
+- `generated_root: String`
 - `depends_on: Vec<String>`
 - `schema_files: Vec<String>`
 - `methods: Vec<MethodSpec>`
@@ -392,8 +397,12 @@ Schema source of truth rules:
 
 - `kind` MUST be either `atom_module` or `atom_native_module`, matching the Bazel rule that emitted
   the metadata.
-- `.fbs` files are the only source of truth for the wire contract.
-- Each module MUST declare one or more FlatBuffers schema files in `schema_files`.
+- Rust modules MUST declare `crate_root`, and native modules MUST omit it.
+- `generated_root` MUST be repo-relative and determines where per-module generated FlatBuffers build
+  packages are written.
+- Rust modules MUST allow CNG to discover `#[atom_record]`, `#[atom_export]`, and `#[atom_import]`
+  items by parsing the Rust source graph rooted at `crate_root`.
+- Native modules MUST declare one or more FlatBuffers schema files in `schema_files`.
 - `atom_api_level` MUST be an integer matching the framework-supported API level for the current
   build.
 - `min_atom_version`, when present, MUST be a semver lower bound satisfied by the current framework
@@ -406,11 +415,13 @@ Schema source of truth rules:
 - Rule inputs for `schema_files`, `ios_srcs`, and `android_srcs` MAY be package-relative, but the
   emitted metadata MUST normalize them to repo-relative paths.
 - Existing FlatBuffers schemas MAY be reused unchanged by listing them in `schema_files`.
-- Rust request and response types used at the ABI boundary MUST be generated from `.fbs`.
-- Handwritten Rust structs and enums MAY exist as implementation details, but they MUST NOT define
-  or evolve the wire contract.
-- `MethodSpec.request_table` and `MethodSpec.response_table` MUST be fully qualified FlatBuffers
-  table names declared by the module's schema files.
+- Rust request and response types used at the ABI boundary MUST be generated from CNG-emitted
+  per-module `.fbs` schemas and `flatc` output.
+- `#[atom_record]` structs and enums are the source of truth for Rust-backed wire contracts; CNG
+  MUST map them to FlatBuffers tables, enums, and unions.
+- `#[atom_import]` functions MUST generate `{FnName}Args` tables in the per-module schema.
+- `methods` metadata MAY remain present for compatibility, but Rust-backed schema generation MUST
+  NOT depend on `MethodSpec.request_table` or `MethodSpec.response_table`.
 - `depends_on` entries MUST be absolute Bazel labels.
 
 ### 6.3 Optional Rust Helper APIs
@@ -688,42 +699,26 @@ Runtime module calls MUST use CNG-generated FlatBuffers, not JSON.
 
 CNG MUST emit:
 
-- `generated/schema/atom.fbs`
-- `generated/schema/modules/<module_id>/...` for each declared module schema file
+- one generated FlatBuffers package per module at `<module.generated_root>/flatbuffers/<module_id>/`
+- one generated `.fbs` schema per Rust-authored module at
+  `<module.generated_root>/flatbuffers/<module_id>/<module_id>.fbs`
 
 The build layer MUST generate Rust bindings for the runtime side and Swift/Kotlin bindings for
-native hosts from the aggregate schema plus all module-owned schema files.
+native hosts from each module's schema set.
 
 Those generated bindings MUST define the Rust request and response types used by generated
-per-method exports and by module implementation code.
+per-method exports and by module implementation code. The generated Rust target MUST be available to
+the Rust module crate as a Bazel dependency surface.
 
 The `input_flatbuffer` payload MUST be the method-specific request table, not a generic wrapper
 envelope.
-
-`generated/schema/atom.fbs` MUST be an aggregate root file. It MUST include module-owned schemas
-rather than rewriting them.
-
-Canonical example:
-
-```fbs
-include "modules/device_info/device_info.fbs";
-
-namespace atom;
-
-table AtomAppConfig {
-  name: string;
-  slug: string;
-}
-```
 
 Module-owned schema example:
 
 ```fbs
 namespace atom.device_info;
 
-table GetDeviceInfoRequest {}
-
-table GetDeviceInfoResponse {
+table DeviceInfo {
   model: string;
   os: string;
 }
@@ -755,7 +750,8 @@ CNG consumes:
 - normalized `atom_app(...)` metadata
 - resolved module metadata
 - serialized config/CNG plugin entries from app metadata
-- module-owned FlatBuffers schema files
+- Rust module source trees rooted at `crate_root`
+- native-module FlatBuffers schema files
 - selected platform set
 - build profile
 
@@ -856,6 +852,9 @@ function build_generation_plan(manifest, modules, framework):
         plan.entitlements = deep_merge(plan.entitlements, module.entitlements) or error CNG_CONFLICT
         plan.generated_sources.extend(module.generated_sources)
         plan.module_bindings.append(module.id)
+        module_flatbuffers = plan_module_flatbuffers(module)
+        plan.schema.modules.extend(module_flatbuffers.schema_inputs)
+        plan.files.extend(module_flatbuffers.generated_files)
 
     for entry in manifest.config_plugins in declaration order:
         plugin = instantiate_plugin(entry.id, entry.config)
@@ -897,11 +896,12 @@ For the canonical `hello-atom` app with the `device_info` module, CNG MUST emit 
 
 ```text
 generated/
-├── schema/
-│   ├── atom.fbs
-│   └── modules/
-│       └── device_info/
-│           └── device_info.fbs
+└── flatbuffers/
+    └── device_info/
+        ├── BUILD.bazel
+        ├── lib.rs
+        └── device_info.fbs
+cng-output/
 ├── ios/
 │   └── hello-atom/
 │       ├── BUILD.bazel
@@ -922,8 +922,9 @@ generated/
 Rules:
 
 - Bazel targets in generated roots MUST define an `:app` target.
-- CNG MUST emit `generated/schema/atom.fbs`.
-- CNG MUST preserve module-owned schema files under `generated/schema/modules/<module_id>/...`.
+- CNG MUST NOT require an aggregate `atom.fbs` file.
+- CNG MUST emit per-module FlatBuffers BUILD packages under
+  `<module.generated_root>/flatbuffers/<module_id>/`.
 - iOS generated roots MUST contain `Info.generated.plist`.
 - Android generated roots MUST contain `AndroidManifest.generated.xml`.
 - Generated file names MUST be stable across identical runs.
@@ -978,21 +979,21 @@ For the canonical `hello-atom` example, the `atom.cli.PrebuildPlan` payload MUST
 - `app.slug = "hello-atom"`
 - `app.entry_crate = "apps/hello_atom"`
 - one module entry with `id = "device_info"` and `crate = "modules/device_info"`
-- one backend entry with `id = "ios"`, `generated_root = "generated/ios/hello-atom"`, and
-  `target = "//generated/ios/hello-atom:app"`
-- one backend entry with `id = "android"`, `generated_root = "generated/android/hello-atom"`, and
-  `target = "//generated/android/hello-atom:app"`
-- `schema.aggregate = "generated/schema/atom.fbs"`
-- `schema.modules[0] = "generated/schema/modules/device_info/device_info.fbs"`
-- `generated_files` containing, at minimum, `generated/schema/atom.fbs`,
-  `generated/schema/modules/device_info/device_info.fbs`, `generated/ios/hello-atom/BUILD.bazel`,
-  `generated/ios/hello-atom/Info.generated.plist`, `generated/ios/hello-atom/AtomAppDelegate.swift`,
-  `generated/ios/hello-atom/AtomBindings.swift`, `generated/ios/hello-atom/main.swift`,
-  `generated/android/hello-atom/BUILD.bazel`,
-  `generated/android/hello-atom/AndroidManifest.generated.xml`,
-  `generated/android/hello-atom/src/main/kotlin/build/atom/hello/AtomApplication.kt`,
-  `generated/android/hello-atom/src/main/kotlin/build/atom/hello/AtomBindings.kt`, and
-  `generated/android/hello-atom/src/main/kotlin/build/atom/hello/MainActivity.kt`
+- one backend entry with `id = "ios"`, `generated_root = "cng-output/ios/hello-atom"`, and
+  `target = "//cng-output/ios/hello-atom:app"`
+- one backend entry with `id = "android"`, `generated_root = "cng-output/android/hello-atom"`, and
+  `target = "//cng-output/android/hello-atom:app"`
+- `schema.aggregate = ""`
+- `schema.modules[0] = "generated/flatbuffers/device_info/device_info.fbs"`
+- `generated_files` containing, at minimum, `generated/flatbuffers/device_info/BUILD.bazel`,
+  `generated/flatbuffers/device_info/lib.rs`, `generated/flatbuffers/device_info/device_info.fbs`,
+  `cng-output/ios/hello-atom/BUILD.bazel`, `cng-output/ios/hello-atom/Info.generated.plist`,
+  `cng-output/ios/hello-atom/AtomAppDelegate.swift`, `cng-output/ios/hello-atom/AtomBindings.swift`,
+  `cng-output/ios/hello-atom/main.swift`, `cng-output/android/hello-atom/BUILD.bazel`,
+  `cng-output/android/hello-atom/AndroidManifest.generated.xml`,
+  `cng-output/android/hello-atom/src/main/kotlin/build/atom/hello/AtomApplication.kt`,
+  `cng-output/android/hello-atom/src/main/kotlin/build/atom/hello/AtomBindings.kt`, and
+  `cng-output/android/hello-atom/src/main/kotlin/build/atom/hello/MainActivity.kt`
 
 ### 9.7 Watch Semantics
 

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::{fs, io};
 
 use atom_backends::{ContributedFile, FileSource, GenerationBackendRegistry, GenerationPlan};
@@ -17,11 +18,7 @@ pub fn emit_host_tree(
     plan: &GenerationPlan,
     registry: &GenerationBackendRegistry,
 ) -> AtomResult<Vec<Utf8PathBuf>> {
-    write_file(
-        &repo_root.join(&plan.schema.aggregate),
-        &crate::render_aggregate_schema(plan)?,
-    )?;
-    copy_schema_files(repo_root, plan)?;
+    reset_flatbuffer_packages(repo_root, plan)?;
     copy_contributed_files(repo_root, &plan.contributed_files)?;
     for backend in registry.iter() {
         backend.emit_host_tree(repo_root, plan)?;
@@ -29,17 +26,67 @@ pub fn emit_host_tree(
     Ok(generated_roots(plan, registry))
 }
 
-fn copy_schema_files(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
-    for schema_file in &plan.schema_files {
-        let destination = repo_root.join(&schema_file.output);
-        write_parent_dir(&destination)?;
-        fs::copy(&schema_file.source, &destination).map_err(|error| {
+fn reset_flatbuffer_packages(repo_root: &Utf8Path, plan: &GenerationPlan) -> AtomResult<()> {
+    let mut expected_by_root: BTreeMap<Utf8PathBuf, BTreeSet<String>> = BTreeMap::new();
+    for module in &plan.modules {
+        expected_by_root
+            .entry(module.manifest.generated_root.clone())
+            .or_default()
+            .insert(module.manifest.id.clone());
+    }
+
+    for (generated_root, expected_modules) in expected_by_root {
+        let flatbuffers_root = repo_root.join(&generated_root).join("flatbuffers");
+        remove_stale_flatbuffer_packages(&flatbuffers_root, &expected_modules)?;
+        for module_id in expected_modules {
+            remove_existing_path(&flatbuffers_root.join(module_id))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_stale_flatbuffer_packages(
+    flatbuffers_root: &Utf8Path,
+    expected_modules: &BTreeSet<String>,
+) -> AtomResult<()> {
+    let entries = match fs::read_dir(flatbuffers_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AtomError::with_path(
+                AtomErrorCode::CngWriteError,
+                format!("failed to read generated flatbuffers directory: {error}"),
+                flatbuffers_root.as_str(),
+            ));
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
             AtomError::with_path(
                 AtomErrorCode::CngWriteError,
-                format!("failed to copy schema file: {error}"),
-                destination.as_str(),
+                format!("failed to read generated flatbuffers directory entry: {error}"),
+                flatbuffers_root.as_str(),
             )
         })?;
+        let path = Utf8PathBuf::from_path_buf(entry.path()).map_err(|_| {
+            AtomError::with_path(
+                AtomErrorCode::CngWriteError,
+                "generated flatbuffers directory entry path must be valid UTF-8",
+                flatbuffers_root.as_str(),
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            AtomError::with_path(
+                AtomErrorCode::CngWriteError,
+                format!("failed to read generated flatbuffers entry type: {error}"),
+                path.as_str(),
+            )
+        })?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_type.is_dir() && !expected_modules.contains(&file_name) {
+            remove_existing_path(&path)?;
+        }
     }
     Ok(())
 }

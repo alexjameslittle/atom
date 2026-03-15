@@ -128,7 +128,8 @@ A native module is a Bazel target backed by Rust and/or platform-specific source
 - A typed Rust API used by the app when the module is Rust-backed.
 - Bazel metadata in `atom_module(...)` or `atom_native_module(...)` that declares permissions,
   platform requirements, compatibility metadata, config fragments, and generated-bridge needs.
-- `.fbs` schemas that define the ABI-visible wire contract.
+- Rust source annotations for Rust-backed modules, or `.fbs` schemas for native-only modules, that
+  define the ABI-visible wire contract.
 - Optional platform-specific implementation sources when a module truly needs them.
 
 Modules are not the same thing as runtime support libraries. Modules bridge host capabilities into
@@ -140,7 +141,8 @@ host.
 Authority split:
 
 - Bazel metadata owns packaging, inclusion, compatibility gates, and host-generation inputs.
-- `.fbs` owns the request/response wire contract.
+- Rust source annotations own the request/response wire contract for Rust-backed modules; native
+  `.fbs` files own it for native-only modules.
 - Rust, Swift, and Kotlin own implementation details behind those contracts.
 
 ### 5. Bridge layer
