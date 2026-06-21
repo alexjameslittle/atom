@@ -23,7 +23,7 @@ jobs:
     runs-on: namespace-profile-linux
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -46,7 +46,7 @@ jobs:
           #   runner: namespace-profile-macos
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup
         uses: ./.github/actions/setup
@@ -71,7 +71,7 @@ jobs:
             verify_mode: build-android
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup
         uses: ./.github/actions/setup
